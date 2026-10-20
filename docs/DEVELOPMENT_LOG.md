@@ -404,3 +404,22 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - Rebuilt the three Switch components, checked both NACP versions and matching
   symbols, and passed the independent overlay service regression. Publication
   uses the version tag's required CI and verified release assets.
+
+## v0.2.1 Tesla maintenance release (2026-10-20)
+
+- Reviewed overlay controls, native libtesla font/render/list code, both IPC
+  transports and the background operations invoked by the overlay.
+- Fixed unknown-duration and overflowing forward seeks, stale disconnected
+  status, title scrolling after track changes, Chinese fallback on other
+  system languages, glyph bitmap lifetime and reverse focus traversal.
+- Removed successful IPC polling from SD diagnostics, deduplicated repeated
+  failures and bounded the per-start log to 64 KiB.
+- Added actual callback and native-method regressions to CTest and therefore
+  the existing Actions host/UBSan jobs. Before/after tests reproduce the old
+  faults; focused ASan/UBSan/leak checks and Switch compilation passed.
+- Bumped the shared version to 0.2.1, updated download/install entry points and
+  added separate release notes without changing the published v0.2.0 tag.
+- Corrected the offline documentation package's entry links and included the
+  README icon and linked background notices at their canonical paths.
+- Full validation and physical-console limits are recorded in `VALIDATION.md`.
+  Release publication uses the new tag's tested, verified artifacts.

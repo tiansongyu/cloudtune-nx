@@ -9,17 +9,17 @@
   <img alt="Development preview" src="https://img.shields.io/badge/status-development%20preview-E84550">
 </p>
 
-**v0.2.0 开发预览** · 支持扫码登录、多账号、旋转黑胶播放器、AirPlay 1 和独立后台服务。
+**v0.2.1 开发预览** · 支持扫码登录、多账号、旋转黑胶播放器、AirPlay 1 和独立后台服务。
 Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[验证记录](docs/VALIDATION.md)。
 
 ## 下载
 
-**[下载 v0.2.0 SD 卡安装包](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.0/CloudTuneNX-0.2.0-sd.zip)**
+**[下载 v0.2.1 SD 卡安装包](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.1/CloudTuneNX-0.2.1-sd.zip)**
 
-[发布说明与全部附件](https://github.com/tiansongyu/cloudtune-nx/releases/tag/v0.2.0) ·
-[SHA-256 校验文件](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.0/SHA256SUMS)
+[发布说明与全部附件](https://github.com/tiansongyu/cloudtune-nx/releases/tag/v0.2.1) ·
+[SHA-256 校验文件](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.1/SHA256SUMS)
 
-安装请选择 `CloudTuneNX-0.2.0-sd.zip`；GitHub 的 Source code 压缩包不含可运行程序。
+安装请选择 `CloudTuneNX-0.2.1-sd.zip`；GitHub 的 Source code 压缩包不含可运行程序。
 `-symbols.zip` 用于崩溃排查，`-docs.zip` 用于离线阅读，无需复制到 SD 卡。
 
 <p align="center">
@@ -54,7 +54,7 @@ Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[�
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-确认输出包含 `CloudTuneNX-0.2.0-sd.zip: OK`。其他系统可使用支持 SHA-256 的校验工具。
+确认输出包含 `CloudTuneNX-0.2.1-sd.zip: OK`。其他系统可使用支持 SHA-256 的校验工具。
 
 播放栏显示 **「BGM · 后台服务」** 后，才可退出 NRO 并打开游戏。
 通过覆盖层加载器打开 **CloudTune NX** 即可继续控制播放。

@@ -82,3 +82,31 @@ failures; actual SD-card power-loss behavior still requires hardware testing.
 MP3 without a reliable declared frame count cannot distinguish ordinary EOF
 from every truncated stream. Exact MP3 seeks may decode intervening samples and
 take longer on distant targets.
+
+## Tesla and background IPC review — v0.2.1
+
+This focused pass covers the overlay's actual control callbacks, native
+libtesla font/render/list code, the Switch IPC client and server, the desktop
+preview transport, and the engine operations reachable from those controls.
+
+| Area | Confirmed defect | Correction |
+| --- | --- | --- |
+| Forward seek | A zero duration forced the target to zero; 32-bit addition could wrap. | Add in 64 bits, saturate to the protocol limit, and clamp to duration only when known. |
+| Disconnection | Old song and playback state stayed visible after a failed status request. | Clear all displayed status fields and block ordinary controls until connected; retain explicit reconnect. |
+| Shared fonts | Chinese fallback depended on Horizon's selected language, although the UI always contains Chinese. | Load an optional Simplified Chinese shared font after the existing standard and locale choices; use the same selector for drawing and measurement. |
+| Title scrolling | Replacing a long title retained an offset beyond the next title's width. | Reset animation only when text changes and allow an overshot offset to wrap. |
+| Glyph lifetime | Cached bitmaps were never freed and metadata could add entries indefinitely. | Own bitmap lifetime with RAII and clear the cache before inserting beyond 1,024 entries. |
+| Focus traversal | Unsigned backward traversal could wrap below zero. | Use a bounded decrementing traversal and reject indices at or beyond the list size. |
+| SD diagnostics | Every successful poll flushed a log line throughout service lifetime. | Suppress successful replies, deduplicate repeated errors, cap each startup's log at 64 KiB, and disable logging on I/O failure. |
+
+The new tests invoke actual overlay callbacks and extract the relevant native
+methods verbatim into isolated harnesses. They do not emulate the complete
+Horizon renderer or kernel. The IPC tests execute the real parser and session
+handler with synthetic receive/reply calls and anonymous host files.
+Independent preview transport checks cover fragmented/truncated responses,
+deadline expiry, incompatible versions, business errors and reconnection.
+
+No additional high-confidence parser, transferred-handle or client defect was
+found in this pass. Service discovery races, resident memory under a real
+overlay loader, game mixing, sleep/wake and SD power loss remain hardware
+acceptance items. Host tests and cross-compilation do not establish them.

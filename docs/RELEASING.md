@@ -87,7 +87,7 @@ Release 模式的固定文件名便于用户按版本下载，不表示不同构
 
 1. 在待发布提交中更新 `CMakeLists.txt` 的版本和
    `docs/releases/vX.Y.Z.md` 发布说明。标签必须是无前导零的 `vX.Y.Z`；
-   例如版本 `0.2.0` 对应标签 `v0.2.0`。工作流同时检查覆盖层版本来源，
+   例如版本 `0.2.1` 对应标签 `v0.2.1`。工作流同时检查覆盖层版本来源，
    并在编译后验证应用和覆盖层的 NACP 版本。
 2. 确认主分支 CI 成功，检查对应提交、自动测试日志和包清单。
    GUI 或音频行为变化还需要相应的模拟器与实机记录，不能由 CI 代替。
@@ -96,8 +96,8 @@ Release 模式的固定文件名便于用户按版本下载，不表示不同构
    ```sh
    git switch main
    git pull --ff-only
-   git tag -a v0.2.0 -m "CloudTune NX v0.2.0 development preview"
-   git push origin v0.2.0
+   git tag -a v0.2.1 -m "CloudTune NX v0.2.1 development preview"
+   git push origin v0.2.1
    ```
 
 4. 查看 Release 工作流：版本检查 → 可复用 CI → 新建 Release 草稿并上传 →

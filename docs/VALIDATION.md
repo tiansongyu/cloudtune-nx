@@ -412,3 +412,41 @@ game runs on a physical Switch, real SD power loss and long-duration network
 testing. The prior iPhone listening confirmation was not repeated in this pass.
 Server-side entitlements and live login behavior are not proven by local
 synthetic fixtures.
+
+## Tesla / background maintenance pass — v0.2.1
+
+Implementation commit `74ae5f9` fixes the issues in the
+[focused Tesla review](CODE_REVIEW.md#tesla-and-background-ipc-review--v021).
+All fixtures use synthetic metadata, generated audio and temporary files.
+
+| Check | Observed result |
+| --- | --- |
+| Complete native validation | 22/22 CTest checks passed, followed by independent XEAPI verification and generated local/HTTPS MP3 integration |
+| Complete UBSan validation | 22/22 CTest checks passed with immediate failure on undefined behavior; the native Tesla harness inherits the sanitizer compiler flags |
+| Actual overlay callbacks | Unknown-duration seek, known-duration clamp, `UINT32_MAX` saturation, disconnect clearing, inactive controls and reconnect recovery passed; the old implementation fails the unknown-duration regression |
+| Native Tesla methods | English/Japanese Chinese fallback, optional-font failure, locale priority, focus traversal and changed/unchanged/overshot title scrolling passed |
+| Glyph lifetime | Rendering 8,192 distinct codepoints retained bounded raster data; peak tracked STB allocation was 287,620 bytes, versus 1,622,301 bytes still retained by the old cache |
+| Targeted instrumentation | Actual overlay callbacks and native Tesla harness passed ASan, UBSan and leak checking; native font/raster methods use the real vendored STB implementation |
+| Server IPC | 4,096 successful polls added no log bytes; 12,289 receive failures retained bounded diagnostics and session cleanup. Existing 1,024 length / 512 handle-layout corpus and ASan/UBSan checks also passed |
+| Independent preview transport | 16 fault cases passed: fragmented/truncated/incompatible replies, rejection, deadline expiry and reconnection; stalled response stopped at approximately 350 ms |
+| Switch components | Docker built the NRO, background ExeFS and OVL; both NACP versions are `0.2.1`, and package-input verification matched all three AArch64 ELFs |
+
+The native harness extracts production methods verbatim but substitutes the
+Horizon font-service and framebuffer boundaries. Its bundled font fixtures
+exercise selection and rasterization; they do not prove a particular console
+firmware's font service. Cache allocation figures cover STB raster allocations,
+not total process memory. The UI harness executes production callbacks with an
+in-memory UI tree and fake IPC.
+
+Local evidence is under `build/validation/overlay-final-audit/` and
+`build/validation/overlay-review/`, including full test logs, client fault
+results, before/after native failures, sanitizer output and Switch builds.
+Existing compiler warnings in third-party dependencies are not treated as a
+zero-warning static-analysis result.
+
+No visible desktop, real account profile or live iPhone session was used in
+this pass. Physical Switch testing is still required for Tesla/Ultrahand
+loading, Chinese shared fonts, game BGM, sleep/wake and long-duration resource
+use. The release workflow runs the tag's complete host and UBSan suites, builds
+all three components, verifies the five archives/manifests and checks uploaded
+bytes before publication.

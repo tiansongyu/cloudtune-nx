@@ -10,16 +10,16 @@ The canonical repository is
 
 Download `CloudTuneNX-<version>-sd.zip` and `SHA256SUMS` from the same
 [GitHub Release](https://github.com/tiansongyu/cloudtune-nx/releases).
-For v0.2.0, save both files in one directory and verify:
+For v0.2.1, save both files in one directory and verify:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-Confirm that `CloudTuneNX-0.2.0-sd.zip` reports `OK`. The `--ignore-missing`
+Confirm that `CloudTuneNX-0.2.1-sd.zip` reports `OK`. The `--ignore-missing`
 option permits downloading only the SD archive; it does not ignore a checksum
 mismatch in a file you downloaded. Windows users can compare
-`Get-FileHash .\CloudTuneNX-0.2.0-sd.zip -Algorithm SHA256` with the matching
+`Get-FileHash .\CloudTuneNX-0.2.1-sd.zip -Algorithm SHA256` with the matching
 line in `SHA256SUMS`.
 
 Extract **only the SD archive** directly to the root of your SD card.
