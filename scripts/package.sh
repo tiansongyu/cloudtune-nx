@@ -148,13 +148,18 @@ try:
 
     for name in ("README.md", "LICENSE", "CONTRIBUTING.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md"):
         copy(root / name, docs / name)
-    for name in ("INSTALLING.md", "VALIDATION.md"):
-        copy(root / "docs" / name, docs / name)
+    for name, title in (("INSTALLING.md", "Installation guide"),
+                        ("VALIDATION.md", "Validation records")):
+        copy(root / "docs" / name, docs / "docs" / name)
+        (docs / name).write_text(
+            f"# {title}\n\n[{title}](docs/{name})\n", encoding="utf-8")
     # Include committed repository documentation, never ignored local test logs.
     tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0")
     for name in tracked:
         if name.startswith("docs/"):
             copy(root / name, docs / name)
+    copy(root / "resources/icon/cloudtune.svg", docs / "resources/icon/cloudtune.svg")
+    copy(root / "background/THIRD_PARTY_NOTICES.md", docs / "background/THIRD_PARTY_NOTICES.md")
     copy(root / "overlay/vendor/libtesla/LICENSE", docs / "overlay/vendor/libtesla/LICENSE")
     copy(root / "LICENSE", docs / "licenses/CloudTuneNX-LICENSE")
     copy(root / "THIRD_PARTY_NOTICES.md", docs / "licenses/THIRD_PARTY_NOTICES.md")

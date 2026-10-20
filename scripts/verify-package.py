@@ -10,6 +10,7 @@ import stat
 import struct
 import sys
 import tarfile
+import xml.etree.ElementTree as ET
 import zipfile
 
 TITLE_ID = "42000000004E434D"
@@ -141,6 +142,31 @@ def verify_third_party_docs(archive, files):
             b"Permission is hereby granted" in header,
             "Missing Shairport protocol-material notice")
     return source
+
+
+def verify_documentation_layout(archive, files):
+    required = {"README.md", "INSTALLING.md", "VALIDATION.md", "LICENSE",
+                "CONTRIBUTING.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md",
+                "docs/INSTALLING.md", "docs/VALIDATION.md",
+                "resources/icon/cloudtune.svg", "background/THIRD_PARTY_NOTICES.md",
+                "overlay/vendor/libtesla/LICENSE", FFMPEG_MANIFEST, *SHAIRPORT_FILES}
+    require(required <= set(files), "Missing release documentation or license")
+    require(all(name in required or name.startswith(("docs/", "licenses/", "third-party-source/"))
+                for name in files), "Unexpected documentation archive file")
+    for name in ("INSTALLING.md", "VALIDATION.md"):
+        require(f"](docs/{name})" in archive.read(name).decode("utf-8"),
+                f"Documentation entry point must link to docs/{name}")
+        require(archive.read(f"docs/{name}").strip(), f"Empty canonical documentation: {name}")
+    require(b'resources/icon/cloudtune.svg' in archive.read("README.md"),
+            "README icon does not refer to its packaged path")
+    require(archive.read("background/THIRD_PARTY_NOTICES.md").strip(),
+            "Empty background notices")
+    try:
+        icon = ET.fromstring(archive.read("resources/icon/cloudtune.svg"))
+    except ET.ParseError as error:
+        raise ValueError("Invalid packaged README SVG icon") from error
+    require(icon.tag == "{http://www.w3.org/2000/svg}svg" and len(icon) > 0,
+            "Empty or invalid packaged README SVG icon")
 
 
 def unpack(fmt, data, offset):
@@ -344,14 +370,8 @@ def verify_package(directory, version=None, commit=None, require_release=True):
             require(required <= set(files) and set(files) <= required | optional,
                     "Incorrect symbols archive layout")
         else:
-            required = {"README.md", "INSTALLING.md", "VALIDATION.md", "LICENSE",
-                        "CONTRIBUTING.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md",
-                        "overlay/vendor/libtesla/LICENSE", FFMPEG_MANIFEST,
-                        *SHAIRPORT_FILES}
-            require(required <= set(files), "Missing release documentation or license")
-            require(all(name in required or name.startswith(("docs/", "licenses/", "third-party-source/"))
-                        for name in files), "Unexpected documentation archive file")
             with zipfile.ZipFile(path) as docs:
+                verify_documentation_layout(docs, files)
                 source = verify_third_party_docs(docs, files)
             require(manifest.get("third_party_sources") == {"ffmpeg": source},
                     "Manifest FFmpeg corresponding-source metadata differs")
