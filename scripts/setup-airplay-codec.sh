@@ -48,8 +48,8 @@ if [[ ! -f "$source_dir/configure" ]]; then
     tar -xJf "$archive" -C "$deps/src"
 fi
 flags=(
-    "--prefix=$prefix" --disable-autodetect --disable-everything --enable-decoder=alac,aac
-    --enable-avformat --enable-demuxer=aac,mov --enable-parser=aac
+    "--prefix=$prefix" --disable-autodetect --disable-everything "--enable-decoder=alac,aac"
+    --enable-avformat "--enable-demuxer=aac,mov" --enable-parser=aac
     --disable-programs --disable-doc --disable-debug --disable-network
     --disable-avdevice --disable-avfilter --disable-swscale
     --disable-swresample --disable-postproc --disable-pthreads --disable-w32threads
