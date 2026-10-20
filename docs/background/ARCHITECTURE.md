@@ -64,12 +64,30 @@ timeouts, and caps each response at 128 MiB. A `.complete` marker is written
 only after a successful complete response. Incomplete downloads are never
 mistaken for an offline cache hit. Before a new transfer, oldest cache files
 are evicted to reserve room within an approximately 512 MiB cache budget.
+Cache filenames include the song ID and a digest of the active login session
+and MP3 quality. Logging in or changing quality therefore cannot silently reuse
+an anonymous preview or a lower-quality download. Session tokens never appear
+in cache filenames. Saved settings and cookies recover their `.bak` snapshot
+if read during a Horizon replacement operation.
 
 The current decoder supports MP3. Standard, higher and exhigh qualities use
 the API's legacy MP3 endpoint; FLAC/AAC/lossless playback is not implemented.
 Service-provided format information is checked when resolving a URL.
 `settings.json` supplies `proxy` and MP3-compatible `quality`. The certificate
 bundle is `config/netease-switch/cacert.pem`.
+
+Each track owns a fresh audio output session. Seek discards the old session and
+opens a new one, so queued DMA buffer tags cannot cross a seek or track change.
+Pause releases the output session and retains the audible position; resume seeks
+the decoder to that position and opens a new session. Repeated play/pause commands
+are idempotent. Failed output calls or five seconds without a
+released output buffer become a playback error rather than a permanently
+advancing animation with no working audio.
+
+For diagnostics, set `"diagnostics": true` in `settings.json` before starting
+the engine. `audio.log` records sample rate, produced frames, queued duration,
+position and output result codes, with a 256 KiB rotation limit. It excludes
+URLs and authentication values. Remove the setting after collecting a report.
 
 ## Installation layout
 
@@ -94,8 +112,13 @@ the background process. It does not host playback.
 audio sink with generated MP3 data. The test checks queue serialization,
 invalid limits, playback position, pause, seek, volume, repeat, shuffle,
 previous/next, automatic track advance, final queue stop and malformed input.
+It also checks repeated play/pause commands and that repeat-one skips an
+unavailable track instead of retrying it forever.
 `https_fixture.py` serves the same generated fixture through a throttled TLS
 connection to exercise progressive download rather than a preloaded file.
+The HTTPS test also changes quality and session state and verifies that each
+receives its own completed cache file. An optional second MP3 input exercises
+automatic transitions between different sample rates.
 `queue_replace.cpp` wraps `rename` to emulate Horizon's `EEXIST` behavior and
 inject publication/restoration failures. It checks repeated queue replacement,
 rollback, preserved recovery backups, subsequent publication and invalid input.
@@ -114,6 +137,15 @@ reported `Playing preview / 试听` and the audio clock advanced beyond five
 seconds. No logged-in session, full-track entitlement or actual Switch audio
 output was tested by that check.
 
+The same day's Eden NRO tests exercised a 44.1 kHz preview followed automatically
+by a 48 kHz track. Isolated capture of the emulator's audio stream contained
+changing PCM samples, and the second track's position kept advancing. A stale
+output-buffer failure on track change and pause/resume was reproduced and fixed
+by replacing audio output sessions at those boundaries. Pause froze the vinyl
+image; resume and an active seek continued the same track with changing audio
+samples. These are emulator foreground results, not a claim that Atmosphère
+background mixing has been validated on a Switch.
+
 ## Primary references
 
 Retrieved 2026-10-20:
@@ -122,8 +154,8 @@ Retrieved 2026-10-20:
   audio output functions, device format and aligned buffer contract. The
   upstream declaration is also retained locally as `libnx-audout.h`.
 - [libnx audout implementation](https://github.com/switchbrew/libnx/blob/master/nx/source/services/audout.c):
-  released buffers are returned one tag per API call; all old tags must be
-  drained before their memory is reused after a seek.
+  released buffers are returned one tag per API call; this implementation
+  closes the output session before reusing buffer memory after a seek.
 - [libnx service manager](https://github.com/switchbrew/libnx/blob/master/nx/source/services/sm.c):
   service registration and CMIF client initialization.
 - [Atmosphère SM user interface](https://github.com/Atmosphere-NX/Atmosphere/blob/master/libraries/libstratosphere/include/stratosphere/sm/impl/sm_user_interface.hpp):

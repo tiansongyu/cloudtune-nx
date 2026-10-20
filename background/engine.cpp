@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "engine.hpp"
 #include "netease/api.hpp"
+#include "netease/crypto.hpp"
+#include "netease/storage.hpp"
 #define DR_MP3_IMPLEMENTATION
 #include "vendor/dr_mp3.h"
 #include <curl/curl.h>
@@ -22,6 +24,7 @@
 #include <filesystem>
 #include <mutex>
 #include <random>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -50,17 +53,18 @@ public:
     ~AudioSink() { close(); }
     bool open() {
         if (active_) return true;
+        error_ = 0;
 #ifdef __SWITCH__
-        if (R_FAILED(audoutInitialize())) return false;
+        if (R_FAILED(error_ = audoutInitialize())) return false;
         active_ = true;
         for (auto& buffer : buffers_) {
             buffer.buffer = memalign(0x1000, 0x2000);
-            if (!buffer.buffer) { close(); return false; }
+            if (!buffer.buffer) { error_=UINT32_MAX; close(); return false; }
             buffer.buffer_size = 0x2000;
             buffer.data_size = 0;
         }
         active_ = true;
-        if (R_FAILED(audoutStartAudioOut())) { close(); return false; }
+        if (R_FAILED(error_ = audoutStartAudioOut())) { close(); return false; }
 #else
         if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) return false;
         SDL_AudioSpec wanted{};
@@ -69,7 +73,7 @@ public:
         wanted.channels = 2;
         wanted.samples = FramesPerBuffer;
         device_ = SDL_OpenAudioDevice(nullptr, 0, &wanted, nullptr, 0);
-        if (!device_) return false;
+        if (!device_) { SDL_QuitSubSystem(SDL_INIT_AUDIO); return false; }
         active_ = true;
         SDL_PauseAudioDevice(device_, 0);
 #endif
@@ -84,46 +88,17 @@ public:
         }
         busy_.fill(false);
 #else
-        if (device_) SDL_CloseAudioDevice(device_);
+        if (device_) { SDL_CloseAudioDevice(device_); SDL_QuitSubSystem(SDL_INIT_AUDIO); }
         device_ = 0;
 #endif
         active_ = false;
-    }
-    void flush() {
-#ifdef __SWITCH__
-        if (active_) {
-            audoutStopAudioOut();
-            bool flushed = false;
-            audoutFlushAudioOutBuffers(&flushed);
-            AudioOutBuffer* released = nullptr;
-            u32 count = 0;
-            // libnx returns one tag per call. Drain all old tags before
-            // reusing their addresses for newly submitted PCM buffers.
-            do {
-                released = nullptr; count = 0;
-                if (R_FAILED(audoutGetReleasedAudioOutBuffer(&released, &count))) break;
-            } while (count);
-            busy_.fill(false);
-            audoutStartAudioOut();
-        }
-#else
-        if (device_) SDL_ClearQueuedAudio(device_);
-#endif
-    }
-    void pause(bool paused) {
-        if (!active_) return;
-#ifdef __SWITCH__
-        if (paused) audoutStopAudioOut(); else audoutStartAudioOut();
-#else
-        SDL_PauseAudioDevice(device_, paused ? 1 : 0);
-#endif
     }
     bool canWrite() {
         if (!active_) return false;
 #ifdef __SWITCH__
         AudioOutBuffer* released = nullptr;
         u32 count = 0;
-        if (R_FAILED(audoutGetReleasedAudioOutBuffer(&released, &count))) return false;
+        if (R_FAILED(error_ = audoutGetReleasedAudioOutBuffer(&released, &count))) return false;
         while (released) {
             for (size_t i=0; i<buffers_.size(); ++i) if (&buffers_[i] == released) busy_[i] = false;
             released = released->next;
@@ -142,7 +117,7 @@ public:
             buffer.data_size = frames * 4;
             std::memcpy(buffer.buffer, data, buffer.data_size);
             armDCacheFlush(buffer.buffer, buffer.data_size);
-            if (R_FAILED(audoutAppendAudioOutBuffer(&buffer))) return false;
+            if (R_FAILED(error_ = audoutAppendAudioOutBuffer(&buffer))) return false;
             busy_[i] = true;
             return true;
         }
@@ -158,8 +133,10 @@ public:
         return device_ ? SDL_GetQueuedAudioSize(device_) * 1000 / (SampleRate * 4) : 0;
 #endif
     }
+    uint32_t error() const { return error_; }
 private:
     bool active_ = false;
+    uint32_t error_ = 0;
 #ifdef __SWITCH__
     std::array<AudioOutBuffer, 4> buffers_{};
     std::array<bool, 4> busy_{};
@@ -194,19 +171,54 @@ struct Engine::Impl {
     uint64_t cursor = 0, producedFrames = 0;
     uint32_t seekBase = 0, failures = 0;
     std::string currentPath;
+    std::string activeQuality = "standard";
+    bool diagnostics = false;
+    std::chrono::steady_clock::time_point nextDiagnostic{};
     std::array<int16_t, 8192> decoded{};
     size_t decodedCount = 0, decodedPosition = 0;
     int16_t leftA = 0, rightA = 0, leftB = 0, rightB = 0;
     double phase = 0;
     bool havePair = false, reachedEnd = false;
     Json settings() const {
-        FILE* input = std::fopen((config.directory+"/settings.json").c_str(),"rb");
-        if (!input) return Json::object();
-        std::array<char,16384> buffer{};
-        const auto length = std::fread(buffer.data(),1,buffer.size()-1,input);
-        std::fclose(input);
-        auto values = Json::parse(buffer.data(),buffer.data()+length,nullptr,false);
-        return values.is_object() ? values : Json::object();
+        try {
+            const auto text = storage::read_file(config.directory+"/settings.json");
+            auto values = Json::parse(text,nullptr,false);
+            return values.is_object() ? values : Json::object();
+        } catch (const std::exception&) { return Json::object(); }
+    }
+    std::string cacheIdentity() const {
+        // A preview cached anonymously must not mask the newly authenticated
+        // entitlement. Only a digest, never an authentication token, reaches
+        // filenames. Guest-cookie rotation does not invalidate offline music.
+        std::istringstream lines(storage::read_file(config.directory+"/cookies.txt"));
+        std::string line, token = "anonymous";
+        while (std::getline(lines,line)) {
+            const auto name = line.find("\tMUSIC_U\t");
+            if (name != std::string::npos) { token=line.substr(name+9); break; }
+        }
+        return crypto::md5(token + "\n" + activeQuality);
+    }
+    void diagnostic(const char* event, const int16_t* pcm = nullptr, size_t frames = 0) {
+        if (!diagnostics) return;
+        const auto now = std::chrono::steady_clock::now();
+        if (!pcm && now < nextDiagnostic) return;
+        nextDiagnostic = now + 3s;
+        const auto path=config.directory+"/audio.log";
+        std::error_code ignored;
+        const auto size=std::filesystem::file_size(path,ignored);
+        FILE* file = std::fopen(path.c_str(),!ignored && size>256*1024 ? "wb" : "ab");
+        if (!file) return;
+        int lo=0, hi=0;
+        if (frames) {
+            auto range=std::minmax_element(pcm,pcm+frames*2); lo=*range.first; hi=*range.second;
+        }
+        const auto s=getStatus();
+        std::fprintf(file,"%s id=%llu state=%u rate=%u produced=%llu queued_ms=%u pos=%u input=%llu done=%d curl=%ld audout=%08x pcm=%d..%d\n",
+            event,static_cast<unsigned long long>(s.track_id),s.state,decoder.sampleRate,
+            static_cast<unsigned long long>(producedFrames),sink.queuedMs(),s.position_ms,
+            static_cast<unsigned long long>(downloaded.load()),downloadDone.load(),
+            downloadError.load(),sink.error(),lo,hi);
+        std::fclose(file);
     }
     void pruneCache() {
         struct Entry { std::filesystem::path path; std::filesystem::file_time_type time; uint64_t bytes; };
@@ -245,7 +257,7 @@ struct Engine::Impl {
         decoderOpen = false;
         if (input) std::fclose(input);
         input = nullptr;
-        sink.flush();
+        sink.close();
         havePair = false; reachedEnd = false;
         decodedCount = decodedPosition = 0; producedFrames = 0; phase = 0;
         cursor = 0; seekBase = 0;
@@ -273,6 +285,8 @@ struct Engine::Impl {
             if (curl) curl_easy_cleanup(curl);
             downloadError = CURLE_WRITE_ERROR; downloadDone = true; return;
         }
+        std::unique_ptr<FILE,decltype(&std::fclose)> outputOwner(output,std::fclose);
+        std::unique_ptr<CURL,decltype(&curl_easy_cleanup)> curlOwner(curl,curl_easy_cleanup);
         std::pair<Impl*,FILE*> context{this,output};
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -302,8 +316,12 @@ struct Engine::Impl {
             ? preferences["proxy"].get<std::string>() : std::string{};
         if (!proxy.empty()) curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
         CURLcode rc = curl_easy_perform(curl);
-        std::fclose(output);
-        curl_easy_cleanup(curl);
+        if (rc==CURLE_OK) {
+            try { storage::sync_file(output); }
+            catch (const std::exception&) { rc=CURLE_WRITE_ERROR; }
+        }
+        if (std::fclose(outputOwner.release())!=0) rc=CURLE_WRITE_ERROR;
+        curl_easy_cleanup(curlOwner.release());
         downloadError = rc;
         downloadDone = true;
         if (rc == CURLE_OK) {
@@ -311,6 +329,12 @@ struct Engine::Impl {
             FILE* marker = std::fopen((path + ".complete").c_str(), "wb");
             if (marker) std::fclose(marker);
         }
+    }
+    void startFetch(const std::string& url) {
+        downloader=std::thread([this,url,path=currentPath] {
+            try { fetch(url,path); }
+            catch (...) { downloadError=CURLE_OUT_OF_MEMORY; downloadDone=true; }
+        });
     }
     static size_t readStream(void* context, void* destination, size_t bytes) {
         auto* self = static_cast<Impl*>(context);
@@ -360,12 +384,8 @@ struct Engine::Impl {
             const auto preferences = settings();
             c.proxy = preferences.contains("proxy") && preferences["proxy"].is_string()
                 ? preferences["proxy"].get<std::string>() : std::string{};
-            auto quality = preferences.contains("quality") && preferences["quality"].is_string()
-                ? preferences["quality"].get<std::string>() : std::string{"standard"};
-            if (quality != "standard" && quality != "higher" && quality != "exhigh")
-                quality = "standard"; // dr_mp3 accepts MP3; lossless modes are API-only.
             ApiClient client(c);
-            auto response = client.song_urls({entry.id}, quality);
+            auto response = client.song_urls({entry.id}, activeQuality);
             if (response.contains("data") && response["data"].is_array()) {
                 for (const auto& row : response["data"]) {
                     if (row.contains("url") && row["url"].is_string()) {
@@ -402,10 +422,18 @@ struct Engine::Impl {
         }
         state(NcmPlayback_Buffering, "Connecting");
         std::string url(entry.url);
-        const std::string cachePath = config.directory + "/cache/" + std::to_string(entry.id) + ".mp3";
+        const auto preferences = settings();
+        activeQuality = preferences.contains("quality") && preferences["quality"].is_string()
+            ? preferences["quality"].get<std::string>() : std::string{"standard"};
+        if (activeQuality == "extreme") activeQuality = "exhigh";
+        if (activeQuality != "standard" && activeQuality != "higher" && activeQuality != "exhigh")
+            activeQuality = "standard"; // Lossless modes are API-only.
+        const bool explicitLocal = url.rfind("sdmc:/",0)==0 || url.rfind("/",0)==0;
+        const std::string cachePath = config.directory + "/cache/" + std::to_string(entry.id) + "-" + cacheIdentity() + ".mp3";
         // A completed local copy remains playable when the account API or
         // network is unavailable. No authentication request precedes this hit.
-        bool cacheHit = std::filesystem::exists(cachePath+".complete");
+        bool cacheHit = !explicitLocal && std::filesystem::exists(cachePath+".complete") &&
+            std::filesystem::is_regular_file(cachePath);
         try {
             if (cacheHit) url=cachePath;
             else url = resolveUrl(entry, false);
@@ -424,11 +452,16 @@ struct Engine::Impl {
             if (error) { state(NcmPlayback_Error, "Cached audio is missing", 3); return false; }
         } else {
             pruneCache();
+            // An orphan marker must never bless a newly truncated partial
+            // response after SD removal, a failed write, or a previous crash.
+            if (std::remove((currentPath+".complete").c_str())!=0 && errno!=ENOENT) {
+                state(NcmPlayback_Error,"Cannot replace SD audio cache marker",3); return false;
+            }
             // Truncate before publishing the path to the streaming reader.
             FILE* empty = std::fopen(currentPath.c_str(), "wb");
             if (!empty) { state(NcmPlayback_Error, "Cannot write SD audio cache", 3); return false; }
             std::fclose(empty);
-            downloader = std::thread([this,url,path=currentPath] { fetch(url,path); });
+            startFetch(url);
         }
         input = std::fopen(currentPath.c_str(), "rb");
         if (!input) { state(NcmPlayback_Error, "Cannot open audio cache", 3); return false; }
@@ -446,7 +479,7 @@ struct Engine::Impl {
                 copyText(entry.url, url.c_str());
                 std::fclose(input); input = nullptr;
                 downloadDone = false; downloaded = 0; downloadError = 0;
-                downloader = std::thread([this,url,path=currentPath] { fetch(url,path); });
+                startFetch(url);
                 input = std::fopen(currentPath.c_str(), "rb");
                 while (running && !interrupt && !downloadDone && downloaded < 32768)
                     std::this_thread::sleep_for(10ms);
@@ -459,6 +492,7 @@ struct Engine::Impl {
         }
         decoderOpen = true;
         if (decoder.channels < 1 || decoder.channels > 2 || !decoder.sampleRate || !sink.open()) {
+            closeTrack();
             state(NcmPlayback_Error, "Audio output unavailable", 6); return false;
         }
         if (decoder.totalPCMFrameCount != DRMP3_UINT64_MAX && decoder.totalPCMFrameCount > decoder.delayInPCMFrames + decoder.paddingInPCMFrames) {
@@ -472,8 +506,9 @@ struct Engine::Impl {
                 snapshot.duration_ms=duration;
             }
         }
-        sink.pause(false);
         state(NcmPlayback_Playing, preview ? "Playing preview / 试听" : "Playing");
+        nextDiagnostic = {};
+        diagnostic("start");
         return true;
     }
     bool readSample(int16_t& left, int16_t& right) {
@@ -561,6 +596,14 @@ struct Engine::Impl {
     NcmPlaybackStatus getStatus() const {
         std::lock_guard<std::mutex> lock(mutex); return snapshot;
     }
+    bool seekDecoder(uint32_t target) {
+        if (!drmp3_seek_to_pcm_frame(&decoder,static_cast<uint64_t>(target)*decoder.sampleRate/1000))
+            return false;
+        decodedCount=decodedPosition=0; havePair=false; reachedEnd=false; phase=0;
+        seekBase=target; producedFrames=0;
+        std::lock_guard<std::mutex> lock(mutex); snapshot.position_ms=target;
+        return true;
+    }
     void process(NcmCommand cmd, uint32_t argument) {
         switch (cmd) {
         case NcmCommand_LoadQueue: loadQueue(argument); break;
@@ -581,8 +624,20 @@ struct Engine::Impl {
                 }
                 break;
             }
-            paused=cmd==NcmCommand_Pause || (cmd==NcmCommand_PlayPause && !paused);
-            sink.pause(paused);
+            {
+                const bool desired=cmd==NcmCommand_Pause || (cmd==NcmCommand_PlayPause && !paused);
+                if (desired && !paused) {
+                    // Keep the audible cursor, not the decoder's buffered-ahead
+                    // cursor. Reopening a fresh session avoids stale release
+                    // tags after the platform destroys its stopped audio stream.
+                    paused=true; sink.close();
+                } else if (!desired && paused) {
+                    if (!seekDecoder(getStatus().position_ms) || !sink.open()) {
+                        closeTrack(); state(NcmPlayback_Error,"Cannot resume audio output",6); break;
+                    }
+                    paused=false;
+                }
+            }
             state(paused?NcmPlayback_Paused:NcmPlayback_Playing,
                 paused?"Paused":preview?"Playing preview / 试听":"Playing");
             break;
@@ -591,14 +646,12 @@ struct Engine::Impl {
         case NcmCommand_Shuffle: { std::lock_guard<std::mutex> lock(mutex); snapshot.shuffle=argument; } break;
         case NcmCommand_Seek:
             if (decoderOpen) {
-                sink.flush();
-                uint32_t target=std::min(argument,getStatus().duration_ms);
-                if (drmp3_seek_to_pcm_frame(&decoder,static_cast<uint64_t>(target)*decoder.sampleRate/1000)) {
-                    decodedCount=decodedPosition=0; havePair=false; reachedEnd=false; phase=0;
-                    seekBase=target; producedFrames=0;
-                    std::lock_guard<std::mutex> lock(mutex); snapshot.position_ms=target;
+                sink.close();
+                const uint32_t duration=getStatus().duration_ms;
+                const uint32_t target=duration?std::min(argument,duration):argument;
+                if (!seekDecoder(target) || (!paused && !sink.open())) {
+                    closeTrack(); state(NcmPlayback_Error,"Cannot seek audio output",6);
                 }
-                sink.pause(paused);
             }
             break;
         default: break;
@@ -606,6 +659,7 @@ struct Engine::Impl {
     }
     void run() {
         std::array<int16_t, FramesPerBuffer*2> pcm{};
+        auto stalledSince=std::chrono::steady_clock::time_point{};
         while (running) {
             std::pair<NcmCommand,uint32_t> next{};
             bool hasCommand=false;
@@ -616,21 +670,36 @@ struct Engine::Impl {
                     interrupt=false;
                 }
             }
-            if (hasCommand) { process(next.first,next.second); continue; }
+            if (hasCommand) { process(next.first,next.second); stalledSince={}; continue; }
             if (interrupt) { std::this_thread::sleep_for(2ms); continue; }
             if (decoderOpen && !paused) {
-                if (!sink.canWrite()) { std::this_thread::sleep_for(4ms); continue; }
+                if (!sink.canWrite()) {
+                    diagnostic("waiting-output");
+                    if (sink.error()) { closeTrack(); state(NcmPlayback_Error,"Audio output disconnected",6); }
+                    else {
+                        const auto now=std::chrono::steady_clock::now();
+                        if (stalledSince==std::chrono::steady_clock::time_point{}) stalledSince=now;
+                        if (now-stalledSince>5s) {
+                            closeTrack(); state(NcmPlayback_Error,"Audio output stalled; track skipped",9);
+                        } else std::this_thread::sleep_for(4ms);
+                    }
+                    continue;
+                }
+                stalledSince={};
                 size_t frames=render(pcm.data(),FramesPerBuffer,getStatus().volume_permille);
                 if (interrupt || !running) continue;
                 if (!frames) {
-                    if (downloadError) state(NcmPlayback_Error,"Network interrupted; track skipped",static_cast<uint32_t>(downloadError.load()));
                     // Drain the last queued PCM before changing tracks.
                     if (sink.queuedMs()) { std::this_thread::sleep_for(5ms); continue; }
-                    failures=0;
-                    advance(false);
+                    if (downloadError) {
+                        const auto error=static_cast<uint32_t>(downloadError.load());
+                        closeTrack();
+                        state(NcmPlayback_Error,"Network interrupted; track skipped",error);
+                    } else { failures=0; advance(false); }
                 } else if (!sink.write(pcm.data(),frames)) {
                     closeTrack(); state(NcmPlayback_Error,"Audio output failed",6);
                 } else {
+                    if (!producedFrames) diagnostic("first-pcm",pcm.data(),frames);
                     producedFrames+=frames;
                     uint64_t milliseconds=producedFrames*1000/SampleRate;
                     std::lock_guard<std::mutex> lock(mutex);
@@ -640,7 +709,7 @@ struct Engine::Impl {
                 // Bounded skipping prevents an unavailable album spinning forever.
                 closeTrack();
                 std::this_thread::sleep_for(250ms);
-                advance(false);
+                advance(true); // An unavailable repeat-one track must not loop forever.
             } else {
                 std::unique_lock<std::mutex> lock(mutex);
                 cv.wait_for(lock,50ms,[this]{return !commands.empty() || !running;});
@@ -654,10 +723,25 @@ Engine::Engine(EngineConfig config) : impl_(std::make_unique<Impl>(std::move(con
 Engine::~Engine() { stop(); }
 bool Engine::start() {
     if (impl_->running.exchange(true)) return true;
+    if (impl_->worker.joinable()) impl_->worker.join();
     std::error_code error;
     std::filesystem::create_directories(impl_->config.directory + "/cache",error);
     if (error) { impl_->running=false; return false; }
-    impl_->worker=std::thread([this]{impl_->run();});
+    try {
+        const auto preferences = impl_->settings();
+        impl_->diagnostics = preferences.contains("diagnostics") && preferences["diagnostics"].is_boolean()
+            && preferences["diagnostics"].get<bool>();
+        if (impl_->diagnostics) {
+            if (FILE* file=std::fopen((impl_->config.directory+"/audio.log").c_str(),"wb")) std::fclose(file);
+        }
+        impl_->worker=std::thread([this]{
+            try { impl_->run(); }
+            catch (const std::exception& error) {
+                impl_->closeTrack(); impl_->state(NcmPlayback_Error,error.what(),8);
+                impl_->running=false;
+            }
+        });
+    } catch (...) { impl_->running=false; return false; }
     return true;
 }
 void Engine::stop() {
@@ -665,7 +749,7 @@ void Engine::stop() {
     if (impl_->worker.joinable()) impl_->worker.join();
 }
 bool Engine::command(NcmCommand cmd,uint32_t argument) {
-    if (cmd < NcmCommand_LoadQueue || cmd > NcmCommand_Stop ||
+    if (!impl_->running || cmd < NcmCommand_LoadQueue || cmd > NcmCommand_Stop ||
         (cmd==NcmCommand_Volume && argument>1000) ||
         (cmd==NcmCommand_Repeat && argument>NcmRepeat_All) ||
         (cmd==NcmCommand_Shuffle && argument>1) ||

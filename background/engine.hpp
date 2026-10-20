@@ -10,8 +10,9 @@ struct EngineConfig {
     /* Optional PEM CA bundle. Never disables peer or hostname verification. */
     std::string ca_bundle;
 };
-/* One engine per process owns the audio device. All public methods are thread
- * safe. start() is idempotent. stop() joins the worker and releases audout. */
+/* One engine per process owns the audio device. command()/status() are thread
+ * safe; the owner serializes start()/stop(). start() is idempotent. stop()
+ * joins the worker and releases audout. */
 class Engine {
 public:
     explicit Engine(EngineConfig config);
