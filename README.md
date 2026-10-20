@@ -6,6 +6,8 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/tiansongyu/cloudtune-nx/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/tiansongyu/cloudtune-nx/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/tiansongyu/cloudtune-nx/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/tiansongyu/cloudtune-nx?include_prereleases&amp;label=release"></a>
   <img alt="Development preview" src="https://img.shields.io/badge/status-development%20preview-E84550">
   <img alt="Borealis" src="https://img.shields.io/badge/UI-Borealis-33343B">
   <a href="LICENSE"><img alt="Application license" src="https://img.shields.io/badge/app-GPL--3.0--or--later-33343B"></a>
@@ -41,6 +43,24 @@ Switch NRO 的独立 Eden 运行记录见下方验证报告。
 验证分别记录在 [验证报告](docs/VALIDATION.md) 和
 [API 验证记录](docs/API_VALIDATION.md) 中。真实账号登录后的收藏写操作、
 Atmosphère 服务与游戏同时运行仍需要实机验收，不能从一次模拟器启动推断通过。
+
+## 下载
+
+在 [GitHub Releases](https://github.com/tiansongyu/cloudtune-nx/releases) 选择版本，
+下载 `CloudTuneNX-<版本>-sd.zip` 和同页的 `SHA256SUMS`。
+`v0.1.0` 为开发预览，功能与验证范围见 [发布说明](docs/releases/v0.1.0.md)。
+
+以 0.1.0 为例，将两个文件放在同一目录后校验：
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+确认 `CloudTuneNX-0.1.0-sd.zip: OK` 后，**只将 SD 包解压到 SD 卡根目录**。
+`-symbols.zip` 用于排查崩溃，`-docs.zip` 用于离线阅读，均留在电脑上。
+GitHub 自动提供的 Source code 压缩包是源码，不包含已编译安装文件。
+完整步骤见 [安装指南](docs/INSTALLING.md)；每次发布的自动检查可在
+[GitHub Actions](https://github.com/tiansongyu/cloudtune-nx/actions) 查看。
 
 ## 功能
 
@@ -106,6 +126,9 @@ cd cloudtune-nx
 
 # 生成 SD 卡部署包、符号包、文档包及 SHA-256 清单
 ./scripts/package.sh
+
+# 生成版本固定的 Release 附件（dist/release/）
+./scripts/package.sh --release
 ```
 
 镜像固定到官方 devkitPro digest。编译器和依赖版本记录在
@@ -119,10 +142,13 @@ cd cloudtune-nx
 | 匹配的应用 ELF | `build/switch/CloudTune.elf` |
 | 后台服务 | `build/switch/background/cloudtune-background.nsp` |
 | 匹配的服务 ELF | `build/switch/background/cloudtune-background.elf` |
-| 覆盖层 | `overlay/CloudTune.ovl` |
-| 安装包与校验文件 | `dist/CloudTuneNX-*` |
+| 覆盖层与匹配 ELF | `build/overlay/CloudTune.ovl`、`build/overlay/CloudTune.elf` |
+| 本地时间戳安装包 | `dist/CloudTuneNX-*` |
+| Release 附件与校验文件 | `dist/release/` |
 
 详见 [构建文档](docs/BUILDING.md)，包括独立宿主依赖、桌面构建和测试命令。
+PR、`main` 和手工触发的 CI 运行宿主测试与 Switch 构建；版本标签复用同一 CI，
+全部通过后自动发布。版本规则、目录布局和权限说明见 [发布流程](docs/RELEASING.md)。
 
 ## 安装
 

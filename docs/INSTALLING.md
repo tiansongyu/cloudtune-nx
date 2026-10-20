@@ -8,8 +8,25 @@ The canonical repository is
 
 ## SD-card layout
 
-Extract the `CloudTuneNX-<version>-<timestamp>-sd.zip` release archive directly
-to the root of your SD card. The archive contains:
+Download `CloudTuneNX-<version>-sd.zip` and `SHA256SUMS` from the same
+[GitHub Release](https://github.com/tiansongyu/cloudtune-nx/releases).
+For v0.1.0, save both files in one directory and verify:
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+Confirm that `CloudTuneNX-0.1.0-sd.zip` reports `OK`. The `--ignore-missing`
+option permits downloading only the SD archive; it does not ignore a checksum
+mismatch in a file you downloaded. Windows users can compare
+`Get-FileHash .\CloudTuneNX-0.1.0-sd.zip -Algorithm SHA256` with the matching
+line in `SHA256SUMS`.
+
+Extract **only the SD archive** directly to the root of your SD card.
+The symbols and documentation archives remain on your computer; GitHub's
+automatic Source code archives are not installation packages.
+Local `./scripts/package.sh` builds additionally support timestamped
+`CloudTuneNX-<version>-<timestamp>-sd.zip` candidates with the same SD layout:
 
 ```text
 sd:/
@@ -74,9 +91,12 @@ present, to avoid duplicate menu entries.
 Keep `sd:/config/netease-switch/` and update the existing
 `42000000004E434D` module in place; do not install a second background module.
 
-Verify the downloaded archives using the release's `-SHA256SUMS` file.
-The unpacked release folder also includes `manifest.json`, which records
-individual binary hashes and the source revision.
+Verify downloaded Release assets with their `SHA256SUMS` file.
+`CloudTuneNX-<version>-manifest.json` records individual binary hashes and
+the source revision; keep it with the matching archives.
+Local timestamped packages retain their `<package>-SHA256SUMS` name.
+Published version tags and their attachments are not replaced by later builds;
+install a newer version when a fix is released.
 
 ## Disable or uninstall
 

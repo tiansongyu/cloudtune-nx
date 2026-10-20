@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release-tag:
+        description: Optional release tag to verify against compiled NACP metadata
+        type: string
+        required: false
+        default: ""
+    outputs:
+      release-artifact-id:
+        description: Immutable artifact ID containing exactly the five release assets
+        value: ${{ jobs.switch.outputs.release-artifact-id }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  host:
+    name: Host tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install native build and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential cmake ninja-build pkg-config curl ca-certificates \
+            libcurl4-openssl-dev libsdl2-dev zlib1g-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev \
+            libdbus-1-dev ffmpeg openssl python3 python3-cryptography
+      - name: Run protocol, storage and generated-audio tests
+        run: |
+          mkdir -p build/validation
+          ./scripts/test-host.sh 2>&1 | tee build/validation/ci-host.log
+      - name: Retain host test log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cloudtune-host-logs
+          # Never upload generated HTTPS keys, cookies, caches or runtime data.
+          path: build/validation/ci-host.log
+          if-no-files-found: ignore
+          retention-days: 7
+          include-hidden-files: false
+
+  switch:
+    name: Switch build and release-package verification
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    outputs:
+      release-artifact-id: ${{ steps.release-artifact.outputs.artifact-id }}
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y python3 zip unzip
+      - name: Compile the Docker toolchain smoke NRO
+        run: |
+          mkdir -p build/validation
+          ./scripts/docker-build.sh --smoke 2>&1 | tee build/validation/ci-switch-smoke.log
+      - name: Build the NRO, background service and overlay
+        run: ./scripts/docker-build.sh 2>&1 | tee build/validation/ci-switch-build.log
+      - name: Verify release tag against both compiled NACP versions
+        if: inputs.release-tag != ''
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          python3 scripts/check-release-tag.py "$RELEASE_TAG" \
+            --nacp build/switch/CloudTune.nacp \
+            --nacp build/overlay/CloudTune.nacp
+      - name: Package and verify the five public release assets
+        run: |
+          ./scripts/package.sh --release 2>&1 | tee build/validation/ci-package.log
+          python3 scripts/verify-package.py dist/release --commit "$GITHUB_SHA" \
+            2>&1 | tee build/validation/ci-package-verify.log
+      - name: Retain the verified release assets
+        id: release-artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cloudtune-release
+          path: |
+            dist/release/CloudTuneNX-*-sd.zip
+            dist/release/CloudTuneNX-*-symbols.zip
+            dist/release/CloudTuneNX-*-docs.zip
+            dist/release/CloudTuneNX-*-manifest.json
+            dist/release/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          overwrite: false
+          # .overlays is already inside the verified SD ZIP.
+          include-hidden-files: false
+      - name: Retain build and package logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cloudtune-switch-logs
+          path: |
+            build/validation/ci-switch-smoke.log
+            build/validation/ci-switch-build.log
+            build/validation/ci-package.log
+            build/validation/ci-package-verify.log
+            build/validation/docker-image.log
+            build/validation/compiler.txt
+            build/validation/toolchain-packages.txt
+            build/validation/build-provenance.json
+          if-no-files-found: ignore
+          retention-days: 7
+          include-hidden-files: false

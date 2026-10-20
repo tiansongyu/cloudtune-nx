@@ -64,9 +64,14 @@ build/switch/CloudTune.nro
 build/switch/CloudTune.elf
 build/switch/background/cloudtune-background.nsp
 build/switch/background/cloudtune-background.elf
-overlay/CloudTune.ovl
-overlay/CloudTune.elf
+build/overlay/CloudTune.ovl
+build/overlay/CloudTune.elf
+build/overlay/CloudTune.nacp
+build/overlay/CloudTune.map
 ```
+
+Overlay intermediate objects are isolated under `build/overlay/obj/`.
+The `overlay/` source directory contains source and dependency files only.
 
 The smoke test writes `build/smoke/toolchain-smoke.nro` and its ELF. It verifies
 the compiler, libnx, NACP metadata generation and NRO packaging independently
@@ -76,15 +81,27 @@ Generate the SD deployment archive and separate debugging symbols:
 
 ```sh
 ./scripts/package.sh
+# Fixed, versioned assets for a GitHub Release:
+./scripts/package.sh --release
 ```
 
 The packager validates NRO/overlay headers, the ExeFS NSP, its NSO and NPDM
 program ID, the ELF architecture, and each binary's build ID against its
-matching ELF before staging files. Every run creates
-a distinct directory under `dist/`, preserving earlier candidates. It emits
-`CloudTuneNX-<version>-<timestamp>` SD, symbols and documentation zip
-archives, a per-file JSON manifest and
-SHA-256 checksums. Only the `-sd.zip` contents belong on the SD card;
+matching ELF before staging files under `build/package/`. The default local
+mode retains timestamped `CloudTuneNX-<version>-<timestamp>` packages under
+`dist/`, preserving earlier candidates. Release mode writes fixed names under
+`dist/release/`:
+
+```text
+CloudTuneNX-<version>-sd.zip
+CloudTuneNX-<version>-symbols.zip
+CloudTuneNX-<version>-docs.zip
+CloudTuneNX-<version>-manifest.json
+SHA256SUMS
+```
+
+The manifest records the source revision and per-file SHA-256 hashes.
+Only the `-sd.zip` contents belong on the SD card;
 see [`INSTALLING.md`](INSTALLING.md).
 
 The symbols archive separates identically named app and overlay ELFs:
@@ -172,6 +189,16 @@ isolation by quality/session.
 Additional test tools are Python 3 with `cryptography`, FFmpeg, OpenSSL and
 curl. Fixtures and temporary TLS keys stay in ignored `build/validation/`.
 No account sign-in, SMS or personal music collection is needed.
+
+## GitHub Actions and releases
+
+[CI](https://github.com/tiansongyu/cloudtune-nx/actions/workflows/ci.yml)
+runs for pull requests, pushes to `main`, and manual dispatch. Release tags
+reuse that workflow and publish only after host and Switch checks succeed.
+The published assets are the packages from that same workflow run.
+See [RELEASING.md](RELEASING.md) for tag/version checks, permissions and the
+complete output layout. An Actions result is separate from emulator and
+physical-console validation.
 
 ## Troubleshooting
 

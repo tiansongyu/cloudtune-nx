@@ -180,3 +180,25 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - Kept an ignored local backup bundle and commit map. The publication branch
   cannot reach the two original font blobs; private runtime files, credentials
   and generated artifacts are excluded from the source repository.
+
+## 2026-10-20 · CI/CD and release packaging
+
+- Added GitHub Actions host tests and Docker Switch builds for pull requests,
+  `main` pushes and manual runs. Version tags reuse that workflow before
+  a separate, narrowly permissioned release job can publish.
+- Release publication selects the exact artifact from the same run, checks
+  tag/version/commit consistency, uploads a new draft, downloads its assets
+  and compares their bytes before making it public. Existing versions and
+  assets are not replaced.
+- Moved overlay binaries and intermediate files under `build/overlay/`;
+  staging lives under `build/package/` and the five public attachments under
+  `dist/release/`. Timestamped local candidates remain supported.
+- The application settings version and overlay NACP now derive from the
+  CMake project version. The packager checks NACP versions, ExeFS/NPDM,
+  matching ELF IDs, exact SD layout, ZIP CRCs and per-file SHA-256 hashes.
+- Release mode requires both a clean source tree and matching build
+  provenance. Documentation archives retain offline instructions, images
+  and dependency licenses; private runtime directories are not packaged.
+- Workflow lint and positive/negative version checks passed locally.
+  Hosted CI outcomes are recorded by the corresponding GitHub Actions runs;
+  each published release links its own run and source commit.

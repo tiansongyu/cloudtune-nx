@@ -4,6 +4,8 @@ The project repository is
 [tiansongyu/cloudtune-nx](https://github.com/tiansongyu/cloudtune-nx).
 Use its [issues](https://github.com/tiansongyu/cloudtune-nx/issues) for
 reproducible bugs and proposals, and pull requests for reviewed source changes.
+PR and `main` builds run the same reusable CI used for release tags.
+See [the release guide](docs/RELEASING.md) for checks, versioning and packaging.
 
 Build all three Switch targets with `./scripts/docker-build.sh`. Build the
 desktop target and run `ctest --test-dir build/desktop --output-on-failure`
