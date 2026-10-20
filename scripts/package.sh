@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import zipfile
 
@@ -91,6 +92,8 @@ try:
     overlay = pathlib.Path(os.environ.get("OVERLAY_BUILD_DIR", root / "build/overlay"))
     paths, components = verifier.validate_build(build, background, overlay, version)
     print("Verified NRO/OVL NACP versions, ExeFS/NPDM and three matching AArch64 ELFs.")
+    codec_source, source_paths, codec_licenses = verifier.validate_third_party_inputs(root)
+    print("Verified pinned FFmpeg corresponding source, upstream licenses and Shairport notices.")
     if mode == "--check":
         sys.exit(0)
 
@@ -162,6 +165,38 @@ try:
                 copy(root / name, docs / "licenses" / name)
     for name in ("vendor/qrcodegen/qrcodegen.hpp", "background/vendor/dr_mp3.h"):
         copy(root / name, docs / "licenses" / name)
+    # Rebuildable third-party sources accompany the binary assets. No runtime
+    # directory, generated key or account file participates in this whitelist.
+    for name, source in source_paths.items():
+        copy(source, docs / "third-party-source" / name)
+    copy(root / verifier.FFMPEG_MANIFEST, docs / verifier.FFMPEG_MANIFEST)
+    for name in verifier.SHAIRPORT_FILES:
+        copy(root / name, docs / name)
+        copy(root / name, docs / "licenses" / name)
+    for name, content in codec_licenses.items():
+        path = docs / "licenses/ffmpeg" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        copy(root / "docs/licenses" / f"FFmpeg-{name}", docs / "docs/licenses" / f"FFmpeg-{name}")
+    (docs / "third-party-source/README.md").write_text(
+        "# Corresponding third-party source\n\n"
+        f"CloudTune NX {version}; source commit `{commit}`.\n\n"
+        f"- [Complete project source at this commit](https://github.com/tiansongyu/cloudtune-nx/tree/{commit})\n"
+        f"- [Download the project source](https://github.com/tiansongyu/cloudtune-nx/archive/{commit}.tar.gz)\n"
+        "- The unmodified FFmpeg release archive, exact version/SHA256 manifest, "
+        "and ALAC-only build recipe are included in this directory.\n"
+        "- From this directory, run `bash scripts/setup-airplay-codec.sh host` "
+        "or `bash scripts/setup-airplay-codec.sh switch` with devkitA64/libnx installed. "
+        "The recipe uses the bundled archive without downloading it; host builds need "
+        "a C compiler, GNU Make, Python 3 and tar/xz. The main project Dockerfile "
+        "and build instructions are available in the project source and packaged docs.\n"
+        "- Upstream FFmpeg licenses are in `../licenses/ffmpeg/` and inside the archive.\n"
+        "- Shairport's retained RSA protocol-material header and upstream notice are "
+        "in `airplay/vendor/` and `../licenses/airplay/vendor/`. The published "
+        "compatibility key is protocol source material, not an account credential.\n"
+        "- The project's GPL license, third-party notices and the remaining vendored "
+        "licenses are included in the parent documentation directory.\n",
+        encoding="utf-8")
 
     epoch = int(git("show", "-s", "--format=%ct", "HEAD"))
     archives = {}
@@ -179,6 +214,7 @@ try:
         "packaged_utc": stamp, "git_commit": commit,
         "source_has_uncommitted_changes": dirty, "background_title_id": title,
         "build_provenance": provenance, "components": components, "archives": archives,
+        "third_party_sources": {"ffmpeg": codec_source},
     }
     (output / manifest_name).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     sums = [verifier.digest((output / name).read_bytes()) + "  " + name
@@ -196,7 +232,8 @@ try:
             source.rename(destination)
         print(f"Development assets verified: {dist / (prefix + '-sd.zip')}")
     print(f"Isolated staging retained for inspection: {stage}")
-except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError, zipfile.BadZipFile) as error:
+except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError, zipfile.BadZipFile,
+        tarfile.TarError) as error:
     print(f"Packaging failed: {error}", file=sys.stderr)
     sys.exit(1)
 PY

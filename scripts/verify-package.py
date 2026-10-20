@@ -2,12 +2,14 @@
 """Verify release archives without extracting or executing their contents."""
 import argparse
 import hashlib
+import io
 import json
 import pathlib
 import re
 import stat
 import struct
 import sys
+import tarfile
 import zipfile
 
 TITLE_ID = "42000000004E434D"
@@ -27,6 +29,9 @@ COMPONENT_PATHS = {
 }
 FORBIDDEN_PARTS = {".runtime", ".git", "cookies.txt", "cookies.txt.bak", "settings.json",
                    "queue.nsq", "queue.nsq.bak", "userdata", "credentials", ".env"}
+FFMPEG_MANIFEST = "airplay/vendor/ffmpeg-source.json"
+FFMPEG_LICENSES = ("COPYING.LGPLv2.1", "COPYING.LGPLv3", "LICENSE.md")
+SHAIRPORT_FILES = ("airplay/vendor/SHAIRPORT-LICENSE", "airplay/vendor/shairport_rsa_key.h")
 
 
 def require(condition, message):
@@ -40,6 +45,100 @@ def digest(data):
 
 def file_record(data):
     return {"bytes": len(data), "sha256": digest(data)}
+
+
+def ffmpeg_source(data):
+    source = json.loads(data)
+    require(source.get("format_version") == 1 and source.get("name") == "FFmpeg",
+            "Invalid FFmpeg source manifest")
+    require(re.fullmatch(r"\d+\.\d+\.\d+", source.get("version", "")), "Invalid FFmpeg version")
+    require(source.get("archive") == f"ffmpeg-{source['version']}.tar.xz",
+            "Invalid FFmpeg source archive name")
+    require(source.get("url") == f"https://ffmpeg.org/releases/{source['archive']}",
+            "FFmpeg source must use its official release URL")
+    require(re.fullmatch(r"[0-9a-f]{64}", source.get("sha256", "")),
+            "Invalid FFmpeg source checksum")
+    require(re.fullmatch(r"[A-F0-9]{40}", source.get("signing_key_fingerprint", "")),
+            "Invalid FFmpeg release signing fingerprint")
+    require(source.get("license_files") == list(FFMPEG_LICENSES),
+            "Missing FFmpeg upstream license files")
+    return source
+
+
+def ffmpeg_licenses(archive, source):
+    require(len(archive) <= 64 * 1024 * 1024 and digest(archive) == source["sha256"],
+            "FFmpeg corresponding-source archive does not match its pinned SHA256")
+    licenses = {}
+    # Read only named regular license members. Never extract or execute the
+    # third-party tarball; its full contents remain intact in docs.zip.
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:xz") as tar:
+        for name in FFMPEG_LICENSES:
+            member = tar.getmember(f"ffmpeg-{source['version']}/{name}")
+            require(member.isfile() and member.size <= 128 * 1024,
+                    f"Invalid FFmpeg license member: {name}")
+            licenses[name] = tar.extractfile(member).read()
+    return licenses
+
+
+def validate_third_party_inputs(root):
+    root = pathlib.Path(root)
+    manifest_path = root / FFMPEG_MANIFEST
+    require(manifest_path.is_file() and not manifest_path.is_symlink(),
+            "Missing FFmpeg source manifest")
+    source = ffmpeg_source(manifest_path.read_bytes())
+    paths = {
+        FFMPEG_MANIFEST: manifest_path,
+        "scripts/setup-airplay-codec.sh": root / "scripts/setup-airplay-codec.sh",
+        source["archive"]: root / ".deps/downloads" / source["archive"],
+        **{name: root / name for name in SHAIRPORT_FILES},
+    }
+    for name, path in paths.items():
+        require(path.is_file() and not path.is_symlink(), f"Missing/unsafe source input: {name}")
+    licenses = ffmpeg_licenses(paths[source["archive"]].read_bytes(), source)
+    for name, expected in licenses.items():
+        require((root / "docs/licenses" / f"FFmpeg-{name}").read_bytes() == expected,
+                f"Repository FFmpeg license differs from pinned source: {name}")
+    header = paths[SHAIRPORT_FILES[1]].read_bytes()
+    require(b"Published RAOP compatibility key" in header and
+            b"not a CloudTune user credential" in header and
+            b"Permission is hereby granted" in header,
+            "Missing Shairport public protocol-material copyright/permission notice")
+    return source, paths, licenses
+
+
+def verify_third_party_docs(archive, files):
+    source = ffmpeg_source(archive.read(FFMPEG_MANIFEST))
+    prefix = "third-party-source/"
+    required = {
+        prefix + "README.md",
+        prefix + FFMPEG_MANIFEST,
+        prefix + "scripts/setup-airplay-codec.sh",
+        prefix + source["archive"],
+        *(prefix + name for name in SHAIRPORT_FILES),
+    }
+    require({name for name in files if name.startswith(prefix)} == required,
+            "Incomplete or unexpected third-party corresponding-source layout")
+    require(archive.read(prefix + FFMPEG_MANIFEST) == archive.read(FFMPEG_MANIFEST),
+            "Packaged FFmpeg source-manifest copies differ")
+    licenses = ffmpeg_licenses(archive.read(prefix + source["archive"]), source)
+    for name, expected in licenses.items():
+        require(archive.read(f"licenses/ffmpeg/{name}") == expected and
+                archive.read(f"docs/licenses/FFmpeg-{name}") == expected,
+                f"Packaged FFmpeg license differs from pinned source: {name}")
+    recipe = archive.read(prefix + "scripts/setup-airplay-codec.sh")
+    require(b"airplay/vendor/ffmpeg-source.json" in recipe and
+            b"--enable-decoder=alac" in recipe,
+            "Missing ALAC build recipe or source manifest integration")
+    for name in SHAIRPORT_FILES:
+        require(archive.read(name) == archive.read(prefix + name) ==
+                archive.read("licenses/" + name),
+                f"Packaged Shairport source/notice copies differ: {name}")
+    header = archive.read(SHAIRPORT_FILES[1])
+    require(b"Published RAOP compatibility key" in header and
+            b"not a CloudTune user credential" in header and
+            b"Permission is hereby granted" in header,
+            "Missing Shairport protocol-material notice")
+    return source
 
 
 def unpack(fmt, data, offset):
@@ -245,10 +344,15 @@ def verify_package(directory, version=None, commit=None, require_release=True):
         else:
             required = {"README.md", "INSTALLING.md", "VALIDATION.md", "LICENSE",
                         "CONTRIBUTING.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md",
-                        "overlay/vendor/libtesla/LICENSE"}
+                        "overlay/vendor/libtesla/LICENSE", FFMPEG_MANIFEST,
+                        *SHAIRPORT_FILES}
             require(required <= set(files), "Missing release documentation or license")
-            require(all(name in required or name.startswith(("docs/", "licenses/"))
+            require(all(name in required or name.startswith(("docs/", "licenses/", "third-party-source/"))
                         for name in files), "Unexpected documentation archive file")
+            with zipfile.ZipFile(path) as docs:
+                source = verify_third_party_docs(docs, files)
+            require(manifest.get("third_party_sources") == {"ffmpeg": source},
+                    "Manifest FFmpeg corresponding-source metadata differs")
     binaries, symbols = {}, {}
     with zipfile.ZipFile(directory / names["sd"]) as sd, \
             zipfile.ZipFile(directory / names["symbols"]) as debug:
@@ -292,8 +396,10 @@ def main():
             require(args.directory is not None, "A release directory is required")
             manifest = verify_package(args.directory, args.version, args.commit)
             print(f"Verified CloudTune NX {manifest['version']} at {manifest['git_commit']}: "
-                  "5 assets, SHA256, ZIP CRC, exact SD layout, NACP versions and matching ELFs.")
-    except (OSError, ValueError, KeyError, TypeError, UnicodeError, zipfile.BadZipFile) as error:
+                  "5 assets, SHA256, ZIP CRC, exact SD layout, NACP versions, matching ELFs "
+                  "and pinned third-party source/licenses.")
+    except (OSError, ValueError, KeyError, TypeError, UnicodeError, zipfile.BadZipFile,
+            tarfile.TarError) as error:
         print(f"Package verification failed: {error}", file=sys.stderr)
         return 1
     return 0

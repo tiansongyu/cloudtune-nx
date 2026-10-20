@@ -222,3 +222,59 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - The user requested a visible desktop demonstration for this task.
   Preparation remained isolated; the final preview is explicitly labeled
   as desktop simulation. Atmosphère/Tesla and game BGM remain hardware checks.
+
+## 2026-10-20 · AirPlay 1 tool integration
+
+- Added a separate classic RAOP receiver and Runtime owner for NetEase music
+  and incoming stereo audio. Receiver callbacks hand bounded PCM to the
+  existing audio worker; only one source owns output at a time.
+- Opening the application starts tools according to independent
+  `airplay.json` preferences. Reception defaults to enabled on first use,
+  and a saved disabled preference survives restarts. Settings expose actual
+  device name, IPv4 address, state, enable/disable and session disconnect.
+- The NRO prefers the background owner and avoids creating a local listener
+  when a known service is still starting or an old service lacks tool APIs.
+  AirPlay status uses new IPC commands 30–32; the original 216-byte playback
+  status remains unchanged for existing overlay clients.
+- Added mutex protection around Player backend state and tool/music calls.
+  The background owns Runtime beyond the NRO lifetime; local fallback stops
+  with the NRO. Incoming audio suspends the music queue, and ending a session
+  restores its saved position paused for explicit user resume.
+- Pinned an ALAC-only FFmpeg 7.1.5 build with a verified archive SHA-256.
+  Retained its upstream license texts and Shairport Sync's MIT protocol/key
+  attribution; no old Shairport ALAC or tinysvcmdns implementation is linked.
+- Host and Switch integration syntax checks passed. Isolated Player
+  substitution tests covered concurrent calls, shutdown, old-service
+  compatibility and prevention of a second listener. The generated-audio
+  regression passed bounded PCM, resampling, pause, flush, exclusive handoff
+  and restoration of the music cursor.
+- Review found settings rollback, stale settings-error and disconnect
+  acknowledgement issues; the Runtime implementation was corrected.
+  External audio now reports output-device errors or stalls, and restoring
+  a saved music position checks seek failure instead of silently continuing.
+- Independent encrypted RAOP tests passed exact ALAC/L16 PCM checks,
+  challenge responses, timing exchange, retransmission, FLUSH, PAUSE,
+  metadata, single-owner behavior and malformed-request rejection.
+  An occupied port recovers through automatic retry, and retry waits remain
+  promptly cancellable. The receiver retries network/listener failures every
+  two seconds and detects automatic IPv4 interface changes every three seconds.
+- These are implementation and component checks, not a completed real-phone
+  or physical-console acceptance result. Apple sender compatibility,
+  long-running reception, Atmosphère/game coexistence and the 16 MiB
+  background heap need end-to-end validation. Sleep reception, AirPlay 2,
+  video, mirroring and multiroom synchronization are not claimed.
+- The actual desktop application was discovered by unmodified pyatv 0.16.1
+  and received a complete generated 45-second stream. Isolated Xvfb checks
+  verified the Chinese settings dialog, persistent disable, listener removal,
+  track metadata, and rotating/paused vinyl. This exposed and fixed the UI's
+  assumption that every active source has a NetEase track ID.
+- Full Docker builds produced all three Switch components. The complete host
+  suite passed 10/10 tests plus the existing local/HTTPS music regressions.
+  The new RAOP checks run automatically in the existing GitHub Actions host job.
+- ASan/UBSan checks instrumented the ALAC library as well as the receiver.
+  Mutation tests exposed malformed UTF-8 metadata; validation/replacement was
+  added and retested with Chinese and invalid-byte fixtures.
+- Packaging now includes the pinned FFmpeg source archive, build recipe and
+  upstream licenses alongside the retained Shairport notice. The verifier
+  checks their checksums and completeness while retaining the five-asset
+  release layout. No account or runtime files are included.

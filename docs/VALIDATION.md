@@ -203,3 +203,45 @@ and the `overlay-preview-playing-*.png` / `overlay-preview-paused-*.png`
 screenshots. The desktop demo starts muted. Service regression uses SDL's
 dummy audio device; these results verify decoding and control behavior,
 not hardware sound quality, real Tesla loading, or game audio coexistence.
+
+## AirPlay 1 receiver — 2026-10-20
+
+The development branch adds a separate classic RAOP receiver. Tests used
+generated audio, isolated data directories and loopback sockets; no account
+session or existing desktop playback service was used.
+
+| Check | Result |
+| --- | --- |
+| Host suite | 10/10 CTest checks passed, plus independent XEAPI and local/HTTPS MP3 integration |
+| ALAC / PCM | Independent FFmpeg-encoded compressed ALAC decoded to exact expected PCM; bounded resampling and source handoff passed |
+| RAOP protocol | RSA challenge, RSA-wrapped AES key, encrypted RTP, timing, retransmission, sequence wrap, FLUSH, PAUSE/RECORD and reconnect passed |
+| Receiver lifecycle | Single sender ownership, malformed request rejection, occupied-port retry, prompt shutdown and persisted enable/disable passed |
+| Sanitizers | ASan/UBSan with the ALAC decoder instrumented: protocol suite, 24,000 codec/crypto/mDNS mutations and 2,880 malformed UDP inputs across 12 recoverable sessions passed |
+| Discovery | PTR/SRV/TXT/A, legacy unicast replies and goodbye tested; unmodified pyatv 0.16.1 discovered the actual application |
+| Independent sender | pyatv completed a 45-second L16 stream to the actual Runtime/Engine; diagnostics confirmed nonzero PCM entering SDL's dummy output |
+| Settings UI | Chinese dialog inspected in isolated Xvfb; disabling closed the listener and discovery; restarting retained the disabled preference |
+| Player UI | Sender title/artist displayed, old music lyrics/controls suppressed, playback/pause changed the vinyl animation |
+| Animation comparison | 32,448 changed pixels in the playing record region; zero changed pixels while paused |
+| Switch build | Docker produced and verified the NRO, background ExeFS package, overlay and matching AArch64 ELFs |
+
+The unmodified pyatv sender has a UTF-8 DMAP length issue in its
+`string_tag` implementation: it writes character count instead of encoded
+byte count. Its interoperability run therefore uses ASCII metadata.
+Correctly framed Chinese metadata is checked separately by the independent
+protocol fixture; the receiver does not weaken its length checks to accept
+malformed sender data.
+Mutation testing also found invalid UTF-8 metadata reaching UI status.
+The receiver now replaces invalid bytes and controls while preserving
+complete valid code points; regression and sanitizer checks passed afterward.
+
+Local evidence is under `build/validation/airplay-*`, including
+`airplay-host-validation.log`, `airplay-receiver-tests.log`,
+`airplay-docker-build-final.log`, and `airplay-ui/`. Test audio, sender
+debug logs and temporary runtime settings are ignored by Git and excluded
+from deployment packages.
+
+These results establish host interoperability and Switch build correctness.
+They do **not** establish real iPhone/macOS compatibility, physical Switch
+sound quality, long-running Wi-Fi clock stability, sleep/wake recovery or
+Atmosphère reception while a game runs. Those checks remain in
+[HARDWARE_TESTING.md](HARDWARE_TESTING.md).

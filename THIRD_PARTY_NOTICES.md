@@ -19,6 +19,16 @@ does not change upstream names, attributions or license terms.
   <https://github.com/gmg137/netease-cloud-music-api>.
   API request definitions and protocol behavior were ported to C++; the
   complete method mapping is documented in `docs/API_CATALOG.md`.
+- **Shairport Sync**, by Mike Brady and contributors, based on Shairport
+  by James Laird — MIT for the referenced protocol implementation and
+  compatibility key, inspected at
+  [`cf6998daa1876c5a8f97128a960c8afc0e731841`](https://github.com/mikebrady/shairport-sync/tree/cf6998daa1876c5a8f97128a960c8afc0e731841).
+  Classic RAOP behavior informs the independent receiver in `airplay/`.
+  The public protocol compatibility RSA key and its original notice are
+  retained in `airplay/vendor/shairport_rsa_key.h`; this is not a user
+  credential. The original combined notice is retained in
+  `airplay/vendor/SHAIRPORT-LICENSE`. Shairport's old ALAC decoder and
+  tinysvcmdns implementation are not bundled or linked.
 
 ## Bundled dependencies
 
@@ -36,6 +46,25 @@ does not change upstream names, attributions or license terms.
 | Material Icons | Apache-2.0 | `resources/material/LICENSE.txt` |
 | Mozilla CA certificate bundle | MPL-2.0 | `resources/certs/` |
 | libtesla and dr_mp3 | GPL-2.0 / MIT-0 and embedded notices | [Background notices](background/THIRD_PARTY_NOTICES.md) |
+| Shairport Sync compatibility key and protocol reference | MIT; upstream combined notice retained | `airplay/vendor/SHAIRPORT-LICENSE`, `airplay/vendor/shairport_rsa_key.h` |
+| FFmpeg, pinned ALAC-only libavcodec / libavutil build | LGPL-2.1-or-later and upstream component notices | `docs/licenses/FFmpeg-LICENSE.md`, `docs/licenses/FFmpeg-COPYING.LGPLv2.1`, `docs/licenses/FFmpeg-COPYING.LGPLv3` |
+
+The AirPlay build statically links the ALAC-only FFmpeg libraries produced by
+`scripts/setup-airplay-codec.sh`. The single
+[FFmpeg source manifest](airplay/vendor/ffmpeg-source.json) records the exact
+version, official archive URL, SHA-256, release-signing fingerprint and license
+filenames. The build recipe, packager and package verifier read that manifest.
+The recipe enables only the ALAC decoder and disables FFmpeg networking, programs and
+unneeded libraries. GPL, version-3-only and nonfree configure options are not
+enabled. The complete upstream license overview and LGPL texts are retained
+under `docs/licenses/`; retaining LGPLv3 also preserves the upstream
+distribution's supplied license texts, not an additional configure option.
+The script downloads the exact source to `.deps/src/ffmpeg-<version>` and
+records the recipe identity for rebuilding the static libraries. The archive
+is obtained during the build rather than vendored into the Git repository.
+The documentation package includes the corresponding archive under
+`third-party-source/`, alongside the build recipe and source manifest, so its
+source and license evidence remain available with the binary release.
 
 The filenames `switch_font.ttf` and `switch_icons.ttf` match Borealis's
 resource convention; their contents are DejaVu Sans and text-based controller

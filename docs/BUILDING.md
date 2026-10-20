@@ -55,6 +55,16 @@ The API client uses mbedTLS for AES, RSA, X25519 and GCM. The official Switch
 portlibs image does not provide an OpenSSL package. Do not link host
 `libcrypto.so` into a Switch build.
 
+AirPlay uses an isolated, static ALAC-only FFmpeg build. Its source version,
+official URL and SHA-256 are maintained in
+[`airplay/vendor/ffmpeg-source.json`](../airplay/vendor/ffmpeg-source.json).
+The Docker build runs `scripts/setup-airplay-codec.sh switch` automatically
+and caches its libraries in `.deps/ffmpeg-switch`; it does not use the full
+FFmpeg portlibs build. The recipe requires Python 3, curl, GNU Make, tar and
+xz (`xzutils` on Ubuntu/Debian), which are available in the pinned container.
+The archive checksum is checked on every invocation; a changed recipe,
+manifest, compiler or build location invalidates the compiled cache.
+
 ## Outputs
 
 The primary app outputs are:
@@ -101,6 +111,15 @@ SHA256SUMS
 ```
 
 The manifest records the source revision and per-file SHA-256 hashes.
+The documentation archive also contains the exact FFmpeg source tarball,
+source manifest, ALAC build recipe, upstream licenses, and retained Shairport
+protocol-material header and notices under `third-party-source/` and
+`licenses/`. The embedded recipe can use the bundled tarball without a
+network download. Packaging verifies its SHA-256 and compares the FFmpeg
+license copies with the original archive. The complete CloudTune source is
+identified by the release commit and linked from the source bundle.
+`./scripts/package.sh --check` verifies these source inputs as well as all
+three Switch binary/symbol pairs before creating archives.
 Only the `-sd.zip` contents belong on the SD card;
 see [`INSTALLING.md`](INSTALLING.md).
 
@@ -130,6 +149,7 @@ docker run --rm -it \
 Inside the container:
 
 ```sh
+./scripts/setup-airplay-codec.sh switch
 cmake -S . -B build/switch -G Ninja \
   -DPLATFORM_SWITCH=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build/switch \
@@ -140,7 +160,7 @@ make -C overlay -j8
 The Borealis toolchain chooses the official devkitPro Switch CMake files.
 Never reuse a desktop build directory for Switch compilation.
 
-## Isolated host crypto dependency
+## Isolated host dependencies
 
 For native desktop development, use installed GLFW, SDL2 and libcurl
 development packages. If mbedTLS headers are absent, the following builds
@@ -148,14 +168,17 @@ the same 2.28.10 source release used by the Switch port under `.deps/mbedtls`:
 
 ```sh
 ./scripts/setup-host-deps.sh
+./scripts/setup-airplay-codec.sh host
 cmake -S . -B build/desktop -G Ninja \
   -DPLATFORM_DESKTOP=ON -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_PREFIX_PATH="$PWD/.deps/mbedtls"
 ```
 
-The source archive is pinned by SHA-256. This script requires a host C
-compiler, CMake and Ninja; it does not run `apt`, repair existing package
-state, require root, or write to `/usr`.
+Both dependency source archives are pinned by SHA-256. These scripts require
+a host C compiler, CMake, Ninja, GNU Make, Python 3, curl, tar and xz
+(`xzutils` on Ubuntu/Debian). They do not run `apt`, repair existing package
+state, require root, or write to `/usr`. The ALAC-only host libraries are
+installed under `.deps/ffmpeg-host`; both platforms use the same source pin.
 
 Run the native application in the separate virtual desktop:
 
@@ -184,7 +207,10 @@ model and filesystem tests, checks XEAPI output with an independent Python
 implementation, then exercises generated MP3 audio locally and over a
 throttled local HTTPS server. The audio test covers transport controls,
 natural track changes, end-of-queue behavior, malformed queues and cache
-isolation by quality/session.
+isolation by quality/session. AirPlay tests cover bounded ALAC decoding,
+DNS-SD advertisements, encrypted RTSP/RTP with an independent cryptography
+oracle, compressed ALAC encoded by the system FFmpeg binary, PCM playback,
+retransmission, reconnect/retry, and runtime audio ownership.
 
 Additional test tools are Python 3 with `cryptography`, FFmpeg, OpenSSL and
 curl. Fixtures and temporary TLS keys stay in ignored `build/validation/`.
