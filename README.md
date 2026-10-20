@@ -22,10 +22,17 @@ Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[�
 `-symbols.zip` 用于崩溃排查，`-docs.zip` 用于离线阅读，无需复制到 SD 卡。
 
 <p align="center">
-  <img src="docs/images/player.png" alt="CloudTune NX 播放界面：黑胶唱片、封面、进度与播放控制" width="900">
+  <img src="docs/images/player.png" alt="CloudTune NX v0.2.1 播放界面：黑胶唱片、封面、进度与播放控制" width="900">
 </p>
 
-*截图来自同源 Borealis 桌面客户端；实际 Switch NRO 的 Eden 测试见验证记录。*
+<details>
+  <summary>查看发现音乐界面</summary>
+  <p align="center">
+    <img src="docs/images/discover.png" alt="CloudTune NX v0.2.1 发现音乐界面：歌单推荐与导航" width="900">
+  </p>
+</details>
+
+*截图更新于 2026-10-20，来自 v0.2.1 同源 Borealis 桌面客户端的未登录会话，原图为 1920 × 1080；实际 Switch NRO 的 Eden 测试见[验证记录](docs/VALIDATION.md)。*
 
 ## 功能
 

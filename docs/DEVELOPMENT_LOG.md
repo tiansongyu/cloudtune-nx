@@ -449,3 +449,15 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
   GitHub release label.
 - Promoted the existing v0.2.1 release by updating its metadata; its tag and
   compiled assets remain the previously verified build.
+
+## README screenshot refresh (2026-10-20)
+
+- Captured the v0.2.1 desktop client built from `5afe484` on an isolated
+  1920 × 1080 Xvfb display, using a fresh anonymous profile, disabled AirPlay
+  and dummy audio output. No personal account data was used.
+- Replaced the player and discovery screenshots with unmodified window
+  captures showing the current icon, Chinese text, public recommendations
+  and actual playback of Tycho's instrumental track “A Walk”.
+- Checked playback progress and changing vinyl frames, image dimensions,
+  privacy and README image paths. Added a collapsed discovery preview and
+  an explicit version, capture date and desktop-source caption.
