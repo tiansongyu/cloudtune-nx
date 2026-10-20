@@ -1,4 +1,4 @@
-# Eden development and verification
+# CloudTune NX: Eden development and verification
 
 Eden is installed locally for testing this project's self-built homebrew.
 The installer downloads only the emulator; it does not download console keys,
@@ -34,6 +34,9 @@ uses an AMD Ryzen 9 9950X.
 The host requires Xvfb and the X11 utility `xdpyinfo`. The launcher stores
 Eden configuration, emulated SD data and caches under
 `~/.local/share/netease-switch/eden/`, separate from an existing Eden profile.
+This path intentionally keeps the pre-rename name so existing emulator
+settings and authorized sessions remain available. Renaming the project
+does not require copying or resetting the profile.
 
 ```sh
 ./scripts/eden-virtual-desktop.sh
@@ -56,7 +59,7 @@ To run the application:
 
 ```sh
 ./scripts/eden-virtual-desktop.sh --cli \
-  -g "$PWD/build/switch/NeteaseSwitch.nro" \
+  -g "$PWD/build/switch/CloudTune.nro" \
   > build/validation/eden-app.log 2>&1
 ```
 
@@ -64,7 +67,7 @@ To use the currently visible desktop instead of the isolated display:
 
 ```sh
 EDEN_DISPLAY="$DISPLAY" ./scripts/eden-virtual-desktop.sh \
-  -g "$PWD/build/switch/NeteaseSwitch.nro"
+  -g "$PWD/build/switch/CloudTune.nro"
 ```
 
 This opens the Qt interface with the same isolated emulator data. If the

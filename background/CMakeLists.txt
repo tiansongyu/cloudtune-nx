@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  project(netease_background LANGUAGES C CXX)
+  project(cloudtune_background LANGUAGES C CXX)
   set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
 endif()
@@ -31,20 +31,20 @@ if(NINTENDO_SWITCH)
   add_library(ncm_ipc_client STATIC client/playback_client.c)
   target_include_directories(ncm_ipc_client PUBLIC "${NCM_ROOT}/include")
   target_link_libraries(ncm_ipc_client PUBLIC nx)
-  add_executable(netease-background source/main.cpp source/ipc_server.c)
-  target_include_directories(netease-background PRIVATE source)
-  target_link_libraries(netease-background PRIVATE ncm_engine)
+  add_executable(cloudtune-background source/main.cpp source/ipc_server.c)
+  target_include_directories(cloudtune-background PRIVATE source)
+  target_link_libraries(cloudtune-background PRIVATE ncm_engine)
   find_program(NPDMTOOL npdmtool HINTS "$ENV{DEVKITPRO}/tools/bin" REQUIRED)
   find_program(ELF2NSO elf2nso HINTS "$ENV{DEVKITPRO}/tools/bin" REQUIRED)
   find_program(BUILD_PFS0 build_pfs0 HINTS "$ENV{DEVKITPRO}/tools/bin" REQUIRED)
   set(PACKAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/package")
-  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/netease-background.nsp"
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cloudtune-background.nsp"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${PACKAGE_DIR}"
     COMMAND ${NPDMTOOL} "${CMAKE_CURRENT_SOURCE_DIR}/netease-sysmodule.json" "${PACKAGE_DIR}/main.npdm"
-    COMMAND ${ELF2NSO} $<TARGET_FILE:netease-background> "${PACKAGE_DIR}/main"
-    COMMAND ${BUILD_PFS0} "${PACKAGE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/netease-background.nsp"
-    DEPENDS netease-background "${CMAKE_CURRENT_SOURCE_DIR}/netease-sysmodule.json" VERBATIM)
-  add_custom_target(netease-background-package ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/netease-background.nsp")
+    COMMAND ${ELF2NSO} $<TARGET_FILE:cloudtune-background> "${PACKAGE_DIR}/main"
+    COMMAND ${BUILD_PFS0} "${PACKAGE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/cloudtune-background.nsp"
+    DEPENDS cloudtune-background "${CMAKE_CURRENT_SOURCE_DIR}/netease-sysmodule.json" VERBATIM)
+  add_custom_target(cloudtune-background-package ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/cloudtune-background.nsp")
 else()
   find_package(SDL2 REQUIRED)
   find_package(Threads REQUIRED)

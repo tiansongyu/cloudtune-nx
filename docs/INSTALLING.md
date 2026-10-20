@@ -1,21 +1,23 @@
-# Installing Netease Switch
+# Installing CloudTune NX
 
-Netease Switch is unofficial homebrew for a Nintendo Switch running
+CloudTune NX is unofficial homebrew for a Nintendo Switch running
 Atmosphère. The full app, background player and overlay are distributed
 together so their IPC protocol versions match.
+The canonical repository is
+[tiansongyu/cloudtune-nx](https://github.com/tiansongyu/cloudtune-nx).
 
 ## SD-card layout
 
-Extract the release archive ending in `-sd.zip` directly to the root of your
-SD card. The archive contains:
+Extract the `CloudTuneNX-<version>-<timestamp>-sd.zip` release archive directly
+to the root of your SD card. The archive contains:
 
 ```text
 sd:/
 ├── switch/
-│   ├── NeteaseSwitch/
-│   │   └── NeteaseSwitch.nro
+│   ├── CloudTune/
+│   │   └── CloudTune.nro
 │   └── .overlays/
-│       └── NeteaseSwitch.ovl
+│       └── CloudTune.ovl
 ├── atmosphere/
 │   └── contents/
 │       └── 42000000004E434D/
@@ -41,7 +43,7 @@ so starting the service does not automatically play music.
 2. Copy the SD archive directories to your SD card. Keep the folder
    hierarchy and allow the files from this release to replace older files.
 3. Reboot into Atmosphère to start the background player.
-4. Launch **Netease Switch** from Homebrew Menu. Full application mode is
+4. Launch **CloudTune NX** from Homebrew Menu. Full application mode is
    recommended for the GUI and networking memory budget.
 5. Sign in through the app and verify your account and library.
 6. Start playback. Open the overlay through your loader's configured
@@ -50,6 +52,9 @@ so starting the service does not automatically play music.
 The release contains no accounts or session cookies. Your session and player
 state are stored under `sd:/config/netease-switch/`. Treat that directory as
 private when sharing logs or backing up the SD card.
+This original directory name is intentional: CloudTune NX preserves it to
+reuse already authorized sessions, queues and settings without a migration.
+The IPC service `ncm:bg` and program ID `42000000004E434D` also remain unchanged.
 
 The CA bundle enables certificate validation for the background process.
 Keep it installed even though the NRO also embeds its own bundle.
@@ -59,6 +64,15 @@ Keep it installed even though the NRO also embeds its own bundle.
 Replace the NRO, overlay and system module from the **same** release, then
 reboot. Preserve `sd:/config/netease-switch/` to retain account/player state;
 replace only its `cacert.pem` with the supplied updated bundle.
+
+When upgrading from the pre-rename preview, the new application is
+`sd:/switch/CloudTune/CloudTune.nro` and the overlay is
+`sd:/switch/.overlays/CloudTune.ovl`. Remove only the superseded
+`sd:/switch/NeteaseSwitch/` application folder and the old
+`sd:/switch/.overlays/NeteaseSwitch.ovl` or `netease-overlay.ovl` files, if
+present, to avoid duplicate menu entries.
+Keep `sd:/config/netease-switch/` and update the existing
+`42000000004E434D` module in place; do not install a second background module.
 
 Verify the downloaded archives using the release's `-SHA256SUMS` file.
 The unpacked release folder also includes `manifest.json`, which records
@@ -72,7 +86,7 @@ The NRO will still attempt to launch the installed service on demand.
 If the service cannot start, the app labels its fallback as foreground
 playback; that mode ends when the NRO exits.
 
-To uninstall, remove the NRO folder, the `NeteaseSwitch.ovl` file and the
+To uninstall, remove the NRO folder, the `CloudTune.ovl` file and the
 `42000000004E434D` system-module folder, then reboot. Remove
 `sd:/config/netease-switch/` only if you also want to delete the saved
 session and settings.
@@ -86,6 +100,9 @@ logs.
 
 Keep the matching `-symbols.zip` on your computer. Its ELFs are needed to
 interpret crash reports, and do not belong on the SD card.
+The app and overlay symbols occupy separate `symbols/app/` and
+`symbols/overlay/` directories because both use the basename `CloudTune.elf`;
+the service symbols are in `symbols/background/`.
 
 See [VALIDATION.md](VALIDATION.md) for checks actually executed and remaining
 hardware checks. Emulator startup alone is not a hardware BGM certification.

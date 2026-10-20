@@ -1,4 +1,4 @@
-<h1 align="center">Netease Switch</h1>
+<h1 align="center">CloudTune NX</h1>
 
 <p align="center">
   在掌心，听见热爱。<br>
@@ -12,12 +12,14 @@
   <a href="overlay/vendor/libtesla/LICENSE"><img alt="Overlay license" src="https://img.shields.io/badge/overlay-GPL--2.0--only-33343B"></a>
 </p>
 
-Netease Switch 将网易云音乐的发现、搜索、歌单、收藏和歌词带到
+CloudTune NX 将网易云音乐的发现、搜索、歌单、收藏和歌词带到
 Switch 原生界面。以手柄和触摸操作为中心，使用与
 [Switify](https://github.com/DomazinUS/Switify) 相同的 Borealis / NanoVG
 GUI 机制；服务接口移植自
 [netease-cloud-music-gtk](https://github.com/gmg137/netease-cloud-music-gtk)
 所使用的 API 库。
+
+项目仓库：[tiansongyu/cloudtune-nx](https://github.com/tiansongyu/cloudtune-nx)。
 
 <p align="center">
   <img src="docs/images/discover.png" alt="发现音乐：原生中文界面、歌单与封面" width="900">
@@ -31,9 +33,9 @@ Switch NRO 的独立 Eden 运行记录见下方验证报告。
 
 | 组件 | 文件 | 用途 |
 | --- | --- | --- |
-| 原生客户端 | `NeteaseSwitch.nro` | 登录、发现、搜索、收藏、歌单、歌词和黑胶播放器 |
+| 原生客户端 | `CloudTune.nro` | 登录、发现、搜索、收藏、歌单、歌词和黑胶播放器 |
 | 后台播放服务 | `exefs.nsp` | 独立完成网络传输、缓存、解码和音频输出 |
-| 游戏内覆盖层 | `NeteaseSwitch.ovl` | 播放 / 暂停、切歌、进度、音量、随机和循环控制 |
+| 游戏内覆盖层 | `CloudTune.ovl` | 播放 / 暂停、切歌、进度、音量、随机和循环控制 |
 
 **当前为 0.1.0 开发预览。** 构建、真实匿名 API、桌面音频引擎及模拟器
 验证分别记录在 [验证报告](docs/VALIDATION.md) 和
@@ -89,6 +91,10 @@ API 中转服务器。密码 / 验证码、cookie 和签名请求体不写入诊
 首选 Docker，不需要将 devkitPro 安装到宿主系统：
 
 ```bash
+# 获取源码
+git clone https://github.com/tiansongyu/cloudtune-nx.git
+cd cloudtune-nx
+
 # 构建并验证工具链
 ./scripts/docker-build.sh --smoke
 
@@ -104,14 +110,17 @@ API 中转服务器。密码 / 验证码、cookie 和签名请求体不写入诊
 
 镜像固定到官方 devkitPro digest。编译器和依赖版本记录在
 `build/validation/toolchain-packages.txt`，所有第三方源码和许可证随仓库保留。
+默认镜像为 `cloudtune-nx/toolchain:local`；设置 `CLOUDTUNE_IMAGE` 可指定其他镜像，
+旧变量 `NETEASE_SWITCH_IMAGE` 仍兼容，新变量优先。
 
 | 构建产物 | 路径 |
 | --- | --- |
-| NRO | `build/switch/NeteaseSwitch.nro` |
-| 匹配的应用 ELF | `build/switch/NeteaseSwitch.elf` |
-| 后台服务 | `build/switch/background/netease-background.nsp` |
-| 覆盖层 | `overlay/netease-overlay.ovl` |
-| 安装包与校验文件 | `dist/` 下的版本目录 |
+| NRO | `build/switch/CloudTune.nro` |
+| 匹配的应用 ELF | `build/switch/CloudTune.elf` |
+| 后台服务 | `build/switch/background/cloudtune-background.nsp` |
+| 匹配的服务 ELF | `build/switch/background/cloudtune-background.elf` |
+| 覆盖层 | `overlay/CloudTune.ovl` |
+| 安装包与校验文件 | `dist/CloudTuneNX-*` |
 
 详见 [构建文档](docs/BUILDING.md)，包括独立宿主依赖、桌面构建和测试命令。
 
@@ -122,8 +131,8 @@ API 中转服务器。密码 / 验证码、cookie 和签名请求体不写入诊
 ```text
 sdmc:/
 ├── switch/
-│   ├── NeteaseSwitch/NeteaseSwitch.nro
-│   └── .overlays/NeteaseSwitch.ovl
+│   ├── CloudTune/CloudTune.nro
+│   └── .overlays/CloudTune.ovl
 ├── atmosphere/contents/42000000004E434D/
 │   ├── exefs.nsp
 │   ├── toolbox.json
@@ -132,12 +141,16 @@ sdmc:/
     └── cacert.pem
 ```
 
+**已有会话兼容：** CloudTune NX 继续使用 `config/netease-switch/` 保存登录会话、
+设置、队列与缓存；更名无需移动或删除这个目录。后台 IPC `ncm:bg` 和程序 ID
+`42000000004E434D` 保持兼容。由旧预览版更新的处理见 [安装指南](docs/INSTALLING.md#updates)。
+
 1. 安装后重启，使 Atmosphère 发现新增的后台程序。
-2. 通过 Homebrew Menu 打开 **Netease Switch**。
+2. 通过 Homebrew Menu 打开 **CloudTune NX**。
 3. 进入「我的账号」，生成二维码，并用网易云音乐手机 App 扫描及确认。
 4. 进入「我的音乐」查看歌单与收藏，选择歌曲播放。
 5. 播放栏显示 **BGM · 后台服务** 后，可退出 NRO，再打开游戏。
-6. 使用你的覆盖层加载器打开 **Netease Switch**，控制正在播放的音乐。
+6. 使用你的覆盖层加载器打开 **CloudTune NX**，控制正在播放的音乐。
 
 **“前台播放”意味着音频仍属于 NRO 进程。** 此模式不会在退出应用后继续播放。
 不要将 `.ovl` 本身当成后台音频服务。
@@ -170,10 +183,13 @@ Borealis 的平台输入法；手机验证码只在明确选择「发送验证�
 
 [Eden](https://git.eden-emu.dev/eden-emu/eden/releases) 用于运行实际 Switch NRO；
 桌面 Borealis 版本用于快速调试相同界面和播放器。两者运行在独立虚拟桌面中。
+宿主数据目录可通过 `CLOUDTUNE_DATA` 指定，并兼容旧变量 `NETEASE_SWITCH_DATA`
+（新变量优先）。Eden 现有 `~/.local/share/netease-switch/eden/` 配置保持原位，
+以保留当前模拟器会话。
 
 ```bash
 ./scripts/install-eden.sh
-./scripts/eden-virtual-desktop.sh --cli -g "$PWD/build/switch/NeteaseSwitch.nro"
+./scripts/eden-virtual-desktop.sh --cli -g "$PWD/build/switch/CloudTune.nro"
 ```
 
 完整配置、日志和截图位置见 [模拟器调试](docs/EMULATOR.md)。
@@ -214,7 +230,8 @@ docs/                   API、架构、开发日志与验证记录
 
 ## 贡献与许可证
 
-欢迎提交可复现的问题、硬件测试结果和补丁。贡献方式见
+欢迎在 [GitHub Issues](https://github.com/tiansongyu/cloudtune-nx/issues) 提交可复现的问题、
+硬件测试结果和补丁。贡献方式见
 [CONTRIBUTING.md](CONTRIBUTING.md)，凭据处理见 [SECURITY.md](SECURITY.md)。
 
 应用和后台引擎为 **GPL-3.0-or-later**；独立覆盖层为 **GPL-2.0-only**。

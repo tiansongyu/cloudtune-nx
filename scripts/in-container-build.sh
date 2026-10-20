@@ -11,7 +11,7 @@ if [[ "${1:-}" == "--smoke" ]]; then
         -I"$DEVKITPRO/libnx/include" docker/smoke/main.c \
         -L"$DEVKITPRO/libnx/lib" -specs="$DEVKITPRO/libnx/switch.specs" \
         -Wl,-Map,build/smoke/toolchain-smoke.map -lnx -o build/smoke/toolchain-smoke.elf
-    nacptool --create "Netease Switch Toolchain Test" "Netease Switch contributors" "0.1.0" \
+    nacptool --create "CloudTune NX Toolchain Test" "CloudTune NX contributors" "0.1.0" \
         build/smoke/toolchain-smoke.nacp
     elf2nro build/smoke/toolchain-smoke.elf build/smoke/toolchain-smoke.nro \
         --nacp=build/smoke/toolchain-smoke.nacp
@@ -21,7 +21,7 @@ if [[ "${1:-}" == "--smoke" ]]; then
 fi
 cmake -S . -B build/switch -G Ninja -DPLATFORM_SWITCH=ON \
     -DCMAKE_BUILD_TYPE=Release "$@"
-cmake --build build/switch --target NeteaseSwitch.nro netease-background-package \
+cmake --build build/switch --target CloudTune.nro cloudtune-background-package \
     --parallel "${BUILD_JOBS:-8}"
 # Background service and overlay are separate processes and separate binaries.
 if [[ -f overlay/Makefile ]]; then

@@ -5,17 +5,17 @@ cd "$repo_root"
 build_dir="${SWITCH_BUILD_DIR:-$repo_root/build/switch}"
 background_dir="${BACKGROUND_BUILD_DIR:-$build_dir/background}"
 overlay_dir="${OVERLAY_BUILD_DIR:-$repo_root/overlay}"
-version="${RELEASE_VERSION:-$(sed -n 's/^project(NeteaseSwitch VERSION \([^ ]*\).*/\1/p' CMakeLists.txt)}"
+version="${RELEASE_VERSION:-$(sed -n 's/^project(CloudTuneNX VERSION \([^ ]*\).*/\1/p' CMakeLists.txt)}"
 [[ "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]] || {
     echo "Invalid release version: $version" >&2; exit 1;
 }
 
-app="$build_dir/NeteaseSwitch.nro"
-app_elf="$build_dir/NeteaseSwitch.elf"
-service="$background_dir/netease-background.nsp"
-service_elf="$background_dir/netease-background.elf"
-overlay="$overlay_dir/netease-overlay.ovl"
-overlay_elf="$overlay_dir/netease-overlay.elf"
+app="$build_dir/CloudTune.nro"
+app_elf="$build_dir/CloudTune.elf"
+service="$background_dir/cloudtune-background.nsp"
+service_elf="$background_dir/cloudtune-background.elf"
+overlay="$overlay_dir/CloudTune.ovl"
+overlay_elf="$overlay_dir/CloudTune.elf"
 for artifact in "$app" "$app_elf" "$service" "$service_elf" "$overlay" "$overlay_elf" \
     resources/certs/cacert.pem background/toolbox.json; do
     [[ -s "$artifact" ]] || { echo "Missing artifact: $artifact" >&2; exit 1; }
@@ -82,25 +82,26 @@ PY
 
 # A unique directory preserves earlier release candidates and matching ELFs.
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-release_name="NeteaseSwitch-${version}-${stamp}"
+release_name="CloudTuneNX-${version}-${stamp}"
 release_dir="$repo_root/dist/$release_name"
 mkdir -p "$release_dir"
 sd="$release_dir/sd"
 symbols="$release_dir/symbols"
 title="42000000004E434D"
-mkdir -p "$sd/switch/NeteaseSwitch" "$sd/switch/.overlays" \
-    "$sd/atmosphere/contents/$title/flags" "$sd/config/netease-switch" "$symbols"
-cp "$app" "$sd/switch/NeteaseSwitch/NeteaseSwitch.nro"
-cp "$overlay" "$sd/switch/.overlays/NeteaseSwitch.ovl"
+mkdir -p "$sd/switch/CloudTune" "$sd/switch/.overlays" \
+    "$sd/atmosphere/contents/$title/flags" "$sd/config/netease-switch" \
+    "$symbols/app" "$symbols/background" "$symbols/overlay"
+cp "$app" "$sd/switch/CloudTune/CloudTune.nro"
+cp "$overlay" "$sd/switch/.overlays/CloudTune.ovl"
 cp "$service" "$sd/atmosphere/contents/$title/exefs.nsp"
 cp background/toolbox.json "$sd/atmosphere/contents/$title/toolbox.json"
 : > "$sd/atmosphere/contents/$title/flags/boot2.flag"
 cp resources/certs/cacert.pem "$sd/config/netease-switch/cacert.pem"
-cp "$app_elf" "$symbols/NeteaseSwitch.elf"
-cp "$service_elf" "$symbols/netease-background.elf"
-cp "$overlay_elf" "$symbols/netease-overlay.elf"
-[[ ! -f "$build_dir/NeteaseSwitch.map" ]] || cp "$build_dir/NeteaseSwitch.map" "$symbols/"
-[[ ! -f "$overlay_dir/netease-overlay.map" ]] || cp "$overlay_dir/netease-overlay.map" "$symbols/"
+cp "$app_elf" "$symbols/app/CloudTune.elf"
+cp "$service_elf" "$symbols/background/cloudtune-background.elf"
+cp "$overlay_elf" "$symbols/overlay/CloudTune.elf"
+[[ ! -f "$build_dir/CloudTune.map" ]] || cp "$build_dir/CloudTune.map" "$symbols/app/"
+[[ ! -f "$overlay_dir/CloudTune.map" ]] || cp "$overlay_dir/CloudTune.map" "$symbols/overlay/"
 [[ ! -f build/validation/toolchain-packages.txt ]] || \
     cp build/validation/toolchain-packages.txt "$symbols/"
 
@@ -110,7 +111,7 @@ cp README.md "$release_dir/README.md"
 cp -R docs "$release_dir/docs"
 mkdir -p "$release_dir/licenses"
 cp resources/certs/LICENSE-MPL-2.0.txt "$release_dir/licenses/"
-[[ ! -f LICENSE ]] || cp LICENSE "$release_dir/licenses/NeteaseSwitch-LICENSE"
+[[ ! -f LICENSE ]] || cp LICENSE "$release_dir/licenses/CloudTuneNX-LICENSE"
 [[ ! -f THIRD_PARTY_NOTICES.md ]] || cp THIRD_PARTY_NOTICES.md "$release_dir/licenses/"
 [[ ! -f background/THIRD_PARTY_NOTICES.md ]] || \
     cp background/THIRD_PARTY_NOTICES.md "$release_dir/licenses/background-THIRD_PARTY_NOTICES.md"
@@ -141,7 +142,7 @@ def git(*args):
     r = subprocess.run(['git', *args], text=True, capture_output=True)
     return r.stdout.strip() if r.returncode == 0 else None
 manifest = {
-    'product': 'Netease Switch',
+    'product': 'CloudTune NX',
     'version': os.environ['NCM_PACKAGE_VERSION'],
     'packaged_utc': os.environ['NCM_PACKAGE_STAMP'],
     'git_commit': git('rev-parse', 'HEAD'),

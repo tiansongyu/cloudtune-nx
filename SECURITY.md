@@ -1,4 +1,4 @@
-# Security and account data
+# CloudTune NX security and account data
 
 Authentication is sent directly to NetEase endpoints over verified HTTPS.
 The application never needs a third-party API proxy to operate.
@@ -8,6 +8,8 @@ include it in issues, screenshots, public SD backups or patches. The QR key,
 authorization responses, phone numbers and SMS codes are also private.
 The background service reads the session without overwriting the foreground
 application's newer login. Signing out removes the local session.
+The directory keeps its original name so CloudTune NX can reuse existing
+sessions after the project rename; it is not a stale installation artifact.
 
 The CA bundle is shared with the system module and is required for HTTPS.
 Do not “fix” network errors by disabling TLS certificate or hostname checks.
@@ -22,3 +24,6 @@ If a credential is disclosed, invalidate the session from the official
 NetEase client and sign out locally. Report a vulnerability without attaching
 working credentials or a real user's private data. This repository does not
 currently advertise a dedicated security contact.
+The canonical repository is
+[tiansongyu/cloudtune-nx](https://github.com/tiansongyu/cloudtune-nx);
+never publish working credentials in its public issues or pull requests.

@@ -1,15 +1,17 @@
 # Background playback
 
-NetEase Switch has three independently loaded Horizon programs:
+CloudTune NX has three independently loaded Horizon programs:
 
 | Program | Purpose | Lifetime |
 |---|---|---|
-| `NeteaseSwitch.nro` | Login, discovery, library, playlist management, lyrics and full player | Until the user exits the application |
-| `netease-background.nsp` | HTTPS transfer, SD cache, MP3 decoding, audio output, queue | Atmosphère system module; survives application exit |
-| `netease-overlay.ovl` | Small Tesla player and controls over a running game | While opened through the overlay loader |
+| `CloudTune.nro` | Login, discovery, library, playlist management, lyrics and full player | Until the user exits the application |
+| `cloudtune-background.nsp` | HTTPS transfer, SD cache, MP3 decoding, audio output, queue | Atmosphère system module; survives application exit |
+| `CloudTune.ovl` | Small Tesla player and controls over a running game | While opened through the overlay loader |
 
 The background service uses program ID `42000000004E434D` and service name
 `ncm:bg`. Its program ID must not be shared with another installed system module.
+These identifiers and `config/netease-switch/` deliberately remain stable
+across the CloudTune NX rename to preserve installed services and sessions.
 It allocates a fixed 12 MiB heap, opens two BSD sessions, and opens `audout:u`
 only when there is a playable track. Audio is 48 kHz, signed 16-bit stereo;
 44.1 kHz and mono MP3 input is linearly resampled and expanded to stereo.
@@ -94,10 +96,10 @@ URLs and authentication values. Remove the setting after collecting a report.
 ```text
 SD card/
 ├── atmosphere/contents/42000000004E434D/
-│   ├── exefs.nsp                 # renamed netease-background.nsp
+│   ├── exefs.nsp                 # renamed cloudtune-background.nsp
 │   ├── toolbox.json
 │   └── flags/boot2.flag          # empty file enables boot startup
-├── switch/.overlays/netease-overlay.ovl
+├── switch/.overlays/CloudTune.ovl
 └── config/netease-switch/
     └── cacert.pem
 ```

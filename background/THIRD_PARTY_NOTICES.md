@@ -2,7 +2,7 @@
 
 - `background/source/ipc_server.c` and `.h` adapt Switify's phase2 server,
   based on the sys-clk server by p-sam, natinusala and m4xw. The original
-  Beer-Ware license is preserved in both files. NetEase Switch changes
+  Beer-Ware license is preserved in both files. CloudTune NX changes
   service names and log paths. Reference Switify revision:
   `e4b86610598dcf511b3682be0e047855e7445ac6`.
 - `background/vendor/dr_mp3.h` is David Reid's dr_mp3 from

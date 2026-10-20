@@ -144,3 +144,18 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
   The regression profile contained no account credentials.
 - At the user's request, further GUI regression runs stay on isolated virtual
   desktops; the current desktop is reserved for the user's own interaction.
+
+## 2026-10-20 · CloudTune NX project identity
+
+- The user selected **CloudTune NX** with canonical repository
+  `https://github.com/tiansongyu/cloudtune-nx`.
+- Current build and installation documentation uses `CloudTune.nro`,
+  `cloudtune-background.nsp`, `CloudTune.ovl` and the `CloudTuneNX` package
+  prefix. App and overlay symbols retain separate directories.
+- Session storage remains `config/netease-switch/`; the `ncm:bg` IPC service,
+  program ID `42000000004E434D` and existing Eden profile remain compatible.
+- New environment variables are `CLOUDTUNE_DATA` and `CLOUDTUNE_IMAGE`,
+  with the original variable names retained as fallbacks.
+- Earlier logs, binary names, hashes and screenshots retain their historical
+  meaning. A renamed build must have its own validation and package manifest;
+  the documentation change does not imply new runtime or hardware results.

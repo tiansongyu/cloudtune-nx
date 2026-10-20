@@ -298,7 +298,7 @@ struct Engine::Impl {
         curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
         curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS);
 #endif
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, "NetEaseSwitch/0.1");
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, "CloudTuneNX/0.1");
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);

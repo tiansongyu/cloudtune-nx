@@ -1,4 +1,8 @@
-# Third-party notices
+# CloudTune NX third-party notices
+
+These notices apply to
+[CloudTune NX](https://github.com/tiansongyu/cloudtune-nx). The project rename
+does not change upstream names, attributions or license terms.
 
 ## Source references
 

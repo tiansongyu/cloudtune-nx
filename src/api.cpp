@@ -258,7 +258,7 @@ struct ApiClient::Impl {
         if(curl_easy_getinfo(curl,CURLINFO_COOKIELIST,&raw)!=CURLE_OK)
             throw ApiError("Cannot export the login session");
         std::unique_ptr<curl_slist,decltype(&curl_slist_free_all)> list(raw,curl_slist_free_all);
-        std::string serialized="# Netscape HTTP Cookie File\n# Netease Switch session. Keep private.\n\n";
+        std::string serialized="# Netscape HTTP Cookie File\n# CloudTune NX session. Keep private.\n\n";
         for(auto* node=list.get();node;node=node->next)serialized+=std::string(node->data)+"\n";
         // Avoid unnecessary SD writes for unchanged cookies and cover downloads.
         if(serialized==saved_cookies&&std::filesystem::exists(config.cookie_file))return;

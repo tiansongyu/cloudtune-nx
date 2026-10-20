@@ -5,7 +5,7 @@ if(NOT PLATFORM_SWITCH AND NOT PLATFORM_DESKTOP)
   set(PLATFORM_DESKTOP ON CACHE BOOL "" FORCE)
 endif()
 include(${BOREALIS_LIBRARY}/cmake/toolchain.cmake)
-project(NeteaseSwitch VERSION 0.1.0 LANGUAGES C CXX)
+project(CloudTuneNX VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -40,17 +40,17 @@ add_subdirectory(background)
 set(BRLS_RESOURCES_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 add_subdirectory(${BOREALIS_LIBRARY} ${CMAKE_BINARY_DIR}/borealis)
 target_include_directories(borealis PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vendor/nlohmann/include")
-add_executable(NeteaseSwitch src/main.cpp src/model.cpp src/player.cpp src/ui.cpp vendor/qrcodegen/qrcodegen.cpp)
-target_include_directories(NeteaseSwitch PRIVATE vendor/qrcodegen)
-target_link_libraries(NeteaseSwitch PRIVATE borealis netease_library ncm_engine)
+add_executable(CloudTune src/main.cpp src/model.cpp src/player.cpp src/ui.cpp vendor/qrcodegen/qrcodegen.cpp)
+target_include_directories(CloudTune PRIVATE vendor/qrcodegen)
+target_link_libraries(CloudTune PRIVATE borealis netease_library ncm_engine)
 if(PLATFORM_SWITCH)
-  target_sources(NeteaseSwitch PRIVATE ${BOREALIS_LIBRARY}/lib/platforms/switch/switch_wrapper.c)
-  target_link_libraries(NeteaseSwitch PRIVATE ncm_ipc_client)
-  add_custom_target(NeteaseSwitch.nro
-    COMMAND ${NX_NACPTOOL_EXE} --create "Netease Switch" "Netease Switch contributors" "${PROJECT_VERSION}" NeteaseSwitch.nacp
-    COMMAND ${NX_ELF2NRO_EXE} $<TARGET_FILE:NeteaseSwitch> NeteaseSwitch.nro
-      --nacp=NeteaseSwitch.nacp --romfsdir=${CMAKE_CURRENT_SOURCE_DIR}/resources
-    DEPENDS NeteaseSwitch
+  target_sources(CloudTune PRIVATE ${BOREALIS_LIBRARY}/lib/platforms/switch/switch_wrapper.c)
+  target_link_libraries(CloudTune PRIVATE ncm_ipc_client)
+  add_custom_target(CloudTune.nro
+    COMMAND ${NX_NACPTOOL_EXE} --create "CloudTune NX" "CloudTune NX contributors" "${PROJECT_VERSION}" CloudTune.nacp
+    COMMAND ${NX_ELF2NRO_EXE} $<TARGET_FILE:CloudTune> CloudTune.nro
+      --nacp=CloudTune.nacp --romfsdir=${CMAKE_CURRENT_SOURCE_DIR}/resources
+    DEPENDS CloudTune
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     VERBATIM)
 else()

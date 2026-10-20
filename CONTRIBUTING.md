@@ -1,4 +1,9 @@
-# Contributing
+# Contributing to CloudTune NX
+
+The project repository is
+[tiansongyu/cloudtune-nx](https://github.com/tiansongyu/cloudtune-nx).
+Use its [issues](https://github.com/tiansongyu/cloudtune-nx/issues) for
+reproducible bugs and proposals, and pull requests for reviewed source changes.
 
 Build all three Switch targets with `./scripts/docker-build.sh`. Build the
 desktop target and run `ctest --test-dir build/desktop --output-on-failure`
@@ -10,6 +15,9 @@ Keep networking and decoding off the GUI thread. Update `docs/API_CATALOG.md`
 and its generator when changing endpoint behavior. Preserve the versioned C
 IPC ABI, or bump its version and update both clients with a compatibility
 error message. Do not mix GPL-3-only code into the GPL-2-only overlay.
+The `netease` C++ namespace, `ncm:bg` service, program ID `42000000004E434D`
+and `config/netease-switch/` data directory intentionally retain their
+compatible identifiers. Brand changes must not invalidate existing sessions.
 
 For GUI changes, run the desktop build and the actual NRO in the virtual
 desktop. Inspect Chinese text, focus, dialogs, loading and empty/error states

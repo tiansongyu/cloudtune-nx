@@ -83,7 +83,7 @@ int main(int,char**) {
     NcmIpcServer server{};
     check(ncmIpcServerInitialize(&server,NCM_SERVICE_NAME,8));
     FILE* ready=std::fopen(NCM_CONFIG_DIRECTORY "/background-ready.log","w");
-    if (ready) { std::fputs("NetEase Switch background ready; protocol 1\n",ready); std::fclose(ready); }
+    if (ready) { std::fputs("CloudTune NX background ready; protocol 1\n",ready); std::fclose(ready); }
     while (true) {
         Result rc=ncmIpcServerProcess(&server,dispatch,engine.get());
         if (R_FAILED(rc) && rc!=KERNELRESULT(ConnectionClosed)) svcSleepThread(10000000);

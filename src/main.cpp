@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
     // Select our bundled CJK face before createWindow loads/caches that font.
     brls::FontLoader::USER_FONT_PATH = BRLS_ASSET("font/chinese_fallback.ttf");
 #endif
-    brls::Application::createWindow("Netease Switch");
+    brls::Application::createWindow("CloudTune NX");
     brls::Application::getPlatform()->setThemeVariant(brls::ThemeVariant::DARK);
     brls::Application::setGlobalQuit(false);
     brls::Application::setLimitedFPS(60);
@@ -31,7 +31,10 @@ int main(int argc, char **argv) {
 #ifdef __SWITCH__
     std::string directory = "sdmc:/config/netease-switch";
 #else
-    const char *custom = std::getenv("NETEASE_SWITCH_DATA");
+    const char *custom = std::getenv("CLOUDTUNE_DATA");
+    if (!custom || !*custom)
+        custom = std::getenv("NETEASE_SWITCH_DATA");
+    // Keep the existing directory so the rename preserves saved login/player state.
     std::string directory = custom ? custom
                                    : std::string(std::getenv("HOME") ? std::getenv("HOME") : ".") +
                                          "/.local/share/netease-switch";

@@ -634,8 +634,8 @@ void MusicView::paint_sidebar(NVGcontext *v, const Snapshot &s) {
     circle(v, 44, 53, 20, red);
     circle(v, 44, 53, 11, panel);
     circle(v, 44, 53, 4, red);
-    text(v, 76, 50, 20, white, "云音乐");
-    text(v, 77, 72, 10, muted, "NETEASE · SWITCH");
+    text(v, 76, 50, 19, white, "CloudTune", 130);
+    text(v, 77, 72, 10, muted, "NX · MUSIC PLAYER", 130);
     text(v, 28, 125, 10, muted, "M U S I C   E V E R Y W H E R E");
     for (int i = 0; i < 8; ++i) {
         float y = 158 + i * 47;
@@ -852,7 +852,7 @@ void MusicView::paint_settings(NVGcontext *v, const Snapshot &s) {
         text(v, 280, 235 + i * 70, 18, white, names[i], 270);
         text(v, 573, 235 + i * 70, 14, muted, desc[i], 625);
     }
-    text(v, 260, 532, 14, muted, "Netease Switch 0.1.0 · Borealis / libnx · GPL-3.0-or-later", 970);
+    text(v, 260, 532, 14, muted, "CloudTune NX 0.1.0 · Borealis / libnx · GPL-3.0-or-later", 970);
     text(v, 260, 561, 13, muted, "游戏内播放需要 SD 卡上的后台服务与 Tesla / Ultrahand 覆盖层。",
          970);
 }

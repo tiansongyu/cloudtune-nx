@@ -2,6 +2,9 @@
 
 记录时间：2026-10-20 04:44 UTC。环境：Ubuntu 22.04 x86_64、libcurl 7.81、mbedTLS 2.28.10；Switch 交叉编译使用本地 Docker 镜像 `netease-switch/toolchain:local`。
 
+项目现名 **CloudTune NX**。上面的镜像名称保留验证当时的实际记录；当前默认镜像为
+`cloudtune-nx/toolchain:local`，最新构建步骤见 [BUILDING.md](BUILDING.md)。
+
 ## 已通过
 
 - 49 个公开服务/下载方法完整列入清单；46 个可规划请求均进行离线构造测试，另 3 个是公钥握手和下载专用路径。

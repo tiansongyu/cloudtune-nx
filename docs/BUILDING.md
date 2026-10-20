@@ -1,4 +1,4 @@
-# Building Netease Switch
+# Building CloudTune NX
 
 The repository produces a standalone Nintendo Switch NRO, an Atmosphère
 background service, and an Ultrahand/Tesla overlay. The NRO and overlay are
@@ -11,20 +11,26 @@ Git, and approximately 4 GB of free space for the toolchain and build outputs.
 On Windows, run the scripts in WSL2 with Docker integration enabled.
 
 ```sh
+git clone https://github.com/tiansongyu/cloudtune-nx.git
+cd cloudtune-nx
 ./scripts/docker-build.sh --image
 ./scripts/docker-build.sh --smoke
 ./scripts/docker-build.sh
 ```
 
-The image is named `netease-switch/toolchain:local`. Its upstream
+The image is named `cloudtune-nx/toolchain:local`. Its upstream
 `devkitpro/devkita64` image is pinned by digest in
 [`docker/Dockerfile`](../docker/Dockerfile). The image contains the complete
 official Switch portlibs set; the build does not silently upgrade packages.
 To use a separately maintained image:
 
 ```sh
-NETEASE_SWITCH_IMAGE=my-toolchain:verified BUILD_JOBS=12 ./scripts/docker-build.sh
+CLOUDTUNE_IMAGE=my-toolchain:verified BUILD_JOBS=12 ./scripts/docker-build.sh
 ```
+
+`CLOUDTUNE_IMAGE` takes precedence over the compatible legacy variable
+`NETEASE_SWITCH_IMAGE`. The CMake project is `CloudTuneNX`; its application
+target and executable basename are `CloudTune`.
 
 The container runs as your host UID/GID, so generated files remain editable
 without `sudo`. Source code is mounted at `/workspace`; toolchains live under
@@ -54,10 +60,12 @@ portlibs image does not provide an OpenSSL package. Do not link host
 The primary app outputs are:
 
 ```text
-build/switch/NeteaseSwitch.nro
-build/switch/NeteaseSwitch.elf
-build/switch/background/netease-background.nsp
-overlay/netease-overlay.ovl
+build/switch/CloudTune.nro
+build/switch/CloudTune.elf
+build/switch/background/cloudtune-background.nsp
+build/switch/background/cloudtune-background.elf
+overlay/CloudTune.ovl
+overlay/CloudTune.elf
 ```
 
 The smoke test writes `build/smoke/toolchain-smoke.nro` and its ELF. It verifies
@@ -74,9 +82,15 @@ The packager validates NRO/overlay headers, the ExeFS NSP, its NSO and NPDM
 program ID, the ELF architecture, and each binary's build ID against its
 matching ELF before staging files. Every run creates
 a distinct directory under `dist/`, preserving earlier candidates. It emits
-SD, symbols and documentation zip archives, a per-file JSON manifest and
+`CloudTuneNX-<version>-<timestamp>` SD, symbols and documentation zip
+archives, a per-file JSON manifest and
 SHA-256 checksums. Only the `-sd.zip` contents belong on the SD card;
 see [`INSTALLING.md`](INSTALLING.md).
+
+The symbols archive separates identically named app and overlay ELFs:
+`symbols/app/CloudTune.elf`, `symbols/overlay/CloudTune.elf`, and
+`symbols/background/cloudtune-background.elf`. Keep this structure when
+matching crash reports to the appropriate process.
 
 Always retain the ELF corresponding to the NRO or system module tested on
 hardware. An ELF from a later build cannot reliably symbolicate an earlier
@@ -93,7 +107,7 @@ Eden 0.2.1 on the isolated Xvfb display `:119`; see
 docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   -v "$PWD:/workspace" -w /workspace \
-  netease-switch/toolchain:local bash
+  cloudtune-nx/toolchain:local bash
 ```
 
 Inside the container:
@@ -102,7 +116,7 @@ Inside the container:
 cmake -S . -B build/switch -G Ninja \
   -DPLATFORM_SWITCH=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build/switch \
-  --target NeteaseSwitch.nro netease-background-package --parallel 8
+  --target CloudTune.nro cloudtune-background-package --parallel 8
 make -C overlay -j8
 ```
 
@@ -130,12 +144,15 @@ Run the native application in the separate virtual desktop:
 
 ```sh
 cmake --build build/desktop --parallel 8
-DISPLAY=:120 LP_NUM_THREADS=4 ./build/desktop/NeteaseSwitch
+DISPLAY=:120 LP_NUM_THREADS=4 ./build/desktop/CloudTune
 ```
 
 The display must already exist. For a headless machine, create it using
 `Xvfb :120 -screen 0 1600x1000x24 -nolisten tcp` in a separate terminal.
-Set `NETEASE_SWITCH_DATA` to isolate cookies, settings and audio caches.
+Set `CLOUDTUNE_DATA` to isolate cookies, settings and audio caches; the
+legacy `NETEASE_SWITCH_DATA` variable remains accepted when `CLOUDTUNE_DATA`
+is unset. The default native data location and existing Eden profile retain
+the `netease-switch` directory name to preserve sessions across the rename.
 `SDL_AUDIODRIVER=dummy` is available for automated runs without speakers;
 it does not establish audible output quality.
 

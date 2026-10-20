@@ -3,6 +3,11 @@
 This document distinguishes checks actually executed from checks still
 requiring application integration or a physical Nintendo Switch.
 
+The project is now named **CloudTune NX**. Earlier artifact names below are
+retained as historical evidence; current filenames and commands are documented
+in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
+hardware or emulator validation.
+
 ## Toolchain and emulator baseline — 2026-10-20
 
 | Check | Result | Evidence |

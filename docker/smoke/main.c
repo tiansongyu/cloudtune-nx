@@ -8,7 +8,7 @@ int main(int argc, char **argv) {
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     PadState pad;
     padInitializeDefault(&pad);
-    printf("NETEASE SWITCH TOOLCHAIN SMOKE TEST\n\n");
+    printf("CLOUDTUNE NX TOOLCHAIN SMOKE TEST\n\n");
     printf("libnx initialized. AArch64 NRO is running.\n");
     printf("Press + to exit.\n");
     while (appletMainLoop()) {

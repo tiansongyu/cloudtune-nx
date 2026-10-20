@@ -9,17 +9,17 @@ endif
 TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
-TARGET      := netease-overlay
+TARGET      := CloudTune
 BUILD       := build
 SOURCES     := source ../background/client
 INCLUDES    := ../include vendor/libtesla
-APP_TITLE   := NetEase Switch
-APP_AUTHOR  := NetEase Switch contributors
+APP_TITLE   := CloudTune NX
+APP_AUTHOR  := CloudTune NX contributors
 APP_VERSION := 0.1.0
 NO_ICON     := 1
 
 ifeq ($(LIGHTWEIGHT),1)
-APP_TITLE   := NetEase Switch Lite
+APP_TITLE   := CloudTune NX Lite
 APP_VERSION := 0.1.0-lite1
 DEFINES     += -DSWITIFY_LIGHTWEIGHT_OVERLAY=1
 endif

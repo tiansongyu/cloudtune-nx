@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-image="${NETEASE_SWITCH_IMAGE:-netease-switch/toolchain:local}"
+image="${CLOUDTUNE_IMAGE:-${NETEASE_SWITCH_IMAGE:-cloudtune-nx/toolchain:local}}"
 jobs="${BUILD_JOBS:-8}"
 mkdir -p "$repo_root/build/validation"
 if [[ "${1:-}" == "--image" ]] || ! docker image inspect "$image" >/dev/null 2>&1; then

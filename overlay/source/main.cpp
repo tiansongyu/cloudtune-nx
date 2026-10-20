@@ -40,7 +40,7 @@ class PlayerGui : public tsl::Gui {
 
   public:
     tsl::elm::Element *createUI() override {
-        auto *frame = new tsl::elm::OverlayFrame("网易云 · Switch", "后台播放器 / v0.1.0");
+        auto *frame = new tsl::elm::OverlayFrame("CloudTune NX", "后台播放器 / v0.1.0");
         auto *list = new tsl::elm::List();
         auto *disc =
             new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32) {
