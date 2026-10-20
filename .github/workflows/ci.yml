@@ -48,6 +48,7 @@ jobs:
         run: |
           shellcheck scripts/*.sh
           python3 -m compileall -q scripts tools tests background/tests
+          python3 tests/release_target_tests.py
       - name: Run protocol, storage and generated-audio tests
         run: |
           mkdir -p build/validation

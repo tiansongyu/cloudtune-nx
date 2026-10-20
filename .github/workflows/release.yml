@@ -1,14 +1,22 @@
 name: Release
+run-name: Release ${{ inputs.tag || github.ref_name }}
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "发布标签，如 v0.2.2；必须匹配所选分支的 CMake 版本与发布说明"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  # Manual dispatch from main and a tag push share the same publication lock.
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 defaults:
@@ -21,6 +29,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     outputs:
+      tag: ${{ steps.tag.outputs.tag }}
       version: ${{ steps.tag.outputs.version }}
       prerelease: ${{ steps.tag.outputs.prerelease }}
     steps:
@@ -30,10 +39,18 @@ jobs:
       - name: Check tag, CMake version, overlay version and release notes
         id: tag
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="$(python3 scripts/check-release-tag.py "$RELEASE_TAG")"
           test -s "docs/releases/$RELEASE_TAG.md"
+          arguments=()
+          if [[ "$RELEASE_EVENT" == workflow_dispatch ]]; then
+            arguments+=(--allow-missing-tag)
+          fi
+          python3 scripts/release-target.py "$RELEASE_TAG" --commit "$GITHUB_SHA" "${arguments[@]}"
+          printf 'tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           if [[ "$version" == 0.* ]]; then
             echo 'prerelease=true' >> "$GITHUB_OUTPUT"
@@ -46,10 +63,11 @@ jobs:
     needs: validate
     permissions:
       contents: read
-    # A local reusable workflow uses this tag's exact source revision.
+    # A local reusable workflow uses the caller's immutable event SHA,
+    # including manual dispatch from a branch whose new tag does not exist yet.
     uses: ./.github/workflows/ci.yml
     with:
-      release-tag: ${{ github.ref_name }}
+      release-tag: ${{ needs.validate.outputs.tag }}
 
   publish:
     name: Verify and publish the tested assets
@@ -59,9 +77,10 @@ jobs:
     permissions:
       contents: write
     env:
-      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
       RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       RELEASE_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+      RELEASE_EVENT: ${{ github.event_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -83,25 +102,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh --version
-          # Resolve lightweight and annotated remote tags to the tested commit.
-          python3 - <<'PY'
-          import json, os, subprocess
-          repo = os.environ["GITHUB_REPOSITORY"]
-          tag = os.environ["RELEASE_TAG"]
-          def api(path):
-              return json.loads(subprocess.check_output(["gh", "api", path], text=True))
-          obj = api(f"repos/{repo}/git/ref/tags/{tag}")["object"]
-          for _ in range(8):
-              if obj["type"] != "tag":
-                  break
-              obj = api(f"repos/{repo}/git/tags/{obj['sha']}")["object"]
-          if obj["type"] != "commit" or obj["sha"] != os.environ["GITHUB_SHA"]:
-              raise SystemExit("Remote release tag no longer points to the tested commit")
-          PY
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::A release already exists for this tag; assets will not be replaced."
-            exit 1
+          # Recheck after CI; only manual dispatch may create a missing tag.
+          # The GITHUB_TOKEN-created tag does not trigger another push workflow.
+          arguments=()
+          if [[ "$RELEASE_EVENT" == workflow_dispatch ]]; then
+            arguments+=(--create-tag)
           fi
+          python3 scripts/release-target.py "$RELEASE_TAG" --commit "$GITHUB_SHA" "${arguments[@]}"
           assets=(
             "dist/release/CloudTuneNX-$RELEASE_VERSION-sd.zip"
             "dist/release/CloudTuneNX-$RELEASE_VERSION-symbols.zip"
@@ -129,5 +136,12 @@ jobs:
           for asset in "${assets[@]}"; do
             cmp "$asset" "$roundtrip/${asset##*/}"
           done
+          python3 scripts/release-target.py "$RELEASE_TAG" --commit "$GITHUB_SHA" --verify-tag-only
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --verify-tag --draft=false --prerelease="$RELEASE_PRERELEASE"
+          {
+            printf '## CloudTune NX %s\n\n' "$RELEASE_TAG"
+            printf '[下载 SD 安装包](%s/%s/releases/download/%s/CloudTuneNX-%s-sd.zip)\n\n' \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$RELEASE_VERSION"
+            printf '包含 NRO、后台服务和 Tesla 覆盖层；另附符号包、文档包、manifest 与 SHA256SUMS。\n'
+          } >> "$GITHUB_STEP_SUMMARY"
