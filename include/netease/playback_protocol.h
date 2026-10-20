@@ -49,7 +49,8 @@ typedef struct NcmPlaybackStatus {
 } NcmPlaybackStatus;
 
 /* Queue format is little endian on both the Switch and supported host builds.
- * Credentials are deliberately excluded; URL refresh reads the cookie jar. */
+ * Credentials are excluded; the engine captures the committed account session
+ * separately when it loads the queue. */
 typedef struct NcmQueueHeader {
     char magic[8]; /* "NCMQUEUE" */
     uint32_t version;
@@ -62,7 +63,7 @@ typedef struct NcmQueueEntry {
     char title[128];
     char artist[128];
     char album[128];
-    char url[1024]; /* HTTPS URL, or sdmc:/ local MP3 / FLAC audio */
+    char url[1024]; /* HTTPS URL, or sdmc:/ local MP3 / FLAC / AAC audio */
 } NcmQueueEntry;
 
 /* Publishes path.tmp. POSIX replacement is atomic; Horizon uses a recoverable

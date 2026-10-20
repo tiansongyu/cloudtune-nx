@@ -268,6 +268,106 @@ def retry_bind(binary):
     print("PASS occupied port automatically recovers, retry shutdown remains prompt")
 
 
+def boundary_cases(binary, public):
+    probe = Probe(binary)
+    session = None
+    try:
+        initial_fds = len(list(Path(f"/proc/{probe.process.pid}/fd").iterdir()))
+        session = Rtsp(probe.port)
+        # Sixteen pipelined messages cross the receiver's eight-message budget.
+        requests = [f"OPTIONS * RTSP/1.0\r\nCSeq: {index}\r\n\r\n".encode()
+                    for index in range(1, 17)]
+        session.socket.sendall(b"".join(requests))
+        for index in range(1, 17):
+            code, headers, _ = session.response()
+            check(code == 200 and headers["cseq"] == str(index),
+                  "bounded RTSP pipeline preserves order and drains all messages")
+        session.cseq = 16
+        # Exercise a header and body arriving in small independent writes.
+        fragmented = (b"SET_PARAMETER * RTSP/1.0\r\nCSeq: 17\r\n"
+                      b"Content-Type: text/parameters\r\nContent-Length: 12\r\n\r\nvolume: -5\r\n")
+        for offset in range(0, len(fragmented), 3):
+            session.socket.sendall(fragmented[offset:offset + 3])
+        check(session.response()[0] == 200, "fragmented RTSP body is parsed by byte count")
+        session.cseq = 17
+        session.setup(public, encrypted=False)
+        session.request("RECORD")
+
+        def dmap(tag, body):
+            return tag + struct.pack("!I", len(body)) + body
+
+        session.request("SET_PARAMETER", {"Content-Type": "application/x-dmap-tagged"},
+                        dmap(b"minm", b"retained-title"))
+        malformed_dmap = [b"minm" + struct.pack("!I", 0xFFFFFFFF) + b"x",
+                          b"minm" + struct.pack("!I", 10) + b"x",
+                          b"min", b"minm\x00\x00\x00"]
+        nested = dmap(b"minm", b"too-deep")
+        for _ in range(64):
+            nested = dmap(b"mlit", nested)
+        malformed_dmap.append(nested)
+        for data in malformed_dmap:
+            session.request("SET_PARAMETER", {"Content-Type": "application/x-dmap-tagged"}, data)
+            check(probe.command()["title"] == "retained-title",
+                  "truncated lengths or excessive DMAP nesting mutated metadata")
+
+        base = struct.pack("!BBHII", 0x80, 0x60, 900, 900000, 1)
+        malformed_rtp = [base[:length] for length in range(12)]
+        malformed_rtp += [
+            bytes([0x8F]) + base[1:] + b"x",  # missing CSRC entries
+            bytes([0x90]) + base[1:] + b"\x00\x00\xff\xff",  # excessive extension
+            bytes([0x90]) + base[1:] + b"\x00",  # truncated extension
+            bytes([0xA0]) + base[1:] + b"\x00",  # zero padding
+            bytes([0xA0]) + base[1:] + b"\xff",  # padding exceeds payload
+            b"\x80\xd6\x00\x01" + base[:10],  # short retransmission envelope
+        ]
+        raw = alac(SAMPLES)
+        malformed_rtp.extend(base + raw[:cut] for cut in range(1, len(raw) - 6))
+        for packet in malformed_rtp:
+            session.audio.sendto(packet, ("127.0.0.1", session.remote["server_port"]))
+        for length in range(20):
+            session.control.sendto((b"\x80\xd4" + bytes(18))[:length],
+                                   ("127.0.0.1", session.remote["control_port"]))
+        for length in range(32):
+            session.timing.sendto((b"\x80\xd3" + bytes(30))[:length],
+                                  ("127.0.0.1", session.remote["timing_port"]))
+        time.sleep(0.05)
+        check(probe.command()["frames"] == 0, "malformed packets reached the audio callback")
+        session.sync(900000)
+        session.rtp(900, 900000, raw, encrypted=False)
+        status = wait(probe, session, lambda row: row["frames"] == 8)
+        check(status["crc"] == expected(SAMPLES), "valid audio did not recover after malformed packets")
+        session.close()
+        session = None
+        wait(probe, None, lambda row: row["state"] == 2)
+        # Disconnect while requests/bodies and audio are pending. Each RECORD
+        # must release ownership exactly once, and listener restarts stay bounded.
+        for iteration in range(12):
+            session = Rtsp(probe.port)
+            session.setup(public, pcm=True, encrypted=False)
+            session.request("RECORD")
+            session.socket.sendall(b"SET_PARAMETER * RTSP/1.0\r\nCSeq: 50\r\n"
+                                   b"Content-Length: 524288\r\n\r\npartial")
+            started = time.monotonic()
+            if iteration % 3 == 0:
+                check(probe.command("restart")["restarted"], "receiver restart failed")
+            else:
+                check(probe.command("disconnect")["disconnected"], "partial request disconnect failed")
+            check(time.monotonic() - started < 1, "pending body delayed receiver shutdown")
+            session.close()
+            session = None
+            status = wait(probe, None, lambda row: row["state"] == 2)
+            check(status["begins"] == status["ends"], "disconnect leaked or duplicated stream ownership")
+        check(len(list(Path(f"/proc/{probe.process.pid}/fd").iterdir())) == initial_fds,
+              "repeated sessions/restarts leaked socket descriptors")
+        print(f"PASS boundary corpus: 16 pipelined RTSP, fragmented body, "
+              f"{len(malformed_dmap)} DMAP, {len(malformed_rtp) + 52} UDP, "
+              "12 interrupted sessions / 4 restarts; exact PCM recovery and no FD leak")
+    finally:
+        if session:
+            session.close()
+        probe.close()
+
+
 def run(binary):
     public = public_key()
     probe = Probe(binary)
@@ -433,6 +533,7 @@ def run(binary):
             session.close()
         probe.close()
     retry_bind(binary)
+    boundary_cases(binary, public)
 
 
 if __name__ == "__main__":

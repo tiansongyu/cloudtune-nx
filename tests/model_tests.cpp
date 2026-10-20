@@ -99,6 +99,9 @@ struct ModelTestAccess {
         m.state_.nickname = "未登录";
         m.state_.likes.clear();
     }
+    static bool stopping(Model &m) {
+        return m.stopping_;
+    }
 };
 } // namespace netease
 using namespace netease;
@@ -442,12 +445,56 @@ static void damaged_accounts_tests(const std::filesystem::path& directory,
                 storage::read_file(mirror.string()) == cookies,
             "Corrupt registry recovery overwrote the original account archive or mirror");
 }
+static void stopped_account_transaction_tests(const std::filesystem::path& root) {
+    const std::string alice =
+        "# Netscape HTTP Cookie File\n.music.163.com\tTRUE\t/\tTRUE\t0\tMUSIC_U\tsynthetic-alice\n";
+    const std::string bob =
+        "# Netscape HTTP Cookie File\n.music.163.com\tTRUE\t/\tTRUE\t0\tMUSIC_U\tsynthetic-bob\n";
+    for (const bool remove : {false, true}) {
+        const auto directory = root / (remove ? "remove" : "switch");
+        {
+            AccountStore store(directory.string());
+            store.save(11, "Alice", alice);
+            store.save(22, "Bob", bob, false);
+        }
+        Model model(directory.string());
+        Gate gate;
+        std::promise<void> entered;
+        auto entered_future = entered.get_future();
+        model.set_account_change_callback([&] {
+            entered.set_value();
+            gate.future.wait();
+        });
+        if (remove)
+            model.remove_account(11);
+        else
+            model.switch_account(22);
+        ready(entered_future);
+        auto stopped = std::async(std::launch::async, [&] { model.stop(); });
+        const auto deadline = std::chrono::steady_clock::now() + 3s;
+        while (!ModelTestAccess::stopping(model) &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(1ms);
+        const bool cancelled = ModelTestAccess::stopping(model);
+        gate.release();
+        require(stopped.wait_for(5s) == std::future_status::ready,
+                "Account barrier prevented model shutdown");
+        stopped.get();
+        require(cancelled, "Shutdown failed to cancel the pending account transaction");
+        const auto registry = Json::parse(storage::read_file((directory / "accounts.json").string()));
+        require(registry["active_user_id"] == 11 && registry["accounts"].size() == 2 &&
+                    AccountStore::playback_cookies(directory.string()).find("synthetic-alice") !=
+                        std::string::npos,
+                "Shutdown committed an account switch/removal after cancellation");
+    }
+}
 int main() {
     try {
         const auto directory = std::filesystem::temp_directory_path() /
                                ("netease-model-test-" + std::to_string(getpid()));
         queue_recovery_tests(directory / "queue-recovery");
         account_model_tests(directory / "accounts");
+        stopped_account_transaction_tests(directory / "stopped-accounts");
         damaged_accounts_tests(directory / "damaged-accounts",
                                R"({"cookies":"synthetic-private-registry"!)");
         damaged_accounts_tests(directory / "empty-accounts", "");

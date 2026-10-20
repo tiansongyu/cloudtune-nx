@@ -38,6 +38,10 @@ struct RequestSpec {
 };
 RequestSpec plan_request(const std::string& method, Json arguments = Json::object());
 std::vector<std::string> api_methods();
+// Only an unexpired, root-path NetEase cookie may be promoted into shared
+// API authentication headers or used to identify an authenticated audio cache.
+// The returned value is secret; callers must not display or log it.
+std::string session_auth_cookie(const std::string& cookies, const std::string& name);
 
 // Calls are synchronous and serialized. Run them on a worker, never the UI thread.
 // Responses preserve the service JSON schema. Errors include HTTP / service codes.

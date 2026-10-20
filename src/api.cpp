@@ -6,12 +6,14 @@
 #include "netease/storage.hpp"
 #include <curl/curl.h>
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <mutex>
 #include <sstream>
+#include <string_view>
 
 namespace netease {
 namespace {
@@ -84,6 +86,56 @@ void check_url(const std::string& url) {
 } // namespace
 
 std::vector<std::string> api_methods() { return methods; }
+std::string session_auth_cookie(const std::string& cookies, const std::string& name) {
+    const auto now = std::max<int64_t>(0, std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+    std::istringstream input(cookies);
+    std::string line;
+    std::array<std::string, 2> candidates; // Host-only and domain-wide cookie identities.
+    while (std::getline(input, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        std::array<std::string_view, 7> fields{};
+        size_t begin = 0, field = 0;
+        while (field < 6) {
+            const auto end = line.find('\t', begin);
+            if (end == std::string::npos)
+                break;
+            fields[field++] = std::string_view(line).substr(begin, end - begin);
+            begin = end + 1;
+        }
+        if (field != 6 || line.find('\t', begin) != std::string::npos)
+            continue;
+        fields[6] = std::string_view(line).substr(begin);
+        if (fields[5] != name || fields[2] != "/" ||
+            (fields[1] != "TRUE" && fields[1] != "FALSE") ||
+            (fields[3] != "TRUE" && fields[3] != "FALSE"))
+            continue;
+        std::string domain(fields[0]);
+        if (domain.rfind("#HttpOnly_", 0) == 0)
+            domain.erase(0, 10);
+        std::transform(domain.begin(), domain.end(), domain.begin(),
+                       [](unsigned char c) { return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c; });
+        if (domain != "music.163.com" && domain != ".music.163.com")
+            continue;
+        uint64_t expires = 0;
+        const auto parsed = std::from_chars(fields[4].data(), fields[4].data() + fields[4].size(),
+                                             expires);
+        if (parsed.ec != std::errc{} || parsed.ptr != fields[4].data() + fields[4].size() ||
+            std::any_of(fields[6].begin(), fields[6].end(),
+                        [](unsigned char c) { return c < 0x20 || c == 0x7f; }))
+            continue;
+        auto& candidate = candidates[fields[1] == "TRUE" ? 1 : 0];
+        // Importing a later expired cookie deletes the same earlier cookie.
+        // Mirror that rule so a raw legacy jar and curl's normalized export
+        // select the same cache/authentication identity.
+        if (expires && expires <= static_cast<uint64_t>(now))
+            candidate.clear();
+        else
+            candidate.assign(fields[6].data(), fields[6].size());
+    }
+    return candidates[1].empty() ? candidates[0] : candidates[1];
+}
 
 RequestSpec plan_request(const std::string& method, Json args) {
     if (!args.is_object()) throw ApiError("API arguments must be an object");
@@ -282,25 +334,9 @@ struct ApiClient::Impl {
         saved_cookies=serialized;
     }
     std::string cookie(const std::string& name) {
-        curl_slist* list = nullptr;
-        curl_easy_getinfo(curl, CURLINFO_COOKIELIST, &list);
-        std::string result;
-        for (auto* node = list; node; node = node->next) {
-            std::istringstream line(node->data);
-            std::vector<std::string> parts;
-            std::string part;
-            while (std::getline(line, part, '\t')) parts.push_back(part);
-            if (parts.size() >= 7 && parts[5] == name) {
-                auto domain = parts[0];
-                if (domain.rfind("#HttpOnly_", 0) == 0) domain.erase(0, 10);
-                // Downloads share this curl cookie engine. A CDN cookie with
-                // the same name must never replace the NetEase login header.
-                if (domain == "music.163.com" || domain == ".music.163.com")
-                    result = parts[6];
-            }
-        }
-        curl_slist_free_all(list);
-        return result;
+        // CURLINFO_COOKIELIST also contains expired and path-restricted cookies.
+        // Do not promote a CDN/path cookie into cross-endpoint authentication.
+        return session_auth_cookie(export_cookies(), name);
     }
     static std::size_t write_string(char* ptr, std::size_t size, std::size_t count, void* data) {
         auto* text = static_cast<std::string*>(data);

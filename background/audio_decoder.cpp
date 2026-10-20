@@ -162,21 +162,30 @@ size_t AudioDecoder::read(int16_t* interleaved, size_t frames) {
         s.mp3Open ? drmp3_read_pcm_frames_s16(&s.mp3,frames,interleaved) :
         s.aacOpen ? s.aac.read(interleaved,frames) : 0;
     s.cursor += got;
-    if (s.flac && got < frames && s.flac->totalPCMFrameCount &&
-        s.cursor < s.flac->totalPCMFrameCount) s.damaged = true;
+    const auto declared = this->frames();
+    if ((s.flac || s.mp3Open) && got < frames && declared && s.cursor < declared)
+        s.damaged = true;
     return static_cast<size_t>(got);
 }
 bool AudioDecoder::seek(uint64_t frame) {
     auto& s = *impl_;
-    if (s.flac && s.flac->totalPCMFrameCount && frame>s.flac->totalPCMFrameCount)
+    const auto declared = frames();
+    if (declared && frame > declared)
         return false;
-    if (s.flac && !s.flac->totalPCMFrameCount && frame) {
+    if (s.mp3Open || (s.flac && !s.flac->totalPCMFrameCount && frame)) {
         // A zero STREAMINFO frame count means "unknown", not an empty stream.
         // dr_flac clamps random seeks to that zero. Rewind and discard bounded
         // decoded blocks instead, preserving exact PCM and cancellation via
-        // the normal stream callbacks.
-        if (!drflac_seek_to_pcm_frame(s.flac,0)) return false;
-        s.cursor=0; s.damaged=false;
+        // the normal stream callbacks. MP3's internal cursor includes encoder
+        // delay; use our audible-frame cursor for both forward and backward
+        // seeks so gapless padding never shifts the requested position.
+        if (s.flac || !frame || frame < s.cursor) {
+            const bool reset = s.flac ? drflac_seek_to_pcm_frame(s.flac, 0) != 0 :
+                drmp3_seek_to_pcm_frame(&s.mp3, 0) != 0;
+            if (!reset) return false;
+            s.cursor = 0;
+        }
+        s.damaged = false;
         std::array<int16_t,8192> scratch{};
         while (s.cursor<frame) {
             const size_t count=static_cast<size_t>(std::min<uint64_t>(frame-s.cursor,4096));
@@ -185,7 +194,6 @@ bool AudioDecoder::seek(uint64_t frame) {
         return true;
     }
     const bool ok = s.flac ? drflac_seek_to_pcm_frame(s.flac, frame) != 0 :
-        s.mp3Open ? drmp3_seek_to_pcm_frame(&s.mp3, frame) != 0 :
         s.aacOpen && s.aac.seek(frame);
     if (ok) { s.cursor = frame; s.damaged = false; }
     return ok;

@@ -83,6 +83,36 @@ int main(void) {
     int result = 0;
     check(waitpid(child, &result, 0) == child && WIFEXITED(result) && WEXITSTATUS(result) == 0,
           "descriptor counts accessed beyond the TLS guard page");
+    /* Exhaust the bounded HIPC bit fields against the protected TLS window. */
+    for (unsigned words = 0; words < 1024; ++words) {
+        message(words);
+        const Result parsed = parseRequest(&request);
+        const bool inline_valid = words >= 8 && words <= 62;
+        check(R_SUCCEEDED(parsed) == inline_valid, "TLS raw word boundary mismatch");
+        if (inline_valid && request.data_size)
+            check((const u8*)request.data >= tls &&
+                  (const u8*)request.data + request.data_size <= tls + 256,
+                  "Parsed CMIF argument extends beyond TLS");
+    }
+    for (unsigned copy = 0; copy < 16; ++copy)
+        for (unsigned move = 0; move < 16; ++move)
+            for (unsigned pid = 0; pid < 2; ++pid) {
+                message(8);
+                ((HipcHeader*)tls)->has_special_header = 1;
+                const HipcSpecialHeader h = {
+                    .send_pid=pid, .num_copy_handles=copy, .num_move_handles=move};
+                memcpy(tls + 8, &h, sizeof(h));
+                const size_t start = 12 + (pid ? 8 : 0);
+                for (unsigned i = 0; i < copy + move; ++i) {
+                    const Handle value = 100 + i;
+                    memcpy(tls + start + i * sizeof(value), &value, sizeof(value));
+                }
+                closed_count = 0;
+                check(R_FAILED(parseRequest(&request)) && closed_count == copy + move,
+                      "Rejected HIPC transfer did not release every handle");
+                for (unsigned i = 0; i < closed_count; ++i)
+                    check(closed[i] == 100 + i, "HIPC handle offsets were parsed incorrectly");
+            }
     uint8_t response[NCM_IPC_RESPONSE_MAX_DATA_SIZE];
     memset(response, 0x5a, sizeof(response));
     prepareResponse(0, response, sizeof(response));
@@ -90,6 +120,6 @@ int main(void) {
           memcmp(tls + 32, response, sizeof(response)) == 0,
           "maximum inline response failed its TLS bounds");
     munmap(allocation, page * 2);
-    puts("PASS: CMIF payload size, TLS bounds, descriptors and transferred handles");
+    puts("PASS: CMIF payload size, 1024 TLS lengths, 512 handle layouts, descriptors and response bounds");
     return 0;
 }

@@ -38,6 +38,19 @@ static void transport_case(const std::string& test, const std::string& proxy,
         api.call("like_v1", {{"songid", 1}});
         return; // The fixture checks the received header without printing it.
     }
+    if (test == "cookie-path") {
+        api.adopt_session("# Netscape HTTP Cookie File\n"
+            ".music.163.com\tTRUE\t/download-only\tTRUE\t0\tMUSIC_U\tsynthetic-path-session\n");
+        api.call("like_v1", {{"songid", 1}});
+        return;
+    }
+    if (test == "cookie-expired") {
+        api.adopt_session("# Netscape HTTP Cookie File\n"
+            ".music.163.com\tTRUE\t/\tTRUE\t1\tMUSIC_U\tsynthetic-expired-session\n"
+            ".music.163.com\tTRUE\t/\tTRUE\t1\t__csrf\tsynthetic-expired-csrf\n");
+        api.song_urls({1}, "lossless");
+        return;
+    }
     if (test == "malformed") {
         try { api.login_status(); }
         catch (const ApiError& error) {
@@ -72,6 +85,36 @@ int main(int argc, char** argv) {
             transport_case(argv[2], argv[3], argv[4], argv[5]);
             return 0;
         }
+        const std::string scoped_jar =
+            "# Netscape HTTP Cookie File\n"
+            "#HttpOnly_.MUSIC.163.COM\tTRUE\t/\tTRUE\t0\tMUSIC_U\tsynthetic-root\r\n"
+            ".music.163.com\tTRUE\t/download\tTRUE\t0\tMUSIC_U\tsynthetic-path\n"
+            "unrelated.invalid\tFALSE\t/\tFALSE\t0\tMUSIC_U\tsynthetic-other\n"
+            ".music.163.com\tTRUE\t/\tTRUE\t1\t__csrf\tsynthetic-expired\n"
+            ".music.163.com\tTRUE\t/\tTRUE\t0tail\t__csrf\tsynthetic-invalid\n";
+        require(session_auth_cookie(scoped_jar, "MUSIC_U") == "synthetic-root",
+                "Session identity ignored domain/path scope or HttpOnly");
+        require(session_auth_cookie(scoped_jar, "__csrf").empty(),
+                "Expired or malformed cookie expiry became authentication");
+        require(session_auth_cookie(
+                    ".music.163.com\tTRUE\t/\tTRUE\t0\tMUSIC_U\tbad\rheader\n", "MUSIC_U").empty(),
+                "Cookie control characters became authentication");
+        require(session_auth_cookie(
+                    ".music.163.com\tTRUE\t/\tTRUE\t184467440737095516160\tMUSIC_U\tbad\n",
+                    "MUSIC_U").empty(),
+                "Overflowing cookie expiry became authentication");
+        const std::string deleted_cookie =
+            ".music.163.com\tTRUE\t/\tTRUE\t0\tMUSIC_U\tsynthetic-original\n"
+            ".music.163.com\tTRUE\t/\tTRUE\t1\tMUSIC_U\tsynthetic-deleted\n";
+        require(session_auth_cookie(deleted_cookie, "MUSIC_U").empty(),
+                "A later expired cookie resurrected an earlier session");
+        ApiConfig memory_config;
+        memory_config.persist_cookies = false;
+        ApiClient memory(memory_config);
+        memory.adopt_session(deleted_cookie);
+        require(session_auth_cookie(deleted_cookie, "MUSIC_U") ==
+                    session_auth_cookie(memory.session_cookies(), "MUSIC_U"),
+                "Raw and curl-normalized sessions disagree about authentication");
         // Expected vectors independently produced with Python cryptography/OpenSSL.
         require(crypto::md5("abc") == "900150983cd24fb0d6963f7d28e17f72", "MD5 vector mismatch");
         require(crypto::base64("Switch") == "U3dpdGNo", "Base64 vector mismatch");

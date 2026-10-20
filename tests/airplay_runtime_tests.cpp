@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <filesystem>
+#include <future>
 #include <iostream>
 #include <stdexcept>
 
@@ -53,6 +54,35 @@ int main() {
         check(runtime.airplay_status().state == NcmAirplay_Ready, "Receiver not restarted");
         check(Json::parse(storage::read_file(path)).at("device_id") == first.at("device_id"),
               "Receiver identity changed after restart");
+        // Settings write failure must leave the running listener and preference
+        // intact, including when another thread is polling its state.
+        std::filesystem::create_directory(path + ".new");
+        check(!runtime.set_airplay_enabled(false), "Failed settings write was accepted");
+        check(runtime.airplay_status().enabled &&
+              Json::parse(storage::read_file(path)).at("enabled") == true,
+              "Failed toggle disabled the receiver or changed its saved preference");
+        std::filesystem::remove(path + ".new");
+        check(runtime.set_airplay_enabled(true), "Receiver did not recover from save failure");
+        auto reader = std::async(std::launch::async, [&] {
+            for (unsigned i = 0; i < 128; ++i) {
+                check(runtime.airplay_status().version == NCM_AIRPLAY_VERSION,
+                      "Concurrent AirPlay status was torn");
+                check(runtime.status().version == NCM_PROTOCOL_VERSION,
+                      "Concurrent music status was torn");
+            }
+        });
+        auto toggler = std::async(std::launch::async, [&] {
+            for (unsigned i = 0; i < 20; ++i) {
+                check(runtime.set_airplay_enabled(false), "Concurrent receiver stop failed");
+                check(runtime.set_airplay_enabled(true), "Concurrent receiver start failed");
+            }
+        });
+        for (unsigned i = 0; i < 20; ++i)
+            check(runtime.disconnect_airplay(), "Concurrent disconnect failed");
+        reader.get();
+        toggler.get();
+        check(runtime.airplay_status().state == NcmAirplay_Ready,
+              "Concurrent controls left the receiver unavailable");
         runtime.stop();
 
         preferences["name"] = "";
@@ -70,6 +100,19 @@ int main() {
         check(invalid.start(), "Restart after config repair failed");
         check(invalid.airplay_status().state == NcmAirplay_Ready, "Stale error survived valid restart");
         invalid.stop();
+        // Invalid numeric settings must not silently bind a truncated port.
+        const auto port = availablePort();
+        for (const auto& malformed : Json::array({
+                 uint64_t(port) + (uint64_t(1) << 32), double(port) + 0.5,
+                 uint64_t(-1), -1, "5000"})) {
+            preferences["port"] = malformed;
+            storage::write_file(path, preferences.dump());
+            playback::Runtime malformed_port({directory, ""});
+            check(malformed_port.start(), "Bad tool port prevented music startup");
+            check(malformed_port.airplay_status().state == NcmAirplay_Error,
+                  "Malformed AirPlay port was silently converted");
+            malformed_port.stop();
+        }
         std::cout << "PASS: default-on, persistent switch/identity, listener lifecycle and error recovery\n";
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';

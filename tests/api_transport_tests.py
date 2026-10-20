@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import urllib.parse
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, padding, serialization
@@ -70,7 +71,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.handle_one_request()
 
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         if self.server.external:
             self.server.leaked = True
             self.reply(200, b'{"code":200}')
@@ -79,9 +80,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif self.server.case == "redirect":
             self.server.auth_header = self.headers.get("x-music-u", "")
             self.reply(307, b"", Location=self.server.redirect)
-        elif self.server.case in ("cookie-scope", "download"):
+        elif self.server.case in ("cookie-scope", "cookie-path", "download"):
             self.server.auth_header = self.headers.get("x-music-u", "")
             self.reply(200, b'{"code":200}')
+        elif self.server.case == "cookie-expired":
+            encrypted = bytes.fromhex(urllib.parse.parse_qs(body.decode())["params"][0])
+            decryptor = Cipher(algorithms.AES(b"e82ckenh8dichen8"), modes.ECB()).decryptor()
+            padded = decryptor.update(encrypted) + decryptor.finalize()
+            unpadder = padding.PKCS7(128).unpadder()
+            plaintext = unpadder.update(padded) + unpadder.finalize()
+            payload = json.loads(plaintext.split(b"-36cd479b6b5-")[1])
+            self.server.eapi_auth = payload.get("header", {}).get("MUSIC_U", "")
+            self.server.eapi_csrf = payload.get("csrf_token", "")
+            self.reply(200, b'{"code":200,"data":[]}')
         elif self.server.case == "malformed":
             self.reply(200, b'{"code":200,"cookie":"synthetic-private-response"!')
         elif self.server.case == "code-suffix":
@@ -137,7 +148,8 @@ def main():
         for thread in threads:
             thread.start()
         try:
-            for case in ("redirect", "cookie-scope", "malformed", "code-suffix",
+            for case in ("redirect", "cookie-scope", "cookie-expired", "cookie-path",
+                         "malformed", "code-suffix",
                          "code-overflow", "download"):
                 proxy.case = case
                 proxy.auth_header = ""
@@ -149,6 +161,12 @@ def main():
                 if case in ("redirect", "cookie-scope", "download"):
                     assert proxy.auth_header == "synthetic-music-session", \
                         "Unrelated-domain cookie was used as NetEase authentication"
+                if case == "cookie-path":
+                    assert not proxy.auth_header, \
+                        "Path-restricted cookie was promoted to global API authentication"
+                if case == "cookie-expired":
+                    assert not proxy.eapi_auth and not proxy.eapi_csrf, \
+                        "Expired cookies were promoted into an EAPI request body"
                 assert not external.leaked, "Authenticated POST reached external redirect"
             assert external.received_download, "Public CDN redirect was not followed"
             assert not external.auth_header, "Download forwarded a stale authentication header"

@@ -102,6 +102,12 @@ else()
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/player_account_tests.py"
       $<TARGET_FILE:ncm-player-account-tests>)
   set_tests_properties(player-account-boundary PROPERTIES TIMEOUT 30)
+  add_executable(ncm-playback-session-tests tests/playback_session_tests.cpp)
+  target_link_libraries(ncm-playback-session-tests PRIVATE ncm_engine)
+  add_test(NAME playback-session
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/playback_session_tests.py"
+      $<TARGET_FILE:ncm-playback-session-tests>)
+  set_tests_properties(playback-session PROPERTIES TIMEOUT 30)
   add_executable(ncm-airplay-audio-tests tests/airplay_audio_tests.cpp)
   target_link_libraries(ncm-airplay-audio-tests PRIVATE ncm_engine)
   add_test(NAME airplay-audio-handoff
@@ -113,6 +119,12 @@ else()
       $<TARGET_FILE:ncm-decoder-tests> $<TARGET_FILE:ncm-flac-engine-tests>
       $<TARGET_FILE:ncm-playback-smoke> $<TARGET_FILE:ncm-airplay-audio-tests>)
   set_tests_properties(flac-playback PROPERTIES TIMEOUT 240)
+  add_executable(ncm-codec-boundary-tests background/tests/codec_boundary_tests.cpp)
+  target_link_libraries(ncm-codec-boundary-tests PRIVATE ncm_engine)
+  add_test(NAME codec-boundaries
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/background/tests/codec_boundary_tests.py"
+      $<TARGET_FILE:ncm-codec-boundary-tests>)
+  set_tests_properties(codec-boundaries PROPERTIES TIMEOUT 60)
   add_executable(ncm-aac-decoder-tests tests/aac_decoder_tests.cpp)
   target_link_libraries(ncm-aac-decoder-tests PRIVATE ncm_engine)
   add_test(NAME aac-playback

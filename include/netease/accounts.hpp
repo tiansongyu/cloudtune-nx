@@ -18,6 +18,9 @@ class AccountStore {
     // Read-only validation for playback services. Missing legacy archives are
     // allowed; damaged/empty archives throw without repairing the cookie mirror.
     static void validate_registry(const std::string& directory);
+    // Read the committed playback identity without altering either file. Only
+    // legacy profiles without a registry may use the compatibility cookie jar.
+    static std::string playback_cookies(const std::string& directory);
     std::vector<SavedAccount> list() const;
     uint64_t active_user_id() const { return active_; }
     std::string active_cookies() const;

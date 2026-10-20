@@ -57,6 +57,9 @@ Result dispatch(void* context, const NcmIpcServerRequest* request, uint8_t* outp
             return MAKERESULT(Module_Libnx,LibnxError_IoError);
         }
     }
+    if (request->command_id < NcmCommand_LoadQueue ||
+        request->command_id > NcmCommand_ClearQueue)
+        return MAKERESULT(Module_Libnx,LibnxError_BadInput);
     uint32_t argument=0;
     const auto command=static_cast<NcmCommand>(request->command_id);
     bool hasArgument=command==NcmCommand_LoadQueue || command==NcmCommand_Volume ||

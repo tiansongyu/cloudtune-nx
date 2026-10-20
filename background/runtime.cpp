@@ -67,9 +67,10 @@ struct Runtime::Impl {
         if (airplay.name.empty() || airplay.name.size() > 40 ||
             airplay.name.find_first_of("\r\n") != std::string::npos)
             throw std::runtime_error("Invalid AirPlay device name");
-        const auto port = preferences.value("port", 5000);
-        if (port < 1024 || port > 65535) throw std::runtime_error("Invalid AirPlay port");
-        airplay.port = static_cast<uint16_t>(port);
+        const auto port = preferences.value("port", Json(5000));
+        if (!port.is_number_integer() || port < 1024 || port > 65535)
+            throw std::runtime_error("Invalid AirPlay port");
+        airplay.port = port.get<uint16_t>();
         // Useful for isolated loopback tests and hosts with several interfaces.
         airplay.address = preferences.value("address", std::string{});
         airplay.advertise = preferences.value("advertise", true);

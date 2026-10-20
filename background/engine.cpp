@@ -25,7 +25,6 @@
 #include <filesystem>
 #include <mutex>
 #include <random>
-#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -35,9 +34,10 @@ constexpr size_t FramesPerBuffer = 2048;
 constexpr uint32_t SampleRate = 48000;
 constexpr uint64_t MaxDownloadBytes = 512u * 1024u * 1024u;
 constexpr uint64_t RetainedCacheBytes = 512u * 1024u * 1024u;
-constexpr NcmCommand ExternalBegin = static_cast<NcmCommand>(100);
-constexpr NcmCommand ExternalEnd = static_cast<NcmCommand>(101);
-constexpr NcmCommand ExternalFlush = static_cast<NcmCommand>(102);
+// Internal events are outside the public command enum's representable range.
+constexpr uint32_t ExternalBegin = 100;
+constexpr uint32_t ExternalEnd = 101;
+constexpr uint32_t ExternalFlush = 102;
 using namespace std::chrono_literals;
 template <size_t N> void copyText(char (&dst)[N], const char* src) {
     std::snprintf(dst, N, "%s", src ? src : "");
@@ -166,11 +166,11 @@ struct Engine::Impl {
     std::condition_variable cv;
     NcmPlaybackStatus snapshot{};
     struct PendingCommand {
-        NcmCommand first{};
+        uint32_t first = 0;
         uint32_t second = 0;
         uint64_t ticket = 0;
         PendingCommand() = default;
-        PendingCommand(NcmCommand kind, uint32_t argument, uint64_t id = 0)
+        PendingCommand(uint32_t kind, uint32_t argument, uint64_t id = 0)
             : first(kind), second(argument), ticket(id) {}
     };
     std::deque<PendingCommand> commands;
@@ -189,6 +189,7 @@ struct Engine::Impl {
     uint32_t seekBase = 0, failures = 0;
     std::string currentPath;
     std::string activeQuality = "standard";
+    std::string activeSession; // Captured with the loaded queue, never read from a staged mirror.
     bool diagnostics = false;
     std::chrono::steady_clock::time_point nextDiagnostic{};
     std::array<int16_t, 8192> decoded{};
@@ -212,12 +213,8 @@ struct Engine::Impl {
         // A preview cached anonymously must not mask the newly authenticated
         // entitlement. Only a digest, never an authentication token, reaches
         // filenames. Guest-cookie rotation does not invalidate offline music.
-        std::istringstream lines(storage::read_file(config.directory+"/cookies.txt"));
-        std::string line, token = "anonymous";
-        while (std::getline(lines,line)) {
-            const auto name = line.find("\tMUSIC_U\t");
-            if (name != std::string::npos) { token=line.substr(name+9); break; }
-        }
+        auto token=session_auth_cookie(activeSession,"MUSIC_U");
+        if (token.empty()) token="anonymous";
         return crypto::md5(token + "\n" + activeQuality);
     }
     void diagnostic(const char* event, const int16_t* pcm = nullptr, size_t frames = 0) {
@@ -403,7 +400,6 @@ struct Engine::Impl {
         std::string url(entry.url);
         if (force || url.empty()) {
             ApiConfig c;
-            c.cookie_file = config.directory + "/cookies.txt";
             c.ca_bundle = config.ca_bundle;
             c.timeout_seconds = 20;
             c.persist_cookies = false; // The GUI owns the durable authentication session.
@@ -411,6 +407,7 @@ struct Engine::Impl {
             c.proxy = preferences.contains("proxy") && preferences["proxy"].is_string()
                 ? preferences["proxy"].get<std::string>() : std::string{};
             ApiClient client(c);
+            client.adopt_session(activeSession);
             auto response = client.song_urls({entry.id}, activeQuality);
             if (response.contains("data") && response["data"].is_array()) {
                 for (const auto& row : response["data"]) {
@@ -507,7 +504,7 @@ struct Engine::Impl {
             std::this_thread::sleep_for(10ms);
         if (!running || interrupt) return false;
         if (downloadDone && downloadError && !cached) {
-            // Signed CDN URLs expire. Resolve once with the shared cookie jar.
+            // Signed CDN URLs expire. Resolve once using this queue's session.
             if (downloader.joinable()) downloader.join();
             try {
                 url = resolveUrl(entry, true);
@@ -579,12 +576,19 @@ struct Engine::Impl {
         return produced;
     }
     bool loadQueue(uint32_t index) {
+        std::string session;
         try {
             // Cold Play/PlayPause from the overlay also reaches this path.
             // Never reactivate a saved queue through an unreadable registry's
             // cookie mirror. Already-loaded music and AirPlay are unaffected
             // until the user explicitly requests a new queue.
-            AccountStore::validate_registry(config.directory);
+            ApiConfig sessionConfig;
+            sessionConfig.persist_cookies=false;
+            ApiClient canonical(sessionConfig);
+            canonical.adopt_session(AccountStore::playback_cookies(this->config.directory));
+            // libcurl normalizes legacy cookie syntax on import. Hash exactly
+            // the same normalized jar that later API requests will consume.
+            session=canonical.session_cookies();
         } catch (const std::exception&) {
             closeTrack(); queue.clear();
             { std::lock_guard<std::mutex> lock(mutex); snapshot.queue_count=0; }
@@ -619,7 +623,7 @@ struct Engine::Impl {
             row.title[sizeof(row.title)-1]=0; row.artist[sizeof(row.artist)-1]=0;
             row.album[sizeof(row.album)-1]=0; row.url[sizeof(row.url)-1]=0;
         }
-        queue=std::move(loaded); failures=0;
+        queue=std::move(loaded); activeSession=std::move(session); failures=0;
         { std::lock_guard<std::mutex> lock(mutex); snapshot.queue_count=queue.size(); }
         if (queue.empty()) {
             closeTrack();
@@ -675,7 +679,7 @@ struct Engine::Impl {
         copyText(snapshot.message, "AirPlay ended; music paused");
         resumeMusic = !queue.empty();
     }
-    bool processExternal(NcmCommand cmd, uint32_t argument) {
+    bool processExternal(uint32_t cmd, uint32_t argument) {
         if (cmd == ExternalBegin) {
             if (!externalMode) suspendedMusic = getStatus();
             closeTrack(); externalMode = true; externalPaused = false;
@@ -719,12 +723,12 @@ struct Engine::Impl {
         (void)argument;
         return false;
     }
-    void process(NcmCommand cmd, uint32_t argument) {
+    void process(uint32_t cmd, uint32_t argument) {
         if (processExternal(cmd, argument)) return;
         switch (cmd) {
         case NcmCommand_ClearQueue: {
             if (!externalMode) closeTrack();
-            queue.clear(); resumeMusic=false; failures=0;
+            queue.clear(); activeSession.clear(); resumeMusic=false; failures=0;
             std::lock_guard<std::mutex> lock(mutex);
             suspendedMusic={};
             suspendedMusic.version=NCM_PROTOCOL_VERSION;

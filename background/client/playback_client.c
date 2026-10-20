@@ -57,10 +57,9 @@ Result ncmAirplayGetStatus(NcmAirplayStatus* status) {
     if (!status) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     memset(status, 0, sizeof(*status));
     Result result = serviceDispatchOut(&g_service, NCM_COMMAND_AIRPLAY_STATUS, *status);
-    if (R_FAILED(result)) return result;
-    if (status->version != NCM_AIRPLAY_VERSION) {
+    if (R_FAILED(result) || status->version != NCM_AIRPLAY_VERSION) {
         memset(status, 0, sizeof(*status));
-        return MAKERESULT(421, 1);
+        return R_FAILED(result) ? result : MAKERESULT(421, 1);
     }
     status->name[sizeof(status->name)-1] = 0;
     status->address[sizeof(status->address)-1] = 0;

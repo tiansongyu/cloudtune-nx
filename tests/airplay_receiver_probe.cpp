@@ -93,6 +93,12 @@ int main(int argc, char **argv) {
             std::cout << "{\"disconnected\":" << (result ? "true" : "false") << "}\n" << std::flush;
             continue;
         }
+        if (command == "restart") {
+            receiver.stop();
+            const bool restarted = receiver.start();
+            std::cout << "{\"restarted\":" << (restarted ? "true" : "false") << "}\n" << std::flush;
+            continue;
+        }
         auto status = receiver.status();
         std::lock_guard<std::mutex> lock(capture.mutex);
         if (command == "reset") {

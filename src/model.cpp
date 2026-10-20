@@ -185,7 +185,7 @@ void Model::enqueue_view(std::string label, std::function<void()> job) {
     enqueue(std::move(label), std::move(job), true, generation);
 }
 bool Model::current_view() const {
-    return active_account_generation_ == account_generation_.load() &&
+    return !stopping_ && active_account_generation_ == account_generation_.load() &&
            (!active_view_generation_ || active_view_generation_ == view_generation_.load());
 }
 void Model::worker() {

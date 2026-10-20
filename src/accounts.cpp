@@ -19,8 +19,14 @@ uint64_t account_id(const Json& value) {
 Json read_registry(const std::string& directory) {
     const auto path = directory + "/accounts.json";
     const auto data = storage::read_file(path);
-    if (data.empty() && !std::filesystem::exists(path) && !std::filesystem::exists(path + ".bak"))
+    if (data.empty() && !std::filesystem::exists(path) && !std::filesystem::exists(path + ".bak")) {
+        if (std::filesystem::exists(path + ".pending") ||
+            std::filesystem::exists(path + ".pending.bak"))
+            throw std::runtime_error(
+                "Saved account initialization was interrupted; restore the account archive "
+                "or the previous cookie session before removing accounts.json.pending");
         return Json(); // Legacy cookie jars have no canonical archive yet.
+    }
     try {
         auto registry = Json::parse(data);
         if (registry.at("version") != 1 || !registry.at("accounts").is_array() ||
@@ -47,6 +53,19 @@ Json read_registry(const std::string& directory) {
 }
 void AccountStore::validate_registry(const std::string& directory) {
     (void)read_registry(directory);
+}
+std::string AccountStore::playback_cookies(const std::string& directory) {
+    const auto registry = read_registry(directory);
+    if (registry.is_null())
+        return storage::read_file(directory + "/cookies.txt");
+    const auto active = account_id(registry.at("active_user_id"));
+    if (!active)
+        return empty_session;
+    for (const auto& item : registry.at("accounts"))
+        if (account_id(item.at("user_id")) == active)
+            return item.at("cookies").get<std::string>();
+    // read_registry already rejects references to a missing active account.
+    throw std::runtime_error("Saved account was not found");
 }
 AccountStore::AccountStore(std::string directory) : directory_(std::move(directory)) {
     const auto registry = read_registry(directory_);
@@ -89,9 +108,25 @@ void AccountStore::commit(std::vector<Session> sessions, uint64_t active) {
     const auto mirror = directory_ + "/cookies.txt";
     const auto before = storage::read_file(mirror);
     const auto after = cookies_for(sessions, active);
-    if (before != after)
-        storage::write_file(mirror, after);
+    const auto pending = directory_ + "/accounts.json.pending";
+    const bool initializing = !registered_;
+    auto clear_pending = [&] {
+        std::error_code ignored;
+        std::filesystem::remove(pending, ignored);
+        std::filesystem::remove(pending + ".bak", ignored);
+    };
+    // A failed first publication has no canonical archive to protect its old
+    // identity. Mark the transaction before changing the legacy cookie jar so
+    // a crash or failed rollback cannot promote an uncommitted mirror on restart.
+    if (initializing) {
+        // A previous failed rollback may have left this same object alive.
+        // Never treat its uncommitted mirror as the baseline of another retry.
+        (void)read_registry(directory_);
+        storage::write_file(pending, "CloudTune NX account initialization pending\n");
+    }
     try {
+        if (before != after)
+            storage::write_file(mirror, after);
         storage::write_file(directory_ + "/accounts.json", serialized);
     } catch (...) {
         if (before != after) {
@@ -102,11 +137,22 @@ void AccountStore::commit(std::vector<Session> sessions, uint64_t active) {
                 // Do not reveal any serialized cookie data in diagnostics.
             }
         }
+        if (initializing) {
+            try {
+                const auto recovered = storage::read_file(mirror);
+                if (recovered == before || (before.empty() && recovered == empty_session))
+                    clear_pending();
+            } catch (...) {
+                // Keep the marker until the previous identity is known to be restored.
+            }
+        }
         throw;
     }
     sessions_ = std::move(sessions);
     active_ = active;
     registered_ = true;
+    if (initializing)
+        clear_pending(); // Cleanup failure must not reject a committed transaction.
 }
 void AccountStore::save(uint64_t id, std::string nickname, std::string cookies, bool activate) {
     if (!id || nickname.size() > 1024 || cookies.empty() || cookies.size() > 128 * 1024)
