@@ -103,6 +103,12 @@ else()
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/airplay_receiver_tests.py"
       $<TARGET_FILE:ncm-airplay-receiver-probe>)
   set_tests_properties(airplay-receiver PROPERTIES TIMEOUT 90)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_library(ncm-airplay-poll-guard SHARED tests/airplay_poll_guard.c)
+    add_dependencies(ncm-airplay-receiver-probe ncm-airplay-poll-guard)
+    set_tests_properties(airplay-receiver PROPERTIES
+      ENVIRONMENT "LD_PRELOAD=$<TARGET_FILE:ncm-airplay-poll-guard>")
+  endif()
   if(CLOUDTUNE_BUILD_OVERLAY_PREVIEW)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME overlay-preview-service

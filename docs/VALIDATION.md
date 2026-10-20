@@ -245,3 +245,18 @@ They do **not** establish real iPhone/macOS compatibility, physical Switch
 sound quality, long-running Wi-Fi clock stability, sleep/wake recovery or
 Atmosphère reception while a game runs. Those checks remain in
 [HARDWARE_TESTING.md](HARDWARE_TESTING.md).
+
+### Actual NRO and iPhone session in Eden
+
+A subsequent visible-desktop run used the actual Switch NRO in Eden
+0.2.1, with host Avahi supplying discovery only. The NRO handled RTSP,
+audio packets, decoding and output. It displayed Chinese sender metadata
+and an advancing clock; the user explicitly confirmed that music cast
+from the real iPhone was audible and played normally.
+
+Bring-up fixed negative-descriptor polling and unsupported Switch send
+flags. A strict Linux poll interposer now exercises the complete receiver
+suite in CI; all 11 native tests, including the overlay regression, passed.
+Details and reproduction steps are in [EMULATOR.md](EMULATOR.md).
+This session does not establish physical-console background playback or
+long-duration reliability.

@@ -278,3 +278,22 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
   upstream licenses alongside the retained Shairport notice. The verifier
   checks their checksums and completeness while retaining the five-asset
   release layout. No account or runtime files are included.
+
+### AirPlay receiver in Eden
+
+- Opened the actual Switch NRO on the visible desktop using an isolated
+  emulator profile and a separate control port from the existing host
+  receiver.
+- Fixed Eden compatibility: poll only active descriptors and use zero
+  send flags on Switch. Native builds retain SIGPIPE suppression.
+- Added an optional Linux/Avahi discovery helper because Eden 0.2.1
+  ignores IP-level multicast socket options. Only discovery runs on the
+  host; the emulator NRO receives and decodes the audio.
+- Confirmed RTSP replies, independent discovery and a live LAN sender
+  session with Chinese track metadata and an advancing player clock.
+  The local test sender correctly received an occupied-session rejection
+  while the phone session owned the receiver, so it did not replace it.
+- Kept the phone's session running for user testing. The user explicitly
+  confirmed that real iPhone playback was audible and normal in the
+  emulator. Detailed iPhone controls, long-run stability and physical
+  Switch acceptance remain separate checks.

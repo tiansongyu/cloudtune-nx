@@ -153,3 +153,72 @@ The captured bring-up logs are
 `build/validation/eden-app-first-boot-internal.log` and
 `build/validation/eden-app-second-internal.log`. These are diagnostic
 failures from earlier builds, not evidence of a successful final app run.
+
+## AirPlay 1 from a phone to the NRO
+
+Eden 0.2.1 can expose the NRO's TCP and UDP sockets on the host LAN.
+Its [`SetSockOptImpl`](https://git.eden-emu.dev/eden-emu/eden/src/tag/v0.2.1/src/core/hle/service/sockets/bsd.cpp),
+however, returns success without implementing IP-level socket options.
+The NRO therefore cannot rely on `IP_ADD_MEMBERSHIP` or
+`IP_MULTICAST_IF` for discovery in this emulator, particularly when a VPN
+or proxy TUN owns the host's multicast route.
+
+For this emulator test only, use the optional
+[`eden-airplay-advertise.py`](../scripts/eden-airplay-advertise.py) helper.
+It publishes mDNS through the existing host Avahi daemon on one explicit
+LAN interface. **RTSP, encrypted audio, decoding and audio output still run
+inside the Switch NRO.** The helper has no audio receiver or proxy.
+Physical Switch installations retain the built-in advertiser.
+
+1. Use an isolated Eden profile as described above. In its `qt-config.ini`,
+   set `[Services]` `network_interface\default=false` and
+   `network_interface` to the physical LAN interface name.
+2. In the profile's emulated
+   `sdmc/config/netease-switch/airplay.json`, use the host's LAN IPv4,
+   an unused control port, and disable only the built-in advertiser:
+
+   ```json
+   {
+     "enabled": true,
+     "name": "CloudTune NX (Eden)",
+     "address": "192.168.1.50",
+     "port": 5500,
+     "advertise": false
+   }
+   ```
+
+   Replace the example address with the host's actual LAN address. Start
+   the NRO once so it generates and saves its stable `device_id`.
+3. On Linux, with `avahi-daemon`, `python3-dbus` and `python3-gi` available,
+   run the helper using the emulator's actual PID and configuration path:
+
+   ```sh
+   python3 scripts/eden-airplay-advertise.py \
+     --config /path/to/profile/data/eden/sdmc/config/netease-switch/airplay.json \
+     --interface enp7s0 --pid 12345
+   ```
+
+   It advertises only while that process owns the configured TCP listener.
+   Closing the receiver withdraws discovery; re-enabling republishes it.
+   Exiting Eden or stopping the helper removes its temporary registration.
+   It does not modify system routing, other AirPlay receivers or Avahi's
+   persistent configuration.
+4. Keep the iPhone on the same reachable LAN. Open the music-output picker
+   in Control Center and select **CloudTune NX (Eden)**. This is audio
+   output, not the Screen Mirroring control.
+
+The first real NRO test exposed another emulator difference: `poll` did
+not ignore unused negative descriptors. The receiver now passes only live
+descriptors. Switch sends also use flags `0`, while native Linux retains
+`MSG_NOSIGNAL`; this avoids Eden's unsupported-send-flags assertion.
+
+After these fixes, the NRO responded to RTSP, was independently discovered,
+and accepted a LAN sender. The UI displayed the sender's Chinese song
+metadata and advancing playback, and the Switch audio path initialized.
+The user then confirmed that music sent from the real iPhone was audible
+and played normally. This validates that live session; detailed sound
+quality, long-run stability and physical Switch playback remain separate
+acceptance checks.
+Local evidence is in `build/validation/eden-airplay-phone/`. The observed
+phone metadata, network addresses and logs are not included in public
+packages.

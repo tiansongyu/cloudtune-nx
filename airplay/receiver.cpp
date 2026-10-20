@@ -48,6 +48,12 @@ constexpr size_t MaxPacket = 65536;
 constexpr size_t Slots = 512;
 constexpr size_t MaxPcmBytes = 1024 * 1024;
 constexpr uint32_t DefaultLatency = 88200;
+#if defined(MSG_NOSIGNAL) && !defined(__SWITCH__)
+constexpr int SendFlags = MSG_NOSIGNAL;
+#else
+// Horizon BSD does not need the host's SIGPIPE suppression flag.
+constexpr int SendFlags = 0;
+#endif
 int64_t nowNs() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
 }
@@ -378,11 +384,7 @@ struct Receiver::Impl {
         if (client >= 0) {
             // A session has one RTSP owner; unsolicited takeover cannot replace it.
             const char busy[] = "RTSP/1.0 453 Not Enough Bandwidth\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
-#ifdef MSG_NOSIGNAL
-            send(incoming, busy, sizeof(busy) - 1, MSG_NOSIGNAL);
-#else
-            send(incoming, busy, sizeof(busy) - 1, 0);
-#endif
+            send(incoming, busy, sizeof(busy) - 1, SendFlags);
             ::close(incoming);
             return;
         }
@@ -610,12 +612,7 @@ struct Receiver::Impl {
     }
     void writeClient() {
         if (output.empty()) { if (closing) closeClient(); return; }
-#ifdef MSG_NOSIGNAL
-        constexpr int flags = MSG_NOSIGNAL;
-#else
-        constexpr int flags = 0;
-#endif
-        const auto sent = send(client, output.data(), output.size(), flags);
+        const auto sent = send(client, output.data(), output.size(), SendFlags);
         if (sent > 0) output.erase(0, size_t(sent));
         else if (sent == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
             closeClient(); return;
@@ -858,8 +855,21 @@ struct Receiver::Impl {
                     {listener, POLLIN, 0}, {client, short(POLLIN | (output.empty() ? 0 : POLLOUT)), 0},
                     {audio, POLLIN, 0}, {control, POLLIN, 0}, {timing, POLLIN, 0}, {mdns.fd(), POLLIN, 0}
                 }};
-                const int selected = poll(descriptors.data(), descriptors.size(), 5);
+                // Horizon's emulated BSD service rejects negative descriptors
+                // instead of ignoring them as POSIX poll does. Keep the stable
+                // event slots above, but submit only sockets that are open.
+                std::array<pollfd, 6> active{};
+                std::array<size_t, 6> slots{};
+                nfds_t count = 0;
+                for (size_t slot = 0; slot < descriptors.size(); ++slot) {
+                    if (descriptors[slot].fd < 0) continue;
+                    slots[count] = slot;
+                    active[count++] = descriptors[slot];
+                }
+                const int selected = poll(active.data(), count, 5);
                 if (selected < 0 && errno != EINTR) throw std::runtime_error("AirPlay poll failed");
+                for (nfds_t index = 0; index < count; ++index)
+                    descriptors[slots[index]].revents = active[index].revents;
                 if (descriptors[0].revents & POLLIN) acceptClient();
                 if (client >= 0 && descriptors[1].fd == client) {
                     if ((descriptors[1].revents & POLLIN) || (!input.empty() && input.find("\r\n\r\n") != std::string::npos))
