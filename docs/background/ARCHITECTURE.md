@@ -40,6 +40,10 @@ final shutdown, the client exits its process instead of returning that memory
 to an NRO loader. This exceptional path requires restarting the overlay loader
 before opening another overlay. It prevents late kernel writes into reused
 memory; it does not claim to restart a hung background service automatically.
+The reply parser accepts type 0 and the existing server's type-4 framing,
+while checking the CMIF header, data bounds and transferred handles. A valid
+service error remains distinguishable from a transport failure, allowing
+supported-command probes on the same session.
 
 ## Protocol and queue
 
@@ -50,6 +54,10 @@ track text. The IPC request handler queues bounded control messages; it does
 not download music or decode audio on the service thread. Account changes use
 the acknowledged `ClearQueue` command: its bounded wait ensures old music and
 pending loads are cleared before publishing a different account session.
+The engine reserves space for 32 pending commands and one final AirPlay End
+event at construction. Consecutive End events coalesce, so command producers
+do not allocate during playback. The service dispatch boundary converts
+allocation and other exceptions into error replies.
 
 `ncmWriteQueueFile()` publishes `queue.nsq` using a temporary file, flush, sync
 and rename. POSIX replacement is atomic. Horizon rejects an existing rename
@@ -149,6 +157,10 @@ message instead of skipping songs. User playback controls can retry or cancel
 recovery. AirPlay drops buffered/live PCM during recovery and resumes at the
 live edge. These are recovery mechanisms, not evidence that every firmware's
 sleep or output-route transition has been tested.
+Final queued audio at EOF has its own five-second drain watchdog even when
+some output slots are free. Volume, repeat and shuffle changes do not reset
+stall timers. Reopening and stopping the HOS audio service still use libnx's
+synchronous system-service calls; recovery assumes those calls return.
 
 For diagnostics, set `"diagnostics": true` in `settings.json` before starting
 the engine. `audio.log` records sample rate, produced frames, queued duration,

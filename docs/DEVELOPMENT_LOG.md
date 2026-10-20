@@ -484,3 +484,20 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
   acceptance requirements separately.
 - Advanced the build version to 0.2.2 and prepared release notes. This code
   maintenance pass does not alter the published v0.2.1 tag or release.
+
+## Follow-up risk review (2026-10-20)
+
+- Replaced the client test's synthetic CloudTune replies with the actual
+  service parser/encoder. This exposed the async client's incompatible
+  reply-type assumption; accepting both supported forms fixes the handshake.
+- Distinguished valid service errors from broken transport so a rejected tool
+  request does not discard the client's supported music connection.
+- Reproduced four audio-recovery edge cases and fixed state after seek, the
+  restored music cursor after AirPlay, final-buffer draining and watchdog
+  starvation by volume controls.
+- Reproduced command-producer allocation failure, then removed runtime
+  command-queue growth through preallocation and a reserved, coalesced End
+  slot. Added an exception boundary around the resident service dispatcher.
+- Expanded native, UBSan and focused ASan/leak checks with the new regressions.
+  Kept the unpublished version at 0.2.2 and documented remaining HOS-service,
+  hardware memory and game-coexistence boundaries.

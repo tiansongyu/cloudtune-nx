@@ -495,3 +495,31 @@ Ignored local evidence is retained under
 `final-ubsan.log`, `asan.log`, `before-regression.log`, `flush-before.log` and
 `final-switch-build.log`. Build provenance and generated package manifests
 record the exact source revision and component hashes.
+
+### Follow-up interoperability and fault review
+
+The client fixture now routes CloudTune requests through the production
+server's request parser and response encoder. Its old type-0-only parser
+rejected the actual reply during initialization. A second regression reproduced
+the client incorrectly discarding a healthy session after a valid service
+error. Both now pass, including rejection of an unsupported reply type.
+
+Five independent audio/control scenarios also reproduced failures before their
+fixes: seek during recovery, music resume after AirPlay with a failed initial
+output open, a stuck final buffer, continuous volume changes during a stall,
+and command-producer allocation failure. The last scenario now forbids
+producer-thread allocation while issuing controls and repeated AirPlay
+begin/flush/end calls, then verifies that music controls remain functional.
+
+Full native and UBSan validation each pass 23 CTest checks. The focused IPC
+and output/resource tests also pass ASan, UBSan and leak detection. The
+`output-recovery` check contains the original recovery sequence plus all five
+new scenarios; the CTest count is unchanged because they share one fixture.
+Switch components are rebuilt and package-input verification remains required.
+
+Evidence is under ignored `build/validation/risk-recheck/`: `ipc-before.log`,
+`ipc-error-before.log`, the five `*-before.log` audio/control failures,
+`host.log`, `ubsan.log`, `asan.log`, `switch-build.log` and `package.log`.
+No real account data, visible desktop or physical Switch was used. The combined
+IPC fixture still substitutes kernel calls and libnx wire-layout declarations;
+it proves production client/server framing, not kernel execution.

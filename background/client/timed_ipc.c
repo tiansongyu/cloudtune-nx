@@ -13,7 +13,7 @@ static Result timeoutError(void) { return MAKERESULT(Module_Libnx, LibnxError_Ti
 
 /* The kernel validates handle descriptors, but data counts and CMIF contents
  * still come from the peer. Validate bounds before exposing any output. */
-static Result response(void* output, size_t size, Handle* moved) {
+static Result response(void* output, size_t size, Handle* moved, bool* replied) {
     const u32* words = page;
     if (!words[0] && !words[1])
         return words[2] ? words[2] : protocolError(); /* Kernel async failure. */
@@ -26,29 +26,32 @@ static Result response(void* output, size_t size, Handle* moved) {
     const uintptr_t aligned = (start + 15) & ~(uintptr_t)15;
     const size_t bytes = (size_t)header.num_data_words * sizeof(u32);
     const size_t padding = aligned - start;
-    if (!header.type && !header.num_send_statics && !header.num_send_buffers &&
+    // libnx/SM replies use type 0; the existing CloudTune server preserves
+    // CmifCommandType_Request. The kernel copies this field unchanged.
+    if ((header.type == 0 || header.type == CmifCommandType_Request) &&
+        !header.num_send_statics && !header.num_send_buffers &&
         !header.num_recv_buffers && !header.num_exch_buffers &&
         !header.recv_static_mode && !parsed.meta.send_pid &&
         start >= (uintptr_t)page && start <= end && bytes <= end - start &&
         bytes >= padding + sizeof(CmifOutHeader)) {
         CmifOutHeader cmif;
         memcpy(&cmif, (void*)aligned, sizeof(cmif));
-        if (cmif.magic == CMIF_OUT_HEADER_MAGIC && cmif.version == 0) {
+        const bool success = R_SUCCEEDED(cmif.result);
+        const u32 expected_handles = success && moved ? 1u : 0u;
+        if (cmif.magic == CMIF_OUT_HEADER_MAGIC && cmif.version == 0 &&
+            !parsed.meta.num_copy_handles &&
+            parsed.meta.num_move_handles == expected_handles &&
+            (!success || bytes >= padding + sizeof(cmif) + size) &&
+            (!expected_handles || parsed.data.move_handles[0] != INVALID_HANDLE)) {
             result = cmif.result;
-            if (R_SUCCEEDED(result)) {
-                if (bytes < padding + sizeof(cmif) + size ||
-                    parsed.meta.num_copy_handles ||
-                    parsed.meta.num_move_handles != (moved ? 1u : 0u)) {
-                    result = protocolError();
-                } else {
-                    if (size) memcpy(output, (void*)(aligned + sizeof(cmif)), size);
-                    if (moved) {
-                        *moved = parsed.data.move_handles[0];
-                        parsed.data.move_handles[0] = INVALID_HANDLE;
-                        if (!*moved) result = protocolError();
-                    }
+            if (success) {
+                if (size) memcpy(output, (void*)(aligned + sizeof(cmif)), size);
+                if (moved) {
+                    *moved = parsed.data.move_handles[0];
+                    parsed.data.move_handles[0] = INVALID_HANDLE;
                 }
             }
+            if (replied) *replied = true;
         }
     }
     for (u32 i = 0; i < parsed.meta.num_copy_handles; ++i)
@@ -66,13 +69,14 @@ bool ncmIpcIdle(void) {
     completion = INVALID_HANDLE;
     /* A late successful GetService can transfer a handle even though the
      * caller already timed out. Discard it rather than replaying the command. */
-    response(NULL, 0, NULL);
+    response(NULL, 0, NULL, NULL);
     return true;
 }
 
 Result ncmIpcRequest(Handle session, u32 command, const void* input, size_t input_size,
                     void* output, size_t output_size, Handle* moved_handle,
-                    bool send_pid, u64 timeout_ns) {
+                    bool send_pid, u64 timeout_ns, bool* replied) {
+    if (replied) *replied = false;
     if (!session || input_size > MaxInline || output_size > MaxInline ||
         (input_size && !input) || (output_size && !output))
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
@@ -105,7 +109,7 @@ Result ncmIpcRequest(Handle session, u32 command, const void* input, size_t inpu
     }
     svcCloseHandle(completion);
     completion = INVALID_HANDLE;
-    return response(output, output_size, moved_handle);
+    return response(output, output_size, moved_handle, replied);
 }
 
 void ncmIpcShutdown(void) {

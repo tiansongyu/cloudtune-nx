@@ -21,7 +21,7 @@ constexpr SocketInitConfig Sockets = {
 };
 Result socketResult;
 void check(Result rc) { if (R_FAILED(rc)) diagAbortWithResult(rc); }
-Result dispatch(void* context, const NcmIpcServerRequest* request, uint8_t* output, size_t* size) {
+Result dispatchRequest(void* context, const NcmIpcServerRequest* request, uint8_t* output, size_t* size) {
     auto* engine = static_cast<netease::playback::Runtime*>(context);
     if (request->command_id == NcmCommand_Version) {
         const uint32_t version=NCM_PROTOCOL_VERSION;
@@ -69,6 +69,18 @@ Result dispatch(void* context, const NcmIpcServerRequest* request, uint8_t* outp
         std::memcpy(&argument,request->data,sizeof(argument));
     }
     return engine->command(command,argument) ? 0 : MAKERESULT(Module_Libnx,LibnxError_BadInput);
+}
+Result dispatch(void* context, const NcmIpcServerRequest* request, uint8_t* output, size_t* size) noexcept {
+    // Exceptions on the service thread must become replies, never escape the
+    // C IPC loop and terminate the resident player.
+    try { return dispatchRequest(context, request, output, size); }
+    catch (const std::bad_alloc&) {
+        *size=0;
+        return MAKERESULT(Module_Libnx,LibnxError_OutOfMemory);
+    } catch (...) {
+        *size=0;
+        return MAKERESULT(Module_Libnx,LibnxError_IoError);
+    }
 }
 }
 extern "C" {

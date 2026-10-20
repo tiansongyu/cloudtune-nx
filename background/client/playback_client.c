@@ -34,13 +34,13 @@ Result ncmPlaybackInitialize(void) {
     rc = svcConnectToNamedPort(&sm, "sm:");
     if (R_FAILED(rc)) goto done;
     const u64 pid = 0;
-    rc = ncmIpcRequest(sm, 0, &pid, sizeof(pid), NULL, 0, NULL, true, NormalTimeout);
+    rc = ncmIpcRequest(sm, 0, &pid, sizeof(pid), NULL, 0, NULL, true, NormalTimeout, NULL);
     if (R_FAILED(rc)) goto done;
-    rc = ncmIpcRequest(sm, 1, &name, sizeof(name), NULL, 0, &g_service, false, NormalTimeout);
+    rc = ncmIpcRequest(sm, 1, &name, sizeof(name), NULL, 0, &g_service, false, NormalTimeout, NULL);
     if (R_FAILED(rc)) goto done;
     u32 version = 0;
     rc = ncmIpcRequest(g_service, NcmCommand_Version, NULL, 0, &version,
-                       sizeof(version), NULL, false, NormalTimeout);
+                       sizeof(version), NULL, false, NormalTimeout, NULL);
     if (R_SUCCEEDED(rc) && version != NCM_PROTOCOL_VERSION) rc = MAKERESULT(421, 1);
 done:
     if (sm) svcCloseHandle(sm);
@@ -71,9 +71,12 @@ static Result exchange(u32 command, const void* input, size_t input_size,
     // Account publication must wait for the engine's five-second clear
     // barrier. Ordinary overlay controls always use the short deadline.
     const u64 timeout = command == NcmCommand_ClearQueue ? 5500000000ull : NormalTimeout;
+    bool replied = false;
     Result result = ncmIpcRequest(g_service, command, input, input_size, output,
-                                  output_size, NULL, false, timeout);
-    if (R_FAILED(result)) closeService();
+                                  output_size, NULL, false, timeout, &replied);
+    // A queue-full/unsupported/tool error is a valid response. Keep its
+    // connection so callers can query state or use supported music commands.
+    if (R_FAILED(result) && !replied) closeService();
     leave();
     return result;
 }

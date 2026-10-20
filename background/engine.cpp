@@ -21,7 +21,6 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
-#include <deque>
 #include <filesystem>
 #include <mutex>
 #include <random>
@@ -34,6 +33,7 @@ constexpr size_t FramesPerBuffer = 2048;
 constexpr uint32_t SampleRate = 48000;
 constexpr uint64_t MaxDownloadBytes = 512u * 1024u * 1024u;
 constexpr uint64_t RetainedCacheBytes = 512u * 1024u * 1024u;
+constexpr size_t CommandCapacity = 32;
 // Internal events are outside the public command enum's representable range.
 constexpr uint32_t ExternalBegin = 100;
 constexpr uint32_t ExternalEnd = 101;
@@ -161,6 +161,9 @@ private:
 
 struct Engine::Impl {
     explicit Impl(EngineConfig c) : config(std::move(c)), rng(std::random_device{}()) {
+        // One reserved lifecycle slot ensures a sender can always end its
+        // session. No command producer allocates after construction.
+        commands.reserve(CommandCapacity + 1);
         snapshot.version = NCM_PROTOCOL_VERSION;
         snapshot.volume_permille = 700;
         snapshot.queue_index = UINT32_MAX;
@@ -178,7 +181,7 @@ struct Engine::Impl {
         PendingCommand(uint32_t kind, uint32_t argument, uint64_t id = 0)
             : first(kind), second(argument), ticket(id) {}
     };
-    std::deque<PendingCommand> commands;
+    std::vector<PendingCommand> commands;
     uint64_t clearRequested = 0, clearCompleted = 0;
     std::vector<NcmQueueEntry> queue;
     std::thread worker, downloader;
@@ -696,6 +699,7 @@ struct Engine::Impl {
             return false;
         decodedCount=decodedPosition=0; havePair=false; reachedEnd=false; phase=0;
         seekBase=target; producedFrames=0;
+        if (recoveringOutput) recoveryPosition=target;
         std::lock_guard<std::mutex> lock(mutex); snapshot.position_ms=target;
         return true;
     }
@@ -886,6 +890,9 @@ struct Engine::Impl {
                     state(NcmPlayback_Paused,"无法跳转，按播放重试",6);
                 } else if (!paused && !sink.open()) {
                     recoverOutput();
+                } else {
+                    state(paused ? NcmPlayback_Paused : NcmPlayback_Playing,
+                          paused ? "Paused" : preview ? "Playing preview / 试听" : "Playing");
                 }
             }
             break;
@@ -895,6 +902,7 @@ struct Engine::Impl {
     void runLoop() {
         std::array<int16_t, FramesPerBuffer*2> pcm{};
         auto stalledSince=std::chrono::steady_clock::time_point{};
+        auto drainingSince=std::chrono::steady_clock::time_point{};
         auto lastIteration=std::chrono::steady_clock::now();
         while (running) {
             const auto iteration = std::chrono::steady_clock::now();
@@ -905,7 +913,7 @@ struct Engine::Impl {
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 if (!commands.empty()) {
-                    next=commands.front(); commands.pop_front(); hasCommand=true;
+                    next=commands.front(); commands.erase(commands.begin()); hasCommand=true;
                     interrupt=false;
                 }
             }
@@ -917,10 +925,15 @@ struct Engine::Impl {
                     clearCompleted=next.ticket;
                     cv.notify_all();
                 }
-                stalledSince={}; continue;
+                if (next.first != NcmCommand_Volume && next.first != NcmCommand_Repeat &&
+                    next.first != NcmCommand_Shuffle) {
+                    stalledSince={}; drainingSince={};
+                }
+                continue;
             }
             if (interrupt) { std::this_thread::sleep_for(2ms); continue; }
             if (recoveringOutput) {
+                stalledSince={}; drainingSince={};
                 retryOutput();
                 lastIteration = std::chrono::steady_clock::now();
                 std::this_thread::sleep_for(4ms);
@@ -985,7 +998,14 @@ struct Engine::Impl {
                 if (interrupt || !running) continue;
                 if (!frames) {
                     // Drain the last queued PCM before changing tracks.
-                    if (sink.queuedMs()) { std::this_thread::sleep_for(5ms); continue; }
+                    if (sink.queuedMs()) {
+                        const auto now=std::chrono::steady_clock::now();
+                        if (drainingSince==std::chrono::steady_clock::time_point{}) drainingSince=now;
+                        if (now-drainingSince>5s) recoverOutput();
+                        else std::this_thread::sleep_for(5ms);
+                        continue;
+                    }
+                    drainingSince={};
                     if (downloadError) {
                         const auto error=static_cast<uint32_t>(downloadError.load());
                         closeTrack();
@@ -998,6 +1018,7 @@ struct Engine::Impl {
                 } else if (!sink.write(pcm.data(),frames)) {
                     recoverOutput();
                 } else {
+                    drainingSince={};
                     outputProgress();
                     if (!producedFrames) diagnostic("first-pcm",pcm.data(),frames);
                     producedFrames+=frames;
@@ -1082,7 +1103,7 @@ bool Engine::command(NcmCommand cmd,uint32_t argument) {
                     pending.first!=NcmCommand_Shuffle;
             }),impl_->commands.end());
     }
-    if (impl_->commands.size()>=32) return false;
+    if (impl_->commands.size()>=CommandCapacity) return false;
     const uint64_t ticket=cmd==NcmCommand_ClearQueue ? ++impl_->clearRequested : 0;
     impl_->commands.emplace_back(cmd,argument,ticket);
     if (cmd==NcmCommand_LoadQueue || cmd==NcmCommand_Next || cmd==NcmCommand_Previous ||
@@ -1100,7 +1121,7 @@ NcmPlaybackStatus Engine::status() const { return impl_->getStatus(); }
 bool Engine::begin_external(uint32_t rate) {
     if (!impl_->running || (rate != 44100 && rate != 48000)) return false;
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (impl_->commands.size() >= 32) return false;
+    if (impl_->commands.size() >= CommandCapacity) return false;
     if (!impl_->external.open(rate)) return false;
     impl_->externalGain = 1000;
     // A new sender takes the audio source. Supersede pending music transport
@@ -1123,15 +1144,17 @@ bool Engine::write_external(const int16_t* stereo, size_t frames) {
 void Engine::end_external() {
     impl_->external.close();
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    // Lifecycle messages must not be dropped if the control queue is busy.
-    impl_->commands.emplace_back(ExternalEnd, 0);
+    // Repeated End is idempotent. Ordinary producers cannot fill the reserved
+    // final slot, and consecutive End calls never grow the vector.
+    if (impl_->commands.empty() || impl_->commands.back().first != ExternalEnd)
+        impl_->commands.emplace_back(ExternalEnd, 0);
     impl_->interrupt = true;
     impl_->cv.notify_one();
 }
 void Engine::flush_external() {
     impl_->external.flush();
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (impl_->commands.size() < 32) impl_->commands.emplace_back(ExternalFlush, 0);
+    if (impl_->commands.size() < CommandCapacity) impl_->commands.emplace_back(ExternalFlush, 0);
     impl_->cv.notify_one();
 }
 void Engine::external_volume(uint32_t permille) { impl_->externalGain = std::min(permille, 1000u); }

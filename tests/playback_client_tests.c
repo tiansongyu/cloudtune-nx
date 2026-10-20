@@ -14,6 +14,8 @@ static u64 ticks;
 static bool ready, stall, allowed = true, cancel_once;
 static unsigned sends, closes[256];
 static u32 last_command, last_argument;
+static bool corrupt_reply_type;
+static u8 server_tls[256] __attribute__((aligned(16)));
 static void check(bool value, const char* reason) {
     if (!value) { fprintf(stderr, "FAIL: %s\n", reason); exit(1); }
 }
@@ -27,6 +29,33 @@ Result svcCloseHandle(Handle handle) {
     check(handle < 256 && handle != 0, "invalid handle closed"); ++closes[handle]; return 0;
 }
 _Noreturn void svcExitProcess(void) { _exit(70); }
+void* armGetTls(void) { return server_tls; }
+Result svcAcceptSession(Handle* out, Handle port) { (void)out; (void)port; return 1; }
+Result svcReplyAndReceive(s32* index, const Handle* handles, s32 count, Handle reply_to, u64 timeout) {
+    (void)index; (void)handles; (void)count; (void)reply_to; (void)timeout; return 1;
+}
+Result smRegisterServiceCmif(Handle* out, SmServiceName name, bool light, s32 sessions) {
+    (void)out; (void)name; (void)light; (void)sessions; return 1;
+}
+Result smUnregisterServiceCmif(SmServiceName name) { (void)name; return 0; }
+#include "../background/source/ipc_server.c"
+static void serverRespond(const void* bytes, size_t size, Result result) {
+    // Exercise the real service parser and reply encoder, not a second
+    // handwritten approximation of CloudTune's CMIF response.
+    memcpy(server_tls, wire, sizeof(server_tls));
+    NcmIpcServerRequest request;
+    check(parseRequest(&request) == 0 && request.command_id == last_command,
+          "production server rejected client request");
+    if (request.data_size) {
+        check(request.data_size == sizeof(last_argument), "control argument size mismatch");
+        check(!memcmp(request.data, &last_argument, sizeof(last_argument)), "control argument mismatch");
+    }
+    prepareResponse(result, bytes, size);
+    memset(wire, 0, 4096);
+    memcpy(wire, server_tls, sizeof(server_tls));
+    if (corrupt_reply_type) ((HipcHeader*)wire)->type = CmifCommandType_Control;
+    ready = true;
+}
 static void respond(const void* bytes, size_t size, Handle handle, Result result) {
     memset(wire, 0, 4096);
     HipcHeader* header = wire;
@@ -58,11 +87,11 @@ Result svcSendAsyncRequestWithUserBuffer(Handle* event, void* buffer, u64 size, 
             respond(NULL, 0, 0, 0);
         } else { check(last_command == 1, "wrong SM command"); respond(NULL, 0, 42, 0); }
     } else if (last_command == NcmCommand_Version) {
-        const u32 version = NCM_PROTOCOL_VERSION; respond(&version, sizeof(version), 0, 0);
-    } else if (last_command == NcmCommand_Status) respond(&reply, sizeof(reply), 0, reply_result);
+        const u32 version = NCM_PROTOCOL_VERSION; serverRespond(&version, sizeof(version), 0);
+    } else if (last_command == NcmCommand_Status) serverRespond(&reply, sizeof(reply), reply_result);
     else if (last_command == NCM_COMMAND_AIRPLAY_STATUS)
-        respond(&airplay_reply, sizeof(airplay_reply), 0, reply_result);
-    else respond(NULL, 0, 0, reply_result);
+        serverRespond(&airplay_reply, sizeof(airplay_reply), reply_result);
+    else serverRespond(NULL, 0, reply_result);
     return 0;
 }
 Result svcWaitSynchronization(s32* index, const Handle* handles, s32 count, u64 timeout) {
@@ -91,7 +120,7 @@ int main(void) {
     reply_result = 1;
     check(R_FAILED(ncmPlaybackGetStatus(&status)) && !memcmp(&status,&zero,sizeof(status)),
           "failed status exposed");
-    check(!ncmPlaybackIsActive(), "failed connection retained");
+    check(ncmPlaybackIsActive(), "valid service error discarded healthy connection");
     reply_result = 0;
     check(ncmPlaybackInitialize() == 0, "reconnect failed");
     check(R_FAILED(ncmPlaybackGetStatus(NULL)), "NULL output accepted");
@@ -105,6 +134,17 @@ int main(void) {
     check(R_FAILED(ncmAirplayGetStatus(&airplay)) && !memcmp(&airplay,&empty_airplay,sizeof(airplay)),
           "incompatible AirPlay status exposed");
     check(R_FAILED(ncmAirplayGetStatus(NULL)), "NULL AirPlay output accepted");
+    airplay_reply.version = NCM_AIRPLAY_VERSION;
+    reply_result = MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    check(ncmAirplayGetStatus(&airplay) == reply_result && ncmPlaybackIsActive(),
+          "unsupported tool discarded playback connection");
+    reply_result = 0;
+    check(ncmPlaybackGetStatus(&status) == 0, "music status unavailable after tool rejection");
+    corrupt_reply_type = true;
+    check(R_FAILED(ncmPlaybackGetStatus(&status)) && !ncmPlaybackIsActive() &&
+          !memcmp(&status, &zero, sizeof(status)), "invalid reply type accepted");
+    corrupt_reply_type = false;
+    check(ncmPlaybackInitialize() == 0, "reconnect after invalid reply failed");
     cancel_once = true;
     check(ncmPlaybackGetStatus(&status) == 0, "cancelled wait was not retried");
 
@@ -146,5 +186,5 @@ int main(void) {
     allowed=false;
     check(R_FAILED(ncmPlaybackInitialize()) && !completion, "unsupported SVC used");
     ncmPlaybackShutdown();
-    puts("PASS: bounded Switch IPC, private SM, late replies, handle cleanup, shutdown and status validation");
+    puts("PASS: production client/server framing, service errors, bounded IPC, late replies, handles and shutdown");
 }

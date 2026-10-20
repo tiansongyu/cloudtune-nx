@@ -129,3 +129,25 @@ Kernel request-lifetime decisions were checked against libnx and Atmosphère
 source, linked in [the architecture notes](background/ARCHITECTURE.md#primary-references).
 The detailed test limits and local evidence paths are in
 [validation](VALIDATION.md#bounded-ipc-resource-limits-and-output-recovery--v022).
+
+## Follow-up risk review — v0.2.2
+
+The CI run for `229e5f0` passed, but a second review found defects its tests did
+not cover. In particular, independently handwritten client/server fixtures
+had hidden an incompatible reply-header assumption.
+
+| Priority | Confirmed issue | Correction and evidence |
+| --- | --- | --- |
+| High | The async client required HIPC reply type 0, while the production service encodes type 4. The version handshake would reject that service. | Accept both supported reply forms while retaining CMIF, descriptor, handle and length checks. The client test now calls the actual service parser and reply encoder. It fails at initialization before the fix. |
+| High | Control commands could allocate on the service/callback thread, outside the audio worker's allocation exception handler. Exhaustion could escape the IPC dispatcher. | Reserve 32 command slots and one lifecycle slot at construction, coalesce consecutive End events and add a nonthrowing service-dispatch boundary. A producer-thread allocation fault reproduces the old exception; ordinary controls and repeated AirPlay lifecycle calls now run with allocations forbidden. |
+| Medium | A valid service error was treated as a broken transport, preventing the caller's supported-command probe after an unavailable AirPlay command. | Distinguish validated CMIF error replies from transport/protocol failures. Keep the client session for the former; malformed replies and timeouts still disconnect it. |
+| Medium | Seeking during output recovery could reopen audio but leave the state at Buffering. | Publish Playing/Paused after a successful seek and output transition. The new recovery-seek regression fails before the fix. |
+| Medium | Resuming music after AirPlay with an initial output-open failure could restore the saved seek, then overwrite it with recovery's earlier zero position. | Update the recovery target after every successful seek. A failed-open handoff test checks the resumed track and saved cursor. |
+| Medium | A partially occupied output queue at EOF could wait forever, because it still had free buffer slots. | Give final-buffer draining its own five-second watchdog; the test injects a stuck tail below the normal full-queue threshold and checks subsequent queue advance. |
+| Medium | Repeated volume/repeat/shuffle commands reset the output-stall timer indefinitely. | These controls preserve watchdog timers; transport changes reset them. A continuous-volume test now recovers while commands remain active. |
+
+These are implementation fixes with host regressions. They do not prove
+physical-console service loading, actual suspend/wake or game coexistence.
+Synchronous HOS audio-service calls still require the system service to return;
+the retry count does not impose a deadline on a hung system service. Aggregate
+memory within the 16 MiB service heap also remains a hardware measurement.

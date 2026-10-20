@@ -13,11 +13,18 @@ using namespace std::chrono_literals;
 
 static std::atomic<bool> lost{false}, unavailable{false}, blocked{false}, writeFailure{false};
 static std::atomic<bool> sleepGap{false};
+static std::atomic<bool> stalledTail{false};
 static std::atomic<bool> failQueueAllocation{false};
+static thread_local bool rejectCommandAllocations=false;
+static std::atomic<bool> commandAllocationRejected{false};
 static std::atomic<unsigned> openFailures{0}, opens{0};
 extern "C" {
 void* __real__Znwm(size_t);
 void* __wrap__Znwm(size_t bytes) {
+    if (rejectCommandAllocations) {
+        commandAllocationRejected=true;
+        throw std::bad_alloc();
+    }
     if (bytes == sizeof(NcmQueueEntry)*2 && failQueueAllocation.exchange(false))
         throw std::bad_alloc();
     return __real__Znwm(bytes);
@@ -42,7 +49,7 @@ Uint32 __wrap_SDL_GetQueuedAudioSize(SDL_AudioDeviceID device) {
         std::this_thread::sleep_for(2100ms);
         return 32768;
     }
-    return blocked ? 32768 : __real_SDL_GetQueuedAudioSize(device);
+    return blocked ? 32768 : stalledTail ? 4096 : __real_SDL_GetQueuedAudioSize(device);
 }
 int __wrap_SDL_QueueAudio(SDL_AudioDeviceID device, const void* data, Uint32 bytes) {
     return writeFailure.exchange(false) ? -1 : __real_SDL_QueueAudio(device,data,bytes);
@@ -58,7 +65,7 @@ template<class Predicate> static NcmPlaybackStatus wait(Engine& engine, Predicat
     throw std::runtime_error("Timed out waiting for recovery state");
 }
 int main(int argc,char** argv) try {
-    check(argc==3,"usage: output-recovery <directory> <generated audio>");
+    check(argc==3 || argc==4,"usage: output-recovery <directory> <generated audio> [scenario]");
     std::filesystem::create_directories(argv[1]);
     NcmQueueEntry queue[2]{};
     for (unsigned i=0;i<2;++i) {
@@ -80,6 +87,62 @@ int main(int argc,char** argv) try {
     check(!failQueueAllocation && descriptors()==before,"allocation failure leaked queue file");
     check(engine.command(NcmCommand_LoadQueue),"engine did not survive allocation failure");
     wait(engine,[](auto s){return s.position_ms>300;});
+    if (argc==4) {
+        const std::string scenario=argv[3];
+        if (scenario=="command-oom") {
+            unsigned accepted=0;
+            rejectCommandAllocations=true;
+            for (unsigned i=0;i<128;++i) {
+                accepted+=engine.command(NcmCommand_Volume,500);
+                std::this_thread::sleep_for(1ms);
+            }
+            const bool began=engine.begin_external(48000);
+            engine.flush_external();
+            for (unsigned i=0;i<128;++i) engine.end_external();
+            rejectCommandAllocations=false;
+            check(!commandAllocationRejected && accepted && began,"command/lifecycle path allocated");
+            wait(engine,[](auto s){return s.track_id==900 && s.state==NcmPlayback_Paused;});
+            check(engine.command(NcmCommand_Play),"command queue did not recover");
+            check(engine.command(NcmCommand_Volume,321),"volume control did not recover");
+            wait(engine,[](auto s){return s.volume_permille==321 && s.state==NcmPlayback_Playing;});
+        } else if (scenario=="seek-recovery") {
+            lost=true;
+            wait(engine,[](auto s){return s.state==NcmPlayback_Buffering;});
+            check(engine.command(NcmCommand_Seek,3000),"seek during recovery rejected");
+            wait(engine,[](auto s){return s.state==NcmPlayback_Playing && s.position_ms>=3000;},2000);
+        } else if (scenario=="resume-recovery") {
+            check(engine.begin_external(48000),"AirPlay handoff");
+            wait(engine,[](auto s){return s.track_id==0 && s.state==NcmPlayback_Playing;});
+            engine.end_external();
+            const auto saved=wait(engine,[](auto s){return s.track_id==900 && s.state==NcmPlayback_Paused;});
+            openFailures=1;
+            check(engine.command(NcmCommand_Play),"music resume rejected");
+            wait(engine,[](auto s){return s.state==NcmPlayback_Buffering;});
+            const auto resumed=wait(engine,[](auto s){return s.state==NcmPlayback_Playing;});
+            check(resumed.track_id==900 && resumed.position_ms>=saved.position_ms,
+                  "output recovery rewound resumed music");
+        } else if (scenario=="tail-stall") {
+            stalledTail=true;
+            check(engine.command(NcmCommand_Seek,29950),"tail seek rejected");
+            wait(engine,[](auto s){return s.state==NcmPlayback_Buffering;},7000);
+            stalledTail=false;
+            wait(engine,[](auto s){return s.track_id==901 && s.state==NcmPlayback_Playing;});
+        } else if (scenario=="control-stall") {
+            blocked=true;
+            bool recovered=false;
+            for (unsigned i=0;i<120;++i) {
+                check(engine.command(NcmCommand_Volume,500+i%100),"volume command rejected");
+                std::this_thread::sleep_for(50ms);
+                if (engine.status().state==NcmPlayback_Buffering) { recovered=true; break; }
+            }
+            check(recovered,"volume commands indefinitely postponed stalled-output recovery");
+            blocked=false;
+            wait(engine,[](auto s){return s.state==NcmPlayback_Playing;});
+        } else throw std::runtime_error("Unknown recovery scenario");
+        engine.stop();
+        std::printf("PASS: %s\n",argv[3]);
+        return 0;
+    }
     openFailures=2; lost=true;
     const auto recovering=wait(engine,[](auto s){return s.state==NcmPlayback_Buffering;});
     check(recovering.track_id==900,"device loss skipped track");
