@@ -148,11 +148,11 @@ try:
 
     for name in ("README.md", "LICENSE", "CONTRIBUTING.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md"):
         copy(root / name, docs / name)
-    for name, title in (("INSTALLING.md", "Installation guide"),
-                        ("VALIDATION.md", "Validation records")):
+    for name, document_title in (("INSTALLING.md", "Installation guide"),
+                                 ("VALIDATION.md", "Validation records")):
         copy(root / "docs" / name, docs / "docs" / name)
         (docs / name).write_text(
-            f"# {title}\n\n[{title}](docs/{name})\n", encoding="utf-8")
+            f"# {document_title}\n\n[{document_title}](docs/{name})\n", encoding="utf-8")
     # Include committed repository documentation, never ignored local test logs.
     tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0")
     for name in tracked:
