@@ -64,6 +64,12 @@ The separate display `:120` is reserved for native desktop Borealis testing
 on the development machine. Emulator and desktop processes can run side by
 side without stealing focus from the user's main desktop.
 
+The complete application was tested in both handheld and docked emulation.
+Docked touch coordinates correctly select the visible sidebar row after the
+Borealis input mapping fix. The CLI profile is
+`config/eden/sdl2-config.ini` under the isolated state directory; change
+`use_docked_mode` only while the CLI is stopped.
+
 ## Verified environment baseline
 
 On 2026-10-20:
@@ -80,6 +86,12 @@ Evidence: `build/validation/toolchain-smoke.log`,
 Those generated logs are local validation artifacts; they are not source
 dependencies.
 
+The subsequent full NRO run rendered live playlist artwork and Chinese text,
+generated a login QR code, and played anonymous API-provided MP3 streams.
+It also exposed an audio-output lifecycle issue that the simple console
+smoke could not detect. See [VALIDATION.md](VALIDATION.md) for the application
+checks and their individual results.
+
 ## Scope of emulator results
 
 A successful standalone NRO test establishes that the application can boot
@@ -92,3 +104,31 @@ Eden may log unimplemented services or synthesized system archives during
 homebrew startup. Preserve the complete log and actual screen result
 together: an isolated warning is not sufficient to establish either
 success or failure.
+
+Eden 0.2.1's
+[`SetVerifyOptionImpl`](https://git.eden-emu.dev/eden-emu/eden/src/tag/v0.2.1/src/core/hle/service/ssl/ssl.cpp)
+forces SSL verification options to zero. Its OpenSSL backend consequently
+logs `skip_verification=true`, even though this application requests peer and
+hostname validation. Successful networking in this emulator therefore does
+**not** validate the certificate-checking path. Keep emulator testing to
+anonymous discovery/playback and unapproved QR generation; authorize a real
+account on the native desktop build or the console. The application's TLS
+verification settings remain enabled.
+
+## Compatibility fixes found during application bring-up
+
+The initial complete NRO exposed two issues which the console-only smoke
+test does not exercise:
+
+- Borealis requested the optional `SetWirelessPriorityMode` IPC operation.
+  Eden 0.2.1 asserted on this unimplemented operation before drawing the UI.
+  The app now leaves Horizon's wireless priority unchanged.
+- Requesting `ncm:bg` before a background service exists causes the service
+  manager to wait indefinitely. The client now checks for Atmosphère and
+  service presence before requesting a connection, allowing the standalone
+  app to continue when the background service is unavailable.
+
+The captured bring-up logs are
+`build/validation/eden-app-first-boot-internal.log` and
+`build/validation/eden-app-second-internal.log`. These are diagnostic
+failures from earlier builds, not evidence of a successful final app run.

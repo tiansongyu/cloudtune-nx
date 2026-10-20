@@ -1,4 +1,7 @@
 /build*/
+/.deps/
+/overlay/build/
+/overlay/build_*/
 /dist/
 /release/
 /logs/

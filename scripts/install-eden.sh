@@ -6,6 +6,9 @@ eden_dir="${EDEN_INSTALL_DIR:-$HOME/.local/opt/eden/$version}"
 url="https://stable.eden-emu.dev/v${version}/Eden-Linux-v${version}-amd64-clang-pgo.AppImage"
 mkdir -p "$eden_dir" "$HOME/.local/bin"
 curl -fL --retry 3 "$url" -o "$eden_dir/Eden.AppImage"
+printf '%s  %s\n' \
+    "7a28bf988b0648831989722bdbaa90ab31371b403808199813e0ea7c8b25ba6d" \
+    "$eden_dir/Eden.AppImage" | sha256sum --check
 chmod +x "$eden_dir/Eden.AppImage"
 (cd "$eden_dir" && ./Eden.AppImage --appimage-extract)
 printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$eden_dir/squashfs-root/AppRun" \

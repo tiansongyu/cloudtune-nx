@@ -56,11 +56,27 @@ The primary app outputs are:
 ```text
 build/switch/NeteaseSwitch.nro
 build/switch/NeteaseSwitch.elf
+build/switch/background/netease-background.nsp
+overlay/netease-overlay.ovl
 ```
 
 The smoke test writes `build/smoke/toolchain-smoke.nro` and its ELF. It verifies
 the compiler, libnx, NACP metadata generation and NRO packaging independently
 from application dependencies.
+
+Generate the SD deployment archive and separate debugging symbols:
+
+```sh
+./scripts/package.sh
+```
+
+The packager validates NRO/overlay headers, the ExeFS NSP, its NSO and NPDM
+program ID, the ELF architecture, and each binary's build ID against its
+matching ELF before staging files. Every run creates
+a distinct directory under `dist/`, preserving earlier candidates. It emits
+SD, symbols and documentation zip archives, a per-file JSON manifest and
+SHA-256 checksums. Only the `-sd.zip` contents belong on the SD card;
+see [`INSTALLING.md`](INSTALLING.md).
 
 Always retain the ELF corresponding to the NRO or system module tested on
 hardware. An ELF from a later build cannot reliably symbolicate an earlier
@@ -85,11 +101,60 @@ Inside the container:
 ```sh
 cmake -S . -B build/switch -G Ninja \
   -DPLATFORM_SWITCH=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build build/switch --target NeteaseSwitch.nro --parallel 8
+cmake --build build/switch \
+  --target NeteaseSwitch.nro netease-background-package --parallel 8
+make -C overlay -j8
 ```
 
 The Borealis toolchain chooses the official devkitPro Switch CMake files.
 Never reuse a desktop build directory for Switch compilation.
+
+## Isolated host crypto dependency
+
+For native desktop development, use installed GLFW, SDL2 and libcurl
+development packages. If mbedTLS headers are absent, the following builds
+the same 2.28.10 source release used by the Switch port under `.deps/mbedtls`:
+
+```sh
+./scripts/setup-host-deps.sh
+cmake -S . -B build/desktop -G Ninja \
+  -DPLATFORM_DESKTOP=ON -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_PREFIX_PATH="$PWD/.deps/mbedtls"
+```
+
+The source archive is pinned by SHA-256. This script requires a host C
+compiler, CMake and Ninja; it does not run `apt`, repair existing package
+state, require root, or write to `/usr`.
+
+Run the native application in the separate virtual desktop:
+
+```sh
+cmake --build build/desktop --parallel 8
+DISPLAY=:120 LP_NUM_THREADS=4 ./build/desktop/NeteaseSwitch
+```
+
+The display must already exist. For a headless machine, create it using
+`Xvfb :120 -screen 0 1600x1000x24 -nolisten tcp` in a separate terminal.
+Set `NETEASE_SWITCH_DATA` to isolate cookies, settings and audio caches.
+`SDL_AUDIODRIVER=dummy` is available for automated runs without speakers;
+it does not establish audible output quality.
+
+## Host validation
+
+```sh
+./scripts/test-host.sh
+```
+
+This configures a Debug build (assertions enabled), runs the API, library,
+model and filesystem tests, checks XEAPI output with an independent Python
+implementation, then exercises generated MP3 audio locally and over a
+throttled local HTTPS server. The audio test covers transport controls,
+natural track changes, end-of-queue behavior, malformed queues and cache
+isolation by quality/session.
+
+Additional test tools are Python 3 with `cryptography`, FFmpeg, OpenSSL and
+curl. Fixtures and temporary TLS keys stay in ignored `build/validation/`.
+No account sign-in, SMS or personal music collection is needed.
 
 ## Troubleshooting
 

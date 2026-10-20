@@ -75,3 +75,40 @@ Further checkpoints are appended after their corresponding build or test.
   navigation. Corrected nullable subscription values and paginated libraries.
 
 Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
+
+## 2026-10-20 · Persistence, input and continuous audio regressions
+
+- Replaced libcurl's cookie-jar output with explicit serialization using a
+  recoverable backup/promotion sequence. The same storage helper protects
+  settings and image downloads; shutdown reports failures without throwing.
+- Added visible-range artwork scheduling, duplicate suppression and delayed
+  retry, so scrolling past the initial artwork batch remains usable.
+- Added wheel and touch scrolling, corrected docked touch coordinates, and
+  bound directional actions to Borealis navigation buttons so analog sticks
+  and horizontal Joy-Con layouts are handled.
+- Fixed collection-header touch actions, isolated seek from play/skip hit
+  regions, bounded scrolling after changing categories, removed duplicate
+  history entries on refresh and used the playing track as intelligence seed.
+- Eden exposed an `audout` lifecycle stall after a 44.1 kHz track advanced to
+  a 48 kHz track. Opening a fresh audio session per track corrected it.
+  A second regression found the same issue after pause/resume; pause now
+  releases the output and resume seeks back to the audible position before
+  creating a fresh session.
+- The real ARM64 NRO subsequently passed automatic track advance,
+  pause/resume and seeking. A four-second paused interval produced identical
+  vinyl pixels; resumed playback produced changing PCM and advancing time.
+- Cache identity now includes quality and a session fingerprint, preventing
+  an anonymous preview from being reused after signing in. No raw cookie is
+  stored in a cache filename or diagnostic log.
+- Overlay controls are localized, animation follows elapsed time, and the
+  overlay retains the service-manager reference needed for reconnecting.
+- Reopening the client restores the validated queue file without starting
+  playback. Per-track metadata hydration restores missing cover artwork;
+  generation checks prevent stale responses from overwriting a new queue.
+- Final desktop checks exercised actual text input/search, collection menus,
+  restored queues, artwork hydration, native scrolling and clean exit on the
+  isolated display. Public screenshots use an instrumental track and contain
+  no account credentials or login QR codes.
+- Source changes are committed at toolchain, API, audio, persistence, GUI
+  and validation milestones. Generated packages retain matching ELF build
+  IDs, source commit metadata and SHA-256 manifests.
