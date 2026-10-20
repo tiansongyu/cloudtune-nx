@@ -25,8 +25,10 @@ CI 输出确切的 artifact ID，发布任务按该 ID 下载**本次运行**生
 不另取主分支的新二进制，也不从另一轮
 `workflow_run` 拼接未经对应校验的产物。
 
-宿主验证执行 `./scripts/test-host.sh`，包含 5 项 CTest、独立 XEAPI
-验证，以及生成的 MP3 / AAC / FLAC、节流 HTTPS、多账号存储与播放隔离测试。Switch 验证使用固定
+宿主验证执行 `./scripts/test-host.sh`，包含 CTest、独立 XEAPI
+验证，以及生成的 MP3 / AAC / FLAC、节流 HTTPS、多账号存储与播放隔离测试。
+随后验证独立覆盖层服务，并在单独构建目录中执行完整 UBSan 测试。
+Switch 验证使用固定
 devkitPro 基础镜像构建 NRO、后台 NSP 和覆盖层，并检查包格式、程序 ID
 及配套 ELF。具体命令和依赖见 [BUILDING.md](BUILDING.md)。
 
@@ -85,17 +87,17 @@ Release 模式的固定文件名便于用户按版本下载，不表示不同构
 
 1. 在待发布提交中更新 `CMakeLists.txt` 的版本和
    `docs/releases/vX.Y.Z.md` 发布说明。标签必须是无前导零的 `vX.Y.Z`；
-   首版维持 `0.1.0`，标签为 `v0.1.0`。工作流同时检查覆盖层版本来源，
+   例如版本 `0.2.0` 对应标签 `v0.2.0`。工作流同时检查覆盖层版本来源，
    并在编译后验证应用和覆盖层的 NACP 版本。
 2. 确认主分支 CI 成功，检查对应提交、自动测试日志和包清单。
    GUI 或音频行为变化还需要相应的模拟器与实机记录，不能由 CI 代替。
-3. 在该提交创建并推送版本标签。以下命令仅示例首次发布，已有标签不重复创建：
+3. 在该提交创建并推送版本标签。以下命令为示例，已有标签不重复创建：
 
    ```sh
    git switch main
    git pull --ff-only
-   git tag -a v0.1.0 -m "CloudTune NX v0.1.0 development preview"
-   git push origin v0.1.0
+   git tag -a v0.2.0 -m "CloudTune NX v0.2.0 development preview"
+   git push origin v0.2.0
    ```
 
 4. 查看 Release 工作流：版本检查 → 可复用 CI → 新建 Release 草稿并上传 →
@@ -103,7 +105,7 @@ Release 模式的固定文件名便于用户按版本下载，不表示不同构
    宿主或 Switch 任一必需检查失败时不会进入发布任务。修复后按实际失败阶段重新运行，
    或在需要修改源代码时提交新版本。
 5. 检查 Release 页面上的版本、发布说明、五个附件及源提交是否一致，
-   下载 SD 包重新核对 SHA-256。当前所有 `0.x.y` 版本（包括 `v0.1.0`）
+   下载 SD 包重新核对 SHA-256。当前所有 `0.x.y` 版本
    均标记为 **pre-release / 开发预览**。
 
 已发布的版本标签与附件作为历史记录保留。不强制移动标签，不用同名新包替换

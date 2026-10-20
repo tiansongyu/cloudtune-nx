@@ -10,16 +10,16 @@ The canonical repository is
 
 Download `CloudTuneNX-<version>-sd.zip` and `SHA256SUMS` from the same
 [GitHub Release](https://github.com/tiansongyu/cloudtune-nx/releases).
-For v0.1.0, save both files in one directory and verify:
+For v0.2.0, save both files in one directory and verify:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-Confirm that `CloudTuneNX-0.1.0-sd.zip` reports `OK`. The `--ignore-missing`
+Confirm that `CloudTuneNX-0.2.0-sd.zip` reports `OK`. The `--ignore-missing`
 option permits downloading only the SD archive; it does not ignore a checksum
 mismatch in a file you downloaded. Windows users can compare
-`Get-FileHash .\CloudTuneNX-0.1.0-sd.zip -Algorithm SHA256` with the matching
+`Get-FileHash .\CloudTuneNX-0.2.0-sd.zip -Algorithm SHA256` with the matching
 line in `SHA256SUMS`.
 
 Extract **only the SD archive** directly to the root of your SD card.
@@ -50,8 +50,9 @@ sd:/
 `exefs.nsp` is the Atmosphère background system module. It is **not** a
 game-installation NSP and must not be installed with a title installer.
 `boot2.flag` asks Atmosphère to start it at boot. This is the default
-installation mode: the service remains idle until playback is requested,
-so starting the service does not automatically play music.
+installation mode. Starting the service does not automatically play the saved
+NetEase queue. Its independent AirPlay 1 receiver starts when enabled; the
+first-use default is enabled, and later starts follow your saved preference.
 
 ## First launch
 
@@ -60,9 +61,12 @@ so starting the service does not automatically play music.
 2. Copy the SD archive directories to your SD card. Keep the folder
    hierarchy and allow the files from this release to replace older files.
 3. Reboot into Atmosphère to start the background player.
-4. Launch **CloudTune NX** from Homebrew Menu. Full application mode is
-   recommended for the GUI and networking memory budget.
-5. Sign in through the app and verify your account and library.
+4. Hold **R** while launching a game to open Homebrew Menu in full application
+   mode, then launch **CloudTune NX**. Use this mode for the GUI and networking
+   memory budget.
+5. Open **我的账号**, generate a QR code, and scan and confirm it with the
+   official NetEase Cloud Music phone app. QR scanning is the only login method.
+   Verify your account and library afterward.
 6. Start playback. Open the overlay through your loader's configured
    shortcut to control the background player.
 
@@ -72,6 +76,17 @@ private when sharing logs or backing up the SD card.
 This original directory name is intentional: CloudTune NX preserves it to
 reuse already authorized sessions, queues and settings without a migration.
 The IPC service `ncm:bg` and program ID `42000000004E434D` also remain unchanged.
+
+Add, switch or remove saved accounts in **设置 → 账号管理**. Switching first
+clears the previous NetEase playback queue; an existing AirPlay session can
+continue independently. See [ACCOUNTS.md](ACCOUNTS.md) for session recovery.
+
+For phone audio, connect both devices to the same local network and open
+**设置 → AirPlay 1 接收**. Confirm the receiver is ready before selecting it
+on the sender. Turn reception off there if you do not want it listening.
+With the matching background service, reception remains available after
+closing the NRO; foreground fallback reception stops with the app.
+See [AIRPLAY.md](AIRPLAY.md) for network requirements and validation limits.
 
 The CA bundle enables certificate validation for the background process.
 Keep it installed even though the NRO also embeds its own bundle.

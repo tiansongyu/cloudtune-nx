@@ -389,3 +389,18 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
   `VALIDATION.md`.
 - Added full UBSan validation to the GitHub Actions host job. Updated account
   recovery, background session ownership and audio seeking documentation.
+
+## v0.2.0 release preparation (2026-10-20)
+
+- Simplified the README around direct SD ZIP downloads, installation, account
+  setup, AirPlay and background playback; retained detailed development and
+  validation material in linked documentation.
+- Added v0.2.0 release notes and updated the installation guide. Existing
+  account data stays in `config/netease-switch/`; upgrades replace all three
+  compiled components together.
+- Bumped the shared project version to 0.2.0 and made both the Switch overlay
+  and desktop preview display that version instead of a hardcoded label.
+  Overlay object dependencies now include the version source.
+- Rebuilt the three Switch components, checked both NACP versions and matching
+  symbols, and passed the independent overlay service regression. Publication
+  uses the version tag's required CI and verified release assets.
