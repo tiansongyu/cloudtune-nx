@@ -21,11 +21,9 @@ if [[ "${1:-}" == "--smoke" ]]; then
 fi
 cmake -S . -B build/switch -G Ninja -DPLATFORM_SWITCH=ON \
     -DCMAKE_BUILD_TYPE=Release "$@"
-cmake --build build/switch --target NeteaseSwitch.nro --parallel "${BUILD_JOBS:-8}"
+cmake --build build/switch --target NeteaseSwitch.nro netease-background-package \
+    --parallel "${BUILD_JOBS:-8}"
 # Background service and overlay are separate processes and separate binaries.
-if [[ -f sysmodule/Makefile ]]; then
-    make -C sysmodule -j"${BUILD_JOBS:-8}"
-fi
 if [[ -f overlay/Makefile ]]; then
     make -C overlay -j"${BUILD_JOBS:-8}"
 fi

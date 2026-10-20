@@ -282,8 +282,10 @@ void SwitchInputManager::updateTouchStates(std::vector<RawTouchState>* states)
             RawTouchState state;
             state.pressed    = true;
             state.fingerId   = hidState.touches[i].finger_id;
-            state.position.x = hidState.touches[i].x / Application::windowScale;
-            state.position.y = hidState.touches[i].y / Application::windowScale;
+            // HID touch is in the 1280x720 panel coordinate space even when the
+            // rendered framebuffer is 1920x1080 (e.g. Eden's docked mode).
+            state.position.x = hidState.touches[i].x * Application::contentWidth / 1280.0f;
+            state.position.y = hidState.touches[i].y * Application::contentHeight / 720.0f;
             states->push_back(state);
         }
     }

@@ -73,7 +73,8 @@ SwitchPlatform::SwitchPlatform()
     ColorSetId colorSetId;
     setsysGetColorSetId(&colorSetId);
 
-    appletSetWirelessPriorityMode(AppletWirelessPriorityMode_OptimizedForWlan);
+    // Netease Switch: leave Horizon's wireless priority unchanged. This optional
+    // bandwidth hint is not needed for music and Eden does not implement IPC 80.
 
     if (colorSetId == ColorSetId_Dark)
         this->themeVariant = ThemeVariant::DARK;
