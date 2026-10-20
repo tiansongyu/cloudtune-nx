@@ -22,7 +22,7 @@ void Player::shutdown() {
         local_.reset();
     }
 #ifdef __SWITCH__
-    ncmPlaybackExit();
+    ncmPlaybackShutdown();
 #endif
     background_ = false;
 }
@@ -46,10 +46,14 @@ bool Player::ensure_runtime() {
     if (background_ || local_)
         return true;
 #ifdef __SWITCH__
-    if (R_SUCCEEDED(ncmPlaybackInitialize())) {
+    const Result connection = ncmPlaybackInitialize();
+    if (R_SUCCEEDED(connection)) {
         background_ = remote_seen_ = true;
         return true;
     }
+    if (connection == MAKERESULT(Module_Libnx, LibnxError_Timeout) ||
+        connection == MAKERESULT(421, 1))
+        remote_seen_ = true; // Existing ownership is unresolved; do not start a second player.
     // A service that is already starting can report "already launched".
     // Always give that process a short bounded chance to register its IPC.
     if (hosversionIsAtmosphere()) {

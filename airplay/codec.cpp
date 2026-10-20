@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "codec.hpp"
+#include "codec_limits.hpp"
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -34,7 +35,7 @@ struct AlacDecoder::Impl {
         rate = maximumFrames = 0;
     }
 };
-AlacDecoder::AlacDecoder() : impl(std::make_unique<Impl>()) {}
+AlacDecoder::AlacDecoder() : impl(std::make_unique<Impl>()) { audio::configure_limits(); }
 AlacDecoder::~AlacDecoder() = default;
 
 bool AlacDecoder::configure(const std::vector<uint32_t> &fmtp) {

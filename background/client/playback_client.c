@@ -1,35 +1,85 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "netease/playback_client.h"
 #include <string.h>
-static Service g_service;
+#include "timed_ipc.h"
+#include <stdatomic.h>
+static Handle g_service;
+static atomic_flag g_busy = ATOMIC_FLAG_INIT;
+static const u64 NormalTimeout = 150000000ull;
+static Result busy(void) { return MAKERESULT(Module_Libnx, LibnxError_Timeout); }
+static bool enter(void) { return !atomic_flag_test_and_set_explicit(&g_busy, memory_order_acquire); }
+static void leave(void) { atomic_flag_clear_explicit(&g_busy, memory_order_release); }
+static void closeService(void) {
+    // serviceClose sends a synchronous CMIF Close. A hung server cannot be
+    // trusted to acknowledge it; releasing our kernel handle is sufficient.
+    if (g_service) svcCloseHandle(g_service);
+    g_service = INVALID_HANDLE;
+}
 Result ncmPlaybackInitialize(void) {
-    if (serviceIsActive(&g_service)) return 0;
-    /* GetService is deferred by Atmosphere when a custom service is absent.
-     * Never request it speculatively: this would freeze app/overlay startup.
-     * Also never send Atmosphere extension IPC to stock Horizon or emulators. */
-    if (!hosversionIsAtmosphere())
-        return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
+    if (!enter()) return busy();
+    Result rc = 0;
+    Handle sm = INVALID_HANDLE;
+    if (g_service) goto done;
+    if (!hosversionIsAtmosphere()) {
+        rc = MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer); goto done;
+    }
+    if (!ncmIpcIdle()) { rc = busy(); goto done; }
     const SmServiceName name = smEncodeName(NCM_SERVICE_NAME);
     u8 present = 0;
-    Result rc = tipcDispatchInOut(smGetServiceSessionTipc(), 65100, name, present);
-    if (R_FAILED(rc)) return rc;
-    if (!present) return MAKERESULT(Module_Libnx, LibnxError_NotFound);
-    rc = smGetService(&g_service, NCM_SERVICE_NAME);
-    if (R_FAILED(rc)) return rc;
-    uint32_t version = 0;
-    rc = serviceDispatchOut(&g_service, NcmCommand_Version, version);
-    if (R_FAILED(rc) || version != NCM_PROTOCOL_VERSION) {
-        serviceClose(&g_service);
-        return R_FAILED(rc) ? rc : MAKERESULT(421, 1);
-    }
-    return 0;
+    rc = tipcDispatchInOut(smGetServiceSessionTipc(), 65100, name, present);
+    if (R_FAILED(rc)) goto done;
+    if (!present) { rc = MAKERESULT(Module_Libnx, LibnxError_NotFound); goto done; }
+    // Use a private SM connection. Missing-service deferral and the race
+    // between HasService/GetService now have the same bounded deadline.
+    rc = svcConnectToNamedPort(&sm, "sm:");
+    if (R_FAILED(rc)) goto done;
+    const u64 pid = 0;
+    rc = ncmIpcRequest(sm, 0, &pid, sizeof(pid), NULL, 0, NULL, true, NormalTimeout);
+    if (R_FAILED(rc)) goto done;
+    rc = ncmIpcRequest(sm, 1, &name, sizeof(name), NULL, 0, &g_service, false, NormalTimeout);
+    if (R_FAILED(rc)) goto done;
+    u32 version = 0;
+    rc = ncmIpcRequest(g_service, NcmCommand_Version, NULL, 0, &version,
+                       sizeof(version), NULL, false, NormalTimeout);
+    if (R_SUCCEEDED(rc) && version != NCM_PROTOCOL_VERSION) rc = MAKERESULT(421, 1);
+done:
+    if (sm) svcCloseHandle(sm);
+    if (R_FAILED(rc)) closeService();
+    leave();
+    return rc;
 }
-void ncmPlaybackExit(void) { serviceClose(&g_service); }
-bool ncmPlaybackIsActive(void) { return serviceIsActive(&g_service); }
+void ncmPlaybackExit(void) {
+    if (!enter()) return;
+    closeService();
+    ncmIpcIdle();
+    leave();
+}
+void ncmPlaybackShutdown(void) {
+    ncmPlaybackExit();
+    ncmIpcShutdown();
+}
+bool ncmPlaybackIsActive(void) {
+    if (!enter()) return false;
+    const bool active = g_service != INVALID_HANDLE;
+    leave();
+    return active;
+}
+static Result exchange(u32 command, const void* input, size_t input_size,
+                       void* output, size_t output_size) {
+    if (output && output_size) memset(output, 0, output_size);
+    if (!enter()) return busy();
+    // Account publication must wait for the engine's five-second clear
+    // barrier. Ordinary overlay controls always use the short deadline.
+    const u64 timeout = command == NcmCommand_ClearQueue ? 5500000000ull : NormalTimeout;
+    Result result = ncmIpcRequest(g_service, command, input, input_size, output,
+                                  output_size, NULL, false, timeout);
+    if (R_FAILED(result)) closeService();
+    leave();
+    return result;
+}
 Result ncmPlaybackGetStatus(NcmPlaybackStatus* status) {
     if (!status) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
-    memset(status, 0, sizeof(*status));
-    Result result = serviceDispatchOut(&g_service, NcmCommand_Status, *status);
+    Result result = exchange(NcmCommand_Status, NULL, 0, status, sizeof(*status));
     if (R_FAILED(result) || status->version != NCM_PROTOCOL_VERSION) {
         memset(status, 0, sizeof(*status));
         return R_FAILED(result) ? result : MAKERESULT(421, 1);
@@ -39,8 +89,8 @@ Result ncmPlaybackGetStatus(NcmPlaybackStatus* status) {
     status->message[sizeof(status->message)-1] = 0;
     return 0;
 }
-static Result simple(NcmCommand cmd) { return serviceDispatch(&g_service, cmd); }
-static Result value(NcmCommand cmd, uint32_t v) { return serviceDispatchIn(&g_service, cmd, v); }
+static Result simple(NcmCommand cmd) { return exchange(cmd, NULL, 0, NULL, 0); }
+static Result value(NcmCommand cmd, uint32_t v) { return exchange(cmd, &v, sizeof(v), NULL, 0); }
 Result ncmPlaybackLoadQueue(uint32_t i) { return value(NcmCommand_LoadQueue, i); }
 Result ncmPlaybackPlayPause(void) { return simple(NcmCommand_PlayPause); }
 Result ncmPlaybackPlay(void) { return simple(NcmCommand_Play); }
@@ -56,7 +106,7 @@ Result ncmPlaybackClearQueue(void) { return simple(NcmCommand_ClearQueue); }
 Result ncmAirplayGetStatus(NcmAirplayStatus* status) {
     if (!status) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     memset(status, 0, sizeof(*status));
-    Result result = serviceDispatchOut(&g_service, NCM_COMMAND_AIRPLAY_STATUS, *status);
+    Result result = exchange(NCM_COMMAND_AIRPLAY_STATUS, NULL, 0, status, sizeof(*status));
     if (R_FAILED(result) || status->version != NCM_AIRPLAY_VERSION) {
         memset(status, 0, sizeof(*status));
         return R_FAILED(result) ? result : MAKERESULT(421, 1);
@@ -70,10 +120,10 @@ Result ncmAirplayGetStatus(NcmAirplayStatus* status) {
 }
 Result ncmAirplaySetEnabled(bool enabled) {
     const uint32_t value = enabled ? 1u : 0u;
-    return serviceDispatchIn(&g_service, NCM_COMMAND_AIRPLAY_ENABLED, value);
+    return exchange(NCM_COMMAND_AIRPLAY_ENABLED, &value, sizeof(value), NULL, 0);
 }
 Result ncmAirplayDisconnect(void) {
-    return serviceDispatch(&g_service, NCM_COMMAND_AIRPLAY_DISCONNECT);
+    return exchange(NCM_COMMAND_AIRPLAY_DISCONNECT, NULL, 0, NULL, 0);
 }
 Result ncmPlaybackLaunchBackground(void) {
     if (!hosversionIsAtmosphere())

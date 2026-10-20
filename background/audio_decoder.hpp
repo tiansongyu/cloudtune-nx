@@ -26,6 +26,7 @@ public:
     uint64_t frames() const; // Zero when the stream does not declare a duration.
     const char* format() const;
     bool damaged() const;
+    bool resource_limited() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

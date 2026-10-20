@@ -461,3 +461,26 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - Checked playback progress and changing vinyl frames, image dimensions,
   privacy and README image paths. Added a collapsed discovery preview and
   an explicit version, capture date and desktop-source caption.
+
+## Background failure handling — v0.2.2 (2026-10-20)
+
+- Replaced custom-service synchronous requests with bounded asynchronous IPC.
+  Preserved pending buffer ownership, cleaned late transferred handles, checked
+  active loader support and reduced disconnected overlay retry frequency.
+  Final shutdown cannot return a still-owned page to an NRO loader.
+- Added decoder allocation limits and bounded cache-eviction candidate storage.
+  Recoverable worker allocation failures now leave the player accepting
+  commands; queue file ownership also survives allocation exceptions.
+- Added bounded audio-output recreation that preserves the current track and
+  audible position. Persistent failures pause for manual retry. AirPlay drops
+  old PCM and resumes live after recovery.
+- Added production-code fault tests for IPC, resources and output. The old
+  engine fails the allocation-failure regression; the repaired engine passes.
+  Complete native and UBSan suites pass 23 checks each.
+- Fixed the SDL thread-local leak exposed by the focused ASan/UBSan/leak run.
+  A further regression reproduced and fixed AirPlay FLUSH retaining the
+  temporary recovery pause instead of accepting fresh live audio.
+  Kept all tests on synthetic background fixtures and retained real-device
+  acceptance requirements separately.
+- Advanced the build version to 0.2.2 and prepared release notes. This code
+  maintenance pass does not alter the published v0.2.1 tag or release.

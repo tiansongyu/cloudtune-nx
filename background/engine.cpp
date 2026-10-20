@@ -110,6 +110,10 @@ public:
         }
         return std::find(busy_.begin(), busy_.end(), false) != busy_.end();
 #else
+        if (SDL_GetAudioDeviceStatus(device_) != SDL_AUDIO_PLAYING) {
+            error_ = 1;
+            return false;
+        }
         return SDL_GetQueuedAudioSize(device_) < FramesPerBuffer * 4 * 3;
 #endif
     }
@@ -128,7 +132,8 @@ public:
         }
         return false;
 #else
-        return SDL_QueueAudio(device_, data, static_cast<uint32_t>(frames * 4)) == 0;
+        error_ = SDL_QueueAudio(device_, data, static_cast<uint32_t>(frames * 4)) == 0 ? 0 : 1;
+        return !error_;
 #endif
     }
     uint32_t queuedMs() const {
@@ -202,6 +207,10 @@ struct Engine::Impl {
     bool externalMode = false, externalPaused = false, resumeMusic = false;
     NcmPlaybackStatus suspendedMusic{};
     uint64_t externalFrames = 0;
+    bool recoveringOutput = false;
+    unsigned outputAttempts = 0;
+    uint32_t recoveryPosition = 0;
+    std::chrono::steady_clock::time_point nextOutputRetry{}, healthyOutputSince{};
     Json settings() const {
         try {
             const auto text = storage::read_file(config.directory+"/settings.json");
@@ -241,28 +250,48 @@ struct Engine::Impl {
     }
     void pruneCache() {
         struct Entry { std::filesystem::path path; std::filesystem::file_time_type time; uint64_t bytes; };
+        constexpr size_t Batch = 256;
         std::vector<Entry> files;
-        uint64_t total = 0;
-        std::error_code error;
-        auto directory = std::filesystem::directory_iterator(config.directory + "/cache",error);
-        if (error) return;
-        for (const auto& item : directory) {
-            const auto extension = item.path().extension();
-            if ((extension != ".mp3" && extension != ".audio") || item.path() == currentPath) continue;
-            uint64_t size = item.file_size(error);
-            if (error) { error.clear(); continue; }
-            auto time = item.last_write_time(error);
-            if (error) { error.clear(); continue; }
-            total += size;
-            files.push_back({item.path(),time,size});
-        }
-        std::sort(files.begin(),files.end(),[](const Entry& a,const Entry& b){return a.time < b.time;});
-        for (const auto& item : files) {
-            if (total <= RetainedCacheBytes) break; // Plus at most one 512 MiB downloading track.
-            if (std::filesystem::remove(item.path,error)) {
-                total -= item.bytes;
-                std::filesystem::remove(item.path.string()+".complete",error);
+        files.reserve(Batch);
+        const auto older = [](const Entry& a, const Entry& b) { return a.time < b.time; };
+        // Keep only the oldest bounded batch, even on an SD card containing
+        // thousands of tiny tracks. Rescan only when another eviction is needed.
+        while (running && !interrupt) {
+            files.clear();
+            uint64_t total = 0;
+            std::error_code error;
+            auto directory = std::filesystem::directory_iterator(config.directory + "/cache",error);
+            if (error) return;
+            for (const auto& item : directory) {
+                const auto extension = item.path().extension();
+                if ((extension != ".mp3" && extension != ".audio") || item.path() == currentPath) continue;
+                uint64_t size = item.file_size(error);
+                if (error) { error.clear(); continue; }
+                auto time = item.last_write_time(error);
+                if (error) { error.clear(); continue; }
+                total += size;
+                if (!running || interrupt) return;
+                if (files.size() < Batch) {
+                    files.push_back({item.path(),time,size});
+                    std::push_heap(files.begin(),files.end(),older);
+                } else if (time < files.front().time) {
+                    std::pop_heap(files.begin(),files.end(),older);
+                    files.back() = {item.path(),time,size};
+                    std::push_heap(files.begin(),files.end(),older);
+                }
             }
+            if (total <= RetainedCacheBytes) return;
+            std::sort_heap(files.begin(),files.end(),older);
+            bool removed = false;
+            for (const auto& item : files) {
+                if (total <= RetainedCacheBytes) break; // Plus at most one 512 MiB downloading track.
+                if (std::filesystem::remove(item.path,error)) {
+                    removed = true;
+                    total -= item.bytes;
+                    std::filesystem::remove(item.path.string()+".complete",error);
+                }
+            }
+            if (!removed) return;
         }
     }
 
@@ -271,6 +300,7 @@ struct Engine::Impl {
         snapshot.state = value; snapshot.error_code = error; copyText(snapshot.message, message);
     }
     void closeTrack() {
+        recoveringOutput = false; outputAttempts = 0; healthyOutputSince = {};
         downloadCancel = true;
         if (downloader.joinable()) downloader.join();
         decoder.close();
@@ -520,14 +550,15 @@ struct Engine::Impl {
         }
         if (!input || !decoder.open(readStream, seekStream, tellStream, this)) {
             if (cacheHit) std::remove((cachePath+".complete").c_str());
-            state(NcmPlayback_Error, downloadError ? "Audio download failed" : "Unsupported or damaged MP3/FLAC/AAC", 5);
+            const bool limited = decoder.resource_limited();
+            if (limited) closeTrack();
+            state(NcmPlayback_Error, limited ? "Audio exceeds decoder memory budget" :
+                  downloadError ? "Audio download failed" : "Unsupported or damaged MP3/FLAC/AAC",
+                  limited ? 10 : 5);
             return false;
         }
         decoderOpen = true;
-        if (!sink.open()) {
-            closeTrack();
-            state(NcmPlayback_Error, "Audio output unavailable", 6); return false;
-        }
+        const bool outputReady = sink.open();
         if (decoder.frames()) {
             const uint64_t duration=decoder.frames()*1000/decoder.sample_rate();
             if (duration && duration<UINT32_MAX) {
@@ -538,6 +569,7 @@ struct Engine::Impl {
                 snapshot.duration_ms=duration;
             }
         }
+        if (!outputReady) { recoverOutput(); return true; }
         state(NcmPlayback_Playing, preview ? "Playing preview / 试听" : "Playing");
         nextDiagnostic = {};
         diagnostic("start");
@@ -603,6 +635,7 @@ struct Engine::Impl {
             { std::lock_guard<std::mutex> lock(mutex); snapshot.queue_count=0; }
             state(NcmPlayback_Error,"No queue; select a song in the app",7); return false;
         }
+        std::unique_ptr<FILE,decltype(&std::fclose)> queueFile(file,std::fclose);
         NcmQueueHeader header{};
         bool valid = std::fread(&header,sizeof(header),1,file)==1 &&
             std::memcmp(header.magic,"NCMQUEUE",8)==0 && header.version==NCM_PROTOCOL_VERSION &&
@@ -613,7 +646,7 @@ struct Engine::Impl {
             if (header.count)
                 valid=std::fread(loaded.data(),sizeof(NcmQueueEntry),header.count,file)==header.count;
         }
-        std::fclose(file);
+        queueFile.reset();
         if (!valid) {
             closeTrack(); queue.clear();
             { std::lock_guard<std::mutex> lock(mutex); snapshot.queue_count=0; }
@@ -666,8 +699,53 @@ struct Engine::Impl {
         std::lock_guard<std::mutex> lock(mutex); snapshot.position_ms=target;
         return true;
     }
+    void pauseFailedOutput() {
+        recoveringOutput = false;
+        sink.close();
+        if (externalMode) { externalPaused = true; external.pause(true); }
+        else paused = true;
+        state(NcmPlayback_Paused, "音频设备不可用，按播放重试", 6);
+    }
+    void recoverOutput() {
+        recoveryPosition = getStatus().position_ms;
+        sink.close();
+        healthyOutputSince = {};
+        if (externalMode) external.pause(true); // Discard old live audio during recovery.
+        if (outputAttempts >= 3) { pauseFailedOutput(); return; }
+        recoveringOutput = true;
+        nextOutputRetry = std::chrono::steady_clock::now() + 250ms;
+        state(NcmPlayback_Buffering, "正在恢复音频输出");
+    }
+    void retryOutput() {
+        if (std::chrono::steady_clock::now() < nextOutputRetry) return;
+        ++outputAttempts;
+        if (!sink.open()) {
+            if (outputAttempts >= 3) pauseFailedOutput();
+            else nextOutputRetry = std::chrono::steady_clock::now() + 500ms;
+            return;
+        }
+        if (externalMode) {
+            external.pause(false);
+            externalFrames = static_cast<uint64_t>(recoveryPosition) * SampleRate / 1000;
+        } else if (!seekDecoder(recoveryPosition)) {
+            closeTrack();
+            resumeMusic = !queue.empty();
+            state(NcmPlayback_Paused, "无法恢复播放位置，按播放重试", 6);
+            return;
+        }
+        recoveringOutput = false;
+        healthyOutputSince = std::chrono::steady_clock::now();
+        state(NcmPlayback_Playing, externalMode ? "AirPlay receiving" :
+              preview ? "Playing preview / 试听" : "Playing");
+    }
+    void outputProgress() {
+        if (healthyOutputSince != std::chrono::steady_clock::time_point{} &&
+            std::chrono::steady_clock::now() - healthyOutputSince >= 2s)
+            outputAttempts = 0;
+    }
     void endExternal() {
         if (!externalMode) return;
+        recoveringOutput = false; outputAttempts = 0;
         sink.close(); externalMode = false; externalPaused = false;
         std::lock_guard<std::mutex> lock(mutex);
         const uint32_t volume = snapshot.volume_permille;
@@ -691,28 +769,32 @@ struct Engine::Impl {
                 copyText(snapshot.artist, "CloudTune NX");
             }
             if (sink.open()) state(NcmPlayback_Playing, "AirPlay receiving");
-            else { external.close(); state(NcmPlayback_Error, "AirPlay audio output failed", 6); }
+            else recoverOutput();
             return true;
         }
         if (cmd == ExternalEnd) { endExternal(); return true; }
         if (cmd == ExternalFlush) {
             if (externalMode) {
+                recoveringOutput = false; outputAttempts = 0;
                 sink.close(); externalFrames = 0;
-                if (!externalPaused && !sink.open())
-                    state(NcmPlayback_Error, "AirPlay audio output failed", 6);
-                std::lock_guard<std::mutex> lock(mutex);
-                snapshot.position_ms = 0;
+                { std::lock_guard<std::mutex> lock(mutex); snapshot.position_ms = 0; }
+                external.pause(externalPaused);
+                if (externalPaused) state(NcmPlayback_Paused, "AirPlay locally paused");
+                else if (sink.open()) state(NcmPlayback_Playing, "AirPlay receiving");
+                else recoverOutput();
             }
             return true;
         }
         if (!externalMode) return false;
         if (cmd == NcmCommand_PlayPause || cmd == NcmCommand_Play || cmd == NcmCommand_Pause) {
+            if (recoveringOutput && cmd == NcmCommand_Play) return true;
+            recoveringOutput = false; outputAttempts = 0;
             externalPaused = cmd == NcmCommand_Pause ||
                 (cmd == NcmCommand_PlayPause && !externalPaused);
             external.pause(externalPaused); sink.close();
             if (externalPaused) state(NcmPlayback_Paused, "AirPlay locally paused");
             else if (sink.open()) state(NcmPlayback_Playing, "AirPlay receiving");
-            else state(NcmPlayback_Error, "AirPlay audio output failed", 6);
+            else recoverOutput();
             return true;
         }
         if (cmd == NcmCommand_Seek) return true; // Live audio has no seekable file.
@@ -752,6 +834,7 @@ struct Engine::Impl {
         case NcmCommand_PlayPause:
         case NcmCommand_Play:
         case NcmCommand_Pause:
+            if (recoveringOutput && cmd == NcmCommand_Play) break;
             if (!decoderOpen) {
                 if (cmd != NcmCommand_Pause) {
                     failures=0;
@@ -770,6 +853,7 @@ struct Engine::Impl {
                 break;
             }
             {
+                recoveringOutput = false; outputAttempts = 0;
                 const bool desired=cmd==NcmCommand_Pause || (cmd==NcmCommand_PlayPause && !paused);
                 if (desired && !paused) {
                     // Keep the audible cursor, not the decoder's buffered-ahead
@@ -777,10 +861,12 @@ struct Engine::Impl {
                     // tags after the platform destroys its stopped audio stream.
                     paused=true; sink.close();
                 } else if (!desired && paused) {
-                    if (!seekDecoder(getStatus().position_ms) || !sink.open()) {
-                        closeTrack(); state(NcmPlayback_Error,"Cannot resume audio output",6); break;
+                    if (!seekDecoder(getStatus().position_ms)) {
+                        closeTrack(); resumeMusic = !queue.empty();
+                        state(NcmPlayback_Paused,"无法恢复播放位置，按播放重试",6); break;
                     }
                     paused=false;
+                    if (!sink.open()) { recoverOutput(); break; }
                 }
             }
             state(paused?NcmPlayback_Paused:NcmPlayback_Playing,
@@ -791,21 +877,29 @@ struct Engine::Impl {
         case NcmCommand_Shuffle: { std::lock_guard<std::mutex> lock(mutex); snapshot.shuffle=argument; } break;
         case NcmCommand_Seek:
             if (decoderOpen) {
+                recoveringOutput = false; outputAttempts = 0;
                 sink.close();
                 const uint32_t duration=getStatus().duration_ms;
                 const uint32_t target=duration?std::min(argument,duration):argument;
-                if (!seekDecoder(target) || (!paused && !sink.open())) {
-                    closeTrack(); state(NcmPlayback_Error,"Cannot seek audio output",6);
+                if (!seekDecoder(target)) {
+                    closeTrack(); resumeMusic = !queue.empty();
+                    state(NcmPlayback_Paused,"无法跳转，按播放重试",6);
+                } else if (!paused && !sink.open()) {
+                    recoverOutput();
                 }
             }
             break;
         default: break;
         }
     }
-    void run() {
+    void runLoop() {
         std::array<int16_t, FramesPerBuffer*2> pcm{};
         auto stalledSince=std::chrono::steady_clock::time_point{};
+        auto lastIteration=std::chrono::steady_clock::now();
         while (running) {
+            const auto iteration = std::chrono::steady_clock::now();
+            const bool longGap = iteration - lastIteration > 2s;
+            lastIteration = iteration;
             PendingCommand next{};
             bool hasCommand=false;
             {
@@ -817,6 +911,7 @@ struct Engine::Impl {
             }
             if (hasCommand) {
                 process(next.first,next.second);
+                lastIteration = std::chrono::steady_clock::now();
                 if (next.ticket) {
                     std::lock_guard<std::mutex> lock(mutex);
                     clearCompleted=next.ticket;
@@ -825,13 +920,25 @@ struct Engine::Impl {
                 stalledSince={}; continue;
             }
             if (interrupt) { std::this_thread::sleep_for(2ms); continue; }
+            if (recoveringOutput) {
+                retryOutput();
+                lastIteration = std::chrono::steady_clock::now();
+                std::this_thread::sleep_for(4ms);
+                continue;
+            }
+            if (longGap && getStatus().state == NcmPlayback_Playing &&
+                (decoderOpen || externalMode)) {
+                recoverOutput();
+                stalledSince = {};
+                continue;
+            }
             if (externalMode) {
                 if (!externalPaused && external.active() && !sink.canWrite()) {
                     const auto now = std::chrono::steady_clock::now();
                     if (stalledSince == std::chrono::steady_clock::time_point{}) stalledSince = now;
                     if (sink.error() || now - stalledSince > 5s) {
-                        external.close(); sink.close();
-                        state(NcmPlayback_Error, "AirPlay audio output disconnected", 6);
+                        recoverOutput();
+                        stalledSince = {};
                     }
                     std::this_thread::sleep_for(4ms);
                     continue;
@@ -843,8 +950,9 @@ struct Engine::Impl {
                         static_cast<float>(volume) * externalGain.load() / 1000000.f);
                     if (frames) {
                         if (!sink.write(pcm.data(), frames)) {
-                            external.close(); state(NcmPlayback_Error, "AirPlay audio failed", 6);
+                            recoverOutput();
                         } else {
+                            outputProgress();
                             if (!externalFrames) diagnostic("airplay-first-pcm", pcm.data(), frames);
                             externalFrames += frames;
                             const uint64_t elapsed = externalFrames * 1000 / SampleRate;
@@ -861,18 +969,19 @@ struct Engine::Impl {
             if (decoderOpen && !paused) {
                 if (!sink.canWrite()) {
                     diagnostic("waiting-output");
-                    if (sink.error()) { closeTrack(); state(NcmPlayback_Error,"Audio output disconnected",6); }
+                    if (sink.error()) { recoverOutput(); stalledSince = {}; }
                     else {
                         const auto now=std::chrono::steady_clock::now();
                         if (stalledSince==std::chrono::steady_clock::time_point{}) stalledSince=now;
                         if (now-stalledSince>5s) {
-                            closeTrack(); state(NcmPlayback_Error,"Audio output stalled; track skipped",9);
+                            recoverOutput(); stalledSince = {};
                         } else std::this_thread::sleep_for(4ms);
                     }
                     continue;
                 }
                 stalledSince={};
                 size_t frames=render(pcm.data(),FramesPerBuffer,getStatus().volume_permille);
+                lastIteration = std::chrono::steady_clock::now();
                 if (interrupt || !running) continue;
                 if (!frames) {
                     // Drain the last queued PCM before changing tracks.
@@ -887,15 +996,17 @@ struct Engine::Impl {
                         state(NcmPlayback_Error,"Damaged or truncated audio; track skipped",5);
                     } else { failures=0; advance(false); }
                 } else if (!sink.write(pcm.data(),frames)) {
-                    closeTrack(); state(NcmPlayback_Error,"Audio output failed",6);
+                    recoverOutput();
                 } else {
+                    outputProgress();
                     if (!producedFrames) diagnostic("first-pcm",pcm.data(),frames);
                     producedFrames+=frames;
                     uint64_t milliseconds=producedFrames*1000/SampleRate;
                     std::lock_guard<std::mutex> lock(mutex);
                     snapshot.position_ms=seekBase+static_cast<uint32_t>(milliseconds>sink.queuedMs()?milliseconds-sink.queuedMs():0);
                 }
-            } else if (getStatus().state == NcmPlayback_Error && !queue.empty() && ++failures < queue.size()) {
+            } else if (getStatus().state == NcmPlayback_Error && getStatus().error_code != 10 &&
+                       !queue.empty() && ++failures < queue.size()) {
                 // Bounded skipping prevents an unavailable album spinning forever.
                 closeTrack();
                 std::this_thread::sleep_for(250ms);
@@ -906,6 +1017,16 @@ struct Engine::Impl {
             }
         }
         closeTrack(); sink.close();
+    }
+    void run() {
+        while (running) {
+            try { runLoop(); }
+            catch (const std::bad_alloc&) {
+                external.close(); endExternal();
+                closeTrack();
+                state(NcmPlayback_Error, "内存不足，请选择其他音源后重试", 10);
+            }
+        }
     }
 };
 
@@ -930,6 +1051,10 @@ bool Engine::start() {
                 impl_->closeTrack(); impl_->state(NcmPlayback_Error,error.what(),8);
                 impl_->running=false;
             }
+#ifndef __SWITCH__
+            // std::thread does not run SDL_CreateThread's TLS destructor.
+            SDL_TLSCleanup();
+#endif
         });
     } catch (...) { impl_->running=false; return false; }
     return true;

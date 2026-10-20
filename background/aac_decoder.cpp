@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "aac_decoder.hpp"
+#include "../airplay/codec_limits.hpp"
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -191,7 +192,7 @@ struct AacDecoder::Impl {
     }
 };
 
-AacDecoder::AacDecoder() : impl_(std::make_unique<Impl>()) {}
+AacDecoder::AacDecoder() : impl_(std::make_unique<Impl>()) { cloudtune::audio::configure_limits(); }
 AacDecoder::~AacDecoder() = default;
 bool AacDecoder::open(AudioDecoder::Read read, AudioDecoder::Seek seek,
                        AudioDecoder::Tell tell, void* opaque) {
@@ -217,7 +218,9 @@ bool AacDecoder::open(AudioDecoder::Read read, AudioDecoder::Seek seek,
     s.input->io_open = Impl::deny_external_input;
     s.input->probesize = 65536;
     s.input->max_analyze_duration = AV_TIME_BASE;
-    s.input->max_streams = 16;
+    s.input->max_streams = 4;
+    s.input->max_probe_packets = 64;
+    s.input->max_index_size = 256 * 1024;
     if (avformat_open_input(&s.input, nullptr, nullptr, nullptr) < 0)
         return fail();
     s.io->seekable = AVIO_SEEKABLE_NORMAL;

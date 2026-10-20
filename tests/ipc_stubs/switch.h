@@ -18,12 +18,13 @@ typedef uint64_t SmServiceName;
 #define INVALID_HANDLE 0
 #define Module_Libnx 345
 enum { LibnxError_OutOfMemory=1, LibnxError_BadInput, LibnxError_NotFound,
-       LibnxError_IncompatSysVer };
+       LibnxError_IncompatSysVer, LibnxError_Timeout };
 #define MAKERESULT(module, error) ((Result)((module) | ((error) << 9)))
 #define R_FAILED(value) ((value) != 0)
 #define R_SUCCEEDED(value) ((value) == 0)
 #define KERNELRESULT(name) KernelResult_##name
-enum { KernelResult_TimedOut=0xea01, KernelResult_ConnectionClosed=0xf601 };
+enum { KernelResult_TimedOut=0xea01, KernelResult_ConnectionClosed=0xf601,
+       KernelResult_Cancelled=0xec01 };
 #define CMIF_IN_HEADER_MAGIC 0x49434653u
 #define CMIF_OUT_HEADER_MAGIC 0x4f434653u
 enum { CmifCommandType_Close=2, CmifCommandType_Request=4, CmifCommandType_Control=5 };
@@ -81,6 +82,31 @@ static inline HipcRequest hipcMakeRequest(void* base, HipcMetadata metadata) {
     return (HipcRequest){.data_words=(u32*)((u8*)base+sizeof(header))};
 }
 #define hipcMakeRequestInline(base, ...) hipcMakeRequest(base, (HipcMetadata){ __VA_ARGS__ })
+typedef struct { u32 request_id, data_size, send_pid; } CmifRequestFormat;
+typedef struct { void* data; } CmifRequest;
+static inline CmifRequest cmifMakeRequest(void* base, CmifRequestFormat format) {
+    HipcHeader header = {0};
+    header.type = CmifCommandType_Request;
+    header.num_data_words = (32 + format.data_size + 3) / 4;
+    header.has_special_header = format.send_pid != 0;
+    memcpy(base, &header, sizeof(header));
+    size_t offset = sizeof(header);
+    if (format.send_pid) {
+        const HipcSpecialHeader special = {.send_pid=1};
+        memcpy((u8*)base + offset, &special, sizeof(special));
+        offset += sizeof(special) + 8;
+    }
+    offset = (offset + 15) & ~(size_t)15;
+    const u32 cmif[4] = {CMIF_IN_HEADER_MAGIC, 0, format.request_id, 0};
+    memcpy((u8*)base + offset, cmif, sizeof(cmif));
+    return (CmifRequest){(u8*)base + offset + sizeof(cmif)};
+}
+bool envIsSyscallHinted(unsigned);
+u64 armGetSystemTick(void);
+static inline u64 armTicksToNs(u64 ticks) { return ticks; }
+Result svcSendAsyncRequestWithUserBuffer(Handle*, void*, u64, Handle);
+Result svcConnectToNamedPort(Handle*, const char*);
+_Noreturn void svcExitProcess(void);
 void* armGetTls(void);
 Result svcCloseHandle(Handle handle);
 Result svcAcceptSession(Handle*, Handle);

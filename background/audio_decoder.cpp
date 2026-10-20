@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "audio_decoder.hpp"
 #include "aac_decoder.hpp"
+#include "allocation_budget.hpp"
 #define DR_MP3_NO_STDIO
 #define DR_MP3_IMPLEMENTATION
 #include "vendor/dr_mp3.h"
@@ -14,6 +15,7 @@
 
 namespace netease::playback {
 struct AudioDecoder::Impl {
+    AllocationBudget memory;
     Read read = nullptr;
     Seek seek = nullptr;
     Tell tell = nullptr;
@@ -104,6 +106,7 @@ bool AudioDecoder::open(Read read, Seek seek, Tell tell, void* context) {
     close();
     if (!read || !seek || !tell) return false;
     auto& s = *impl_;
+    s.memory.limited = false;
     s.read = read; s.seek = seek; s.tell = tell; s.context = context;
     unsigned char header[4]{};
     if (read(context, header, sizeof(header)) != sizeof(header)) return false;
@@ -132,16 +135,21 @@ bool AudioDecoder::open(Read read, Seek seek, Tell tell, void* context) {
     if (flac) {
         s.streamStart=prefix;
         if (!seek(context,prefix,Origin::Start)) return false;
-        s.flac = drflac_open(Impl::onRead, Impl::flacSeek, Impl::flacTell, &s, nullptr);
+        const drflac_allocation_callbacks allocation{
+            &s.memory, AllocationBudget::allocate, AllocationBudget::resize, AllocationBudget::release};
+        s.flac = drflac_open(Impl::onRead, Impl::flacSeek, Impl::flacTell, &s, &allocation);
     }
     if (!flac && (adts || mp4)) {
         s.streamStart=prefix;
         if (!seek(context,prefix,Origin::Start)) return false;
         s.aacOpen=s.aac.open(Impl::onRead,Impl::seek64,Impl::tell64,&s);
     }
-    if (!flac && !adts && !mp4 && seek(context, 0, Origin::Start))
+    if (!flac && !adts && !mp4 && seek(context, 0, Origin::Start)) {
+        const drmp3_allocation_callbacks allocation{
+            &s.memory, AllocationBudget::allocate, AllocationBudget::resize, AllocationBudget::release};
         s.mp3Open = drmp3_init(&s.mp3, Impl::onRead, Impl::mp3Seek, Impl::mp3Tell,
-                              nullptr, &s, nullptr) != 0;
+                              nullptr, &s, &allocation) != 0;
+    }
     if ((!s.flac && !s.mp3Open && !s.aacOpen) ||
         (s.flac && s.flac->channels>8) || channels()<1 || channels()>2 || !sample_rate()) {
         close(); return false;
@@ -218,6 +226,7 @@ const char* AudioDecoder::format() const {
     return impl_->flac ? "FLAC" : impl_->mp3Open ? "MP3" :
         impl_->aacOpen ? impl_->aac.format() : "none";
 }
+bool AudioDecoder::resource_limited() const { return impl_->memory.limited; }
 bool AudioDecoder::damaged() const {
     return impl_->damaged || (impl_->aacOpen && impl_->aac.damaged());
 }

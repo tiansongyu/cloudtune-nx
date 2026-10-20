@@ -8,6 +8,9 @@ extern "C" {
 #endif
 Result ncmPlaybackInitialize(void);
 void ncmPlaybackExit(void);
+/* Final exit only, after all client users stop. May terminate the process if
+ * a hung peer still owns an async IPC buffer, preventing unsafe NRO reload. */
+void ncmPlaybackShutdown(void);
 bool ncmPlaybackIsActive(void);
 Result ncmPlaybackGetStatus(NcmPlaybackStatus* status);
 /* LoadQueue starts playback at index after reading NCM_QUEUE_PATH. */

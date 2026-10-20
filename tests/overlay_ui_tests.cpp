@@ -17,6 +17,7 @@ unsigned commands = 0, launches = 0;
 extern "C" {
 Result ncmPlaybackInitialize() { return serviceAvailable ? 0 : 1; }
 void ncmPlaybackExit() {}
+void ncmPlaybackShutdown() {}
 Result ncmPlaybackGetStatus(NcmPlaybackStatus* out) {
     *out = failStatus ? NcmPlaybackStatus{} : response;
     return failStatus ? 1 : 0;

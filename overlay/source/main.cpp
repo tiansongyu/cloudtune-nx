@@ -136,6 +136,7 @@ class PlayerGui : public tsl::Gui {
             connected = false;
         }
         if (!connected) {
+            refresh = now + std::chrono::seconds(2);
             status = {};
             title->setText("后台服务未连接");
             artist->setText("");
@@ -184,7 +185,7 @@ class MusicOverlay : public tsl::Overlay {
         connected = R_SUCCEEDED(ncmPlaybackInitialize());
     }
     void exitServices() override {
-        ncmPlaybackExit();
+        ncmPlaybackShutdown();
         smExit();
     }
     std::unique_ptr<tsl::Gui> loadInitialGui() override {

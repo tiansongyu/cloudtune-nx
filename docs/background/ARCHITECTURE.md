@@ -23,9 +23,23 @@ is unavailable it can run the same `netease::playback::Runtime` in its own
 process. This foreground fallback stops when the application exits.
 The runtime owns both the music engine and the independent AirPlay receiver.
 Connection probing first checks libnx's Atmosphère flag, then uses
-Atmosphère's nonblocking TIPC `HasService` command (65100). It never requests a
-missing custom service from SM, because that request can wait indefinitely.
-Stock/emulated Horizon receives no Atmosphère extension commands.
+Atmosphère's TIPC `HasService` command (65100). Acquisition uses a private SM
+session and asynchronous user-buffer CMIF, bounding the race in which the
+service disappears after that check. Each handshake/status/control request
+has a 150 ms deadline; the acknowledged account-clear barrier allows 5.5 s.
+Disconnected overlays retry every two seconds. Stock/emulated Horizon receives
+no Atmosphère extension commands, and loaders without the required async SVC
+are rejected instead of falling back to an unbounded custom-service request.
+
+Only one aligned 4 KiB IPC page may be pending. A timeout closes the client
+handle without sending a synchronous CMIF Close, clears displayed status and
+never automatically replays a command whose outcome is unknown. The page is
+retained until its completion event signals; late transferred handles are
+closed before reusing it. If a permanently hung peer still owns the page at
+final shutdown, the client exits its process instead of returning that memory
+to an NRO loader. This exceptional path requires restarting the overlay loader
+before opening another overlay. It prevents late kernel writes into reused
+memory; it does not claim to restart a hung background service automatically.
 
 ## Protocol and queue
 
@@ -110,13 +124,31 @@ and the track determine the returned source. New caches use `.audio`, while
 complete legacy `.mp3` caches remain readable. The certificate bundle is
 `config/netease-switch/cacert.pem`.
 
+MP3/FLAC decoder allocations share a per-decoder 4 MiB aggregate budget,
+including allocation headers. AAC/ALAC configure FFmpeg's process-wide
+single-allocation ceiling once at 2 MiB. AAC also limits probing, stream count
+and generic index storage; unusually large container metadata can be rejected.
+These limits do not change the requested music quality or sample-rate support,
+and the FFmpeg ceiling is not a total-process memory limit. Cache eviction
+keeps only 256 candidates at a time. A C++ allocation failure releases the
+active track and queue file, reports an error and leaves the worker available
+for another selection rather than terminating it. The 16 MiB service heap and
+real peak resident memory still require hardware measurements.
+
 Each track owns a fresh audio output session. Seek discards the old session and
 opens a new one, so queued DMA buffer tags cannot cross a seek or track change.
 Pause releases the output session and retains the audible position; resume seeks
 the decoder to that position and opens a new session. Repeated play/pause commands
-are idempotent. Failed output calls or five seconds without a
-released output buffer become a playback error rather than a permanently
-advancing animation with no working audio.
+are idempotent. Failed output calls, five seconds without released buffers, or
+a gap of more than two seconds between playback iterations start recovery.
+Known decoding/seeking work resets that gap timer to avoid repeated recovery
+on a slow seek. Recovery recreates the output session and restores the saved
+audible position. At most three reopen attempts are allowed until output has
+worked for two seconds; persistent failures pause the same track with a retry
+message instead of skipping songs. User playback controls can retry or cancel
+recovery. AirPlay drops buffered/live PCM during recovery and resumes at the
+live edge. These are recovery mechanisms, not evidence that every firmware's
+sleep or output-route transition has been tested.
 
 For diagnostics, set `"diagnostics": true` in `settings.json` before starting
 the engine. `audio.log` records sample rate, produced frames, queued duration,
@@ -200,6 +232,14 @@ Retrieved 2026-10-20:
   service registration and CMIF client initialization.
 - [Atmosphère SM user interface](https://github.com/Atmosphere-NX/Atmosphere/blob/master/libraries/libstratosphere/include/stratosphere/sm/impl/sm_user_interface.hpp):
   nonblocking service availability command 65100.
+- [libnx kernel calls](https://github.com/switchbrew/libnx/blob/v4.12.0/nx/include/switch/kernel/svc.h):
+  asynchronous user-buffer requests and their completion events.
+- [Atmosphère server session](https://github.com/Atmosphere-NX/Atmosphere/blob/master/libraries/libmesosphere/source/kern_k_server_session.cpp):
+  request completion and client-close behavior. Closing a client does not
+  immediately cancel a request already received by the server.
+- [nx-ovlloader permissions](https://github.com/WerWolv/nx-ovlloader/blob/master/ovll.json):
+  the upstream process permits `SendAsyncRequestWithUserBuffer` (SVC `0x23`);
+  the client also checks the active loader's syscall hint at runtime.
 - [dr_mp3](https://github.com/mackron/dr_libs/blob/master/dr_mp3.h):
   streaming read callbacks must fill the requested size unless at EOF.
 - [libtesla](https://github.com/WerWolv/libtesla): standalone overlay lifecycle.

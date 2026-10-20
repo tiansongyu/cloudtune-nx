@@ -110,3 +110,22 @@ No additional high-confidence parser, transferred-handle or client defect was
 found in this pass. Service discovery races, resident memory under a real
 overlay loader, game mixing, sleep/wake and SD power loss remain hardware
 acceptance items. Host tests and cross-compilation do not establish them.
+
+## Background failure handling — v0.2.2
+
+| Risk | Change | Remaining boundary |
+| --- | --- | --- |
+| Overlay blocked inside synchronous IPC | Use one aligned asynchronous request page and bounded completion waits, including private SM registration/acquisition. Validate replies, close late handles and back off reconnects. Ordinary requests wait at most 150 ms each; the account-clear barrier retains 5.5 seconds. | Trusted system discovery/launch calls are unchanged. A permanently outstanding request requires process exit at final teardown; an overlay loader restart is then necessary. |
+| Background memory exhaustion | Bound MP3/FLAC aggregate decoder allocations, FFmpeg individual allocations and retained eviction candidates. Catch worker allocation failures, release the active track and preserve command handling. Own the queue file with RAII. | FFmpeg's cap is not an aggregate budget. Peak usage in the fixed 16 MiB service heap still needs measurement on hardware. Oversized metadata can be rejected. |
+| Output loss or suspension leaves silence / skips songs | Recreate failed or stalled output sessions with a bounded retry count, restoring the audible music position. Persistent failure pauses the same track for manual retry. Drop stale AirPlay PCM. | The host delay/device faults exercise recovery logic, not real firmware suspend or game mixing. |
+
+The new failure regression rejects the old engine and passes the repaired
+engine. Full native and UBSan suites pass 23 checks each. Focused ASan/UBSan
+and leak checks also pass after fixing SDL TLS cleanup for the desktop audio
+worker. These tests are part of CTest and therefore the existing host/UBSan
+Actions jobs; no separate manual test invocation is required in CI.
+
+Kernel request-lifetime decisions were checked against libnx and Atmosphère
+source, linked in [the architecture notes](background/ARCHITECTURE.md#primary-references).
+The detailed test limits and local evidence paths are in
+[validation](VALIDATION.md#bounded-ipc-resource-limits-and-output-recovery--v022).

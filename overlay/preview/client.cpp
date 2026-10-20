@@ -169,6 +169,7 @@ void ncmPlaybackExit(void) {
     // This client never owns the independently running playback process.
     active.store(false);
 }
+void ncmPlaybackShutdown(void) { ncmPlaybackExit(); }
 
 bool ncmPlaybackIsActive(void) { return active.load(); }
 

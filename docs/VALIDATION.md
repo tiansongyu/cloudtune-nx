@@ -450,3 +450,48 @@ loading, Chinese shared fonts, game BGM, sleep/wake and long-duration resource
 use. The release workflow runs the tag's complete host and UBSan suites, builds
 all three components, verifies the five archives/manifests and checks uploaded
 bytes before publication.
+
+## Bounded IPC, resource limits and output recovery — v0.2.2
+
+This pass addresses the three implementation risks identified after v0.2.1:
+a nonresponsive service blocking the overlay, excessive decoder/cache
+allocations exhausting the background heap, and audio output loss causing
+silence or unintended queue advancement.
+
+| Check | Observed result |
+| --- | --- |
+| Complete native validation | 23/23 CTest checks passed; the host script also passed independent XEAPI verification and generated local/HTTPS MP3 playback |
+| Complete UBSan validation | 23/23 passed with immediate failure on undefined behavior |
+| Actual Switch IPC client | Production request/client code passed injected handshake, timeout, cancelled wait, late response, malformed response, transferred-handle and unsupported-syscall cases |
+| Pending request lifetime | 100 retries neither submitted another request nor modified the pending page; late handles were closed. A child-process test verified process exit on final shutdown with an outstanding request |
+| Allocation bounds | Checked aggregate accounting, overflow, failed resize and FFmpeg's single-allocation cap. An actual 8 MiB FLAC seek table was rejected; the same decoder subsequently read a generated 96 kHz FLAC |
+| Worker survival | Injecting a queue allocation failure preserved descriptor counts, reported a recoverable memory error and allowed the next queue load. The pre-fix engine fails this new regression |
+| Output recovery | Injected device loss, failed opens/writes, unreleased buffers and a 2.1-second scheduling gap. Checked bounded retries, the same track/position, explicit retry, cancellation, fresh AirPlay PCM and FLUSH during recovery |
+| ASan / UBSan / leak checking | Both focused tests passed, including all output/resource scenarios. The first instrumented run found 220 bytes of SDL thread-local allocations retained after worker exit; explicit SDL TLS cleanup fixed the leak |
+| Switch components | Docker cross-compiles the NRO, background ExeFS and OVL; package checks verify both NACP versions and matching AArch64 symbols |
+
+The IPC fixture replaces kernel calls and advances a simulated clock. It
+verifies the requested deadline and page ownership; it is not measurement
+of a real Horizon scheduler. The audio fixture uses generated music, temporary
+profiles and SDL dummy output. The sleep case delays the worker rather than
+suspending a console. No visible desktop, real account or live iPhone session
+was used. No new emulator or physical-console execution is claimed here.
+
+MP3/FLAC have a 4 MiB aggregate decoder budget. FFmpeg has a 2 MiB
+**single-allocation** cap, not a total-process bound. Normal source quality is
+unchanged; unusually large metadata may be refused. Cache scans retain at
+most 256 candidates, but this pass does not benchmark large real SD directories.
+
+One asynchronous IPC page can remain owned by the kernel after a timeout.
+Final shutdown with a permanently pending request exits the process rather
+than returning its memory to the loader. The overlay loader must then be
+restarted. Timed-out control commands are not automatically replayed.
+Real firmware/loader combinations, games running alongside the service,
+sleep/wake, output-route changes and peak resident memory still need hardware
+acceptance; see [the test matrix](HARDWARE_TESTING.md).
+
+Ignored local evidence is retained under
+`build/validation/overlay-hardening/`: `host.log`, `final-host.log`,
+`final-ubsan.log`, `asan.log`, `before-regression.log`, `flush-before.log` and
+`final-switch-build.log`. Build provenance and generated package manifests
+record the exact source revision and component hashes.
