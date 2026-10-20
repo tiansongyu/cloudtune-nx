@@ -28,6 +28,7 @@ COMPONENT_PATHS = {
     "overlay": ("switch/.overlays/CloudTune.ovl", "symbols/overlay/CloudTune.elf"),
 }
 FORBIDDEN_PARTS = {".runtime", ".git", "cookies.txt", "cookies.txt.bak", "settings.json",
+                   "accounts.json", "accounts.json.bak", "accounts.json.tmp", "accounts.json.new",
                    "queue.nsq", "queue.nsq.bak", "userdata", "credentials", ".env"}
 FFMPEG_MANIFEST = "airplay/vendor/ffmpeg-source.json"
 FFMPEG_LICENSES = ("COPYING.LGPLv2.1", "COPYING.LGPLv3", "LICENSE.md")
@@ -127,8 +128,9 @@ def verify_third_party_docs(archive, files):
                 f"Packaged FFmpeg license differs from pinned source: {name}")
     recipe = archive.read(prefix + "scripts/setup-airplay-codec.sh")
     require(b"airplay/vendor/ffmpeg-source.json" in recipe and
-            b"--enable-decoder=alac" in recipe,
-            "Missing ALAC build recipe or source manifest integration")
+            b"--enable-decoder=alac,aac" in recipe and
+            b"--enable-demuxer=aac,mov" in recipe and b"--disable-network" in recipe,
+            "Missing AAC / ALAC build recipe or source manifest integration")
     for name in SHAIRPORT_FILES:
         require(archive.read(name) == archive.read(prefix + name) ==
                 archive.read("licenses/" + name),

@@ -22,6 +22,7 @@ Result ncmPlaybackSeek(uint32_t milliseconds);
 Result ncmPlaybackSetRepeat(NcmRepeatMode mode);
 Result ncmPlaybackSetShuffle(bool enabled);
 Result ncmPlaybackStop(void);
+Result ncmPlaybackClearQueue(void);
 /* Separate tool commands leave NcmPlaybackStatus and the overlay ABI intact. */
 Result ncmAirplayGetStatus(NcmAirplayStatus* status);
 Result ncmAirplaySetEnabled(bool enabled);

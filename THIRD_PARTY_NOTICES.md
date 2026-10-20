@@ -44,18 +44,20 @@ does not change upstream names, attributions or license terms.
 | Noto Sans CJK | SIL Open Font License, locally extracted SC face | `resources/font/NOTO-LICENSE.txt` |
 | DejaVu Sans and derived text controller hints | Bitstream Vera license / DejaVu public-domain changes | `resources/font/DEJAVU-LICENSE.txt` |
 | Material Icons | Apache-2.0 | `resources/material/LICENSE.txt` |
+| Adapted NetEase Cloud Music GTK vector icon | GPL-3.0-or-later; name/mark remain their owner's | `resources/icon/NOTICE.md` |
 | Mozilla CA certificate bundle | MPL-2.0 | `resources/certs/` |
-| libtesla and dr_mp3 | GPL-2.0 / MIT-0 and embedded notices | [Background notices](background/THIRD_PARTY_NOTICES.md) |
+| libtesla, dr_mp3 and dr_flac | GPL-2.0 / MIT-0 and embedded notices | [Background notices](background/THIRD_PARTY_NOTICES.md) |
 | Shairport Sync compatibility key and protocol reference | MIT; upstream combined notice retained | `airplay/vendor/SHAIRPORT-LICENSE`, `airplay/vendor/shairport_rsa_key.h` |
-| FFmpeg, pinned ALAC-only libavcodec / libavutil build | LGPL-2.1-or-later and upstream component notices | `docs/licenses/FFmpeg-LICENSE.md`, `docs/licenses/FFmpeg-COPYING.LGPLv2.1`, `docs/licenses/FFmpeg-COPYING.LGPLv3` |
+| FFmpeg, pinned AAC / ALAC libavcodec, libavformat / libavutil build | LGPL-2.1-or-later and upstream component notices | `docs/licenses/FFmpeg-LICENSE.md`, `docs/licenses/FFmpeg-COPYING.LGPLv2.1`, `docs/licenses/FFmpeg-COPYING.LGPLv3` |
 
-The AirPlay build statically links the ALAC-only FFmpeg libraries produced by
+The audio build statically links the limited AAC / ALAC FFmpeg libraries produced by
 `scripts/setup-airplay-codec.sh`. The single
 [FFmpeg source manifest](airplay/vendor/ffmpeg-source.json) records the exact
 version, official archive URL, SHA-256, release-signing fingerprint and license
 filenames. The build recipe, packager and package verifier read that manifest.
-The recipe enables only the ALAC decoder and disables FFmpeg networking, programs and
-unneeded libraries. GPL, version-3-only and nonfree configure options are not
+The recipe enables AAC / ALAC decoders, the AAC parser and AAC / MOV demuxers.
+It disables FFmpeg networking, protocol handlers, programs, video decoding and
+unneeded libraries. AirPlay uses ALAC; file playback uses the custom-stream AAC path. GPL, version-3-only and nonfree configure options are not
 enabled. The complete upstream license overview and LGPL texts are retained
 under `docs/licenses/`; retaining LGPLv3 also preserves the upstream
 distribution's supplied license texts, not an additional configure option.

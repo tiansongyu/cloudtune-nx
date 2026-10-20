@@ -10,6 +10,9 @@ if [[ "${1:-}" == "--image" ]] || ! docker image inspect "$image" >/dev/null 2>&
     [[ "${1:-}" != "--image" ]] || exit 0
 fi
 docker run --rm --user "$(id -u):$(id -g)" \
-    -e BUILD_JOBS="$jobs" -v "$repo_root:/workspace" -w /workspace \
+    -e BUILD_JOBS="$jobs" \
+    -e SWITCH_BUILD_DIR="${SWITCH_BUILD_DIR:-build/switch}" \
+    -e OVERLAY_BUILD_DIR="${OVERLAY_BUILD_DIR:-build/overlay}" \
+    -v "$repo_root:/workspace" -w /workspace \
     "$image" bash scripts/in-container-build.sh "$@" \
     2>&1 | tee "$repo_root/build/validation/docker-build.log"

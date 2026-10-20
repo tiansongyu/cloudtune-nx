@@ -15,7 +15,7 @@
 namespace netease {
 namespace {
 const std::vector<std::string> methods = {
-    "fetch_xeapi_public_key", "login", "login_cellphone", "captcha", "login_qr_create",
+    "fetch_xeapi_public_key", "login_qr_create",
     "login_qr_check", "login_status", "logout", "daily_task", "user_song_id_list",
     "user_song_list", "album_sublist", "user_cloud_disk", "song_list_detail",
     "songs_detail", "songs_url", "songs_url_v1", "recommend_resource", "recommend_songs",
@@ -94,26 +94,7 @@ RequestSpec plan_request(const std::string& method, Json args) {
         } catch (const std::invalid_argument&) { throw ApiError("Pagination must be numeric"); }
           catch (const std::out_of_range&) { throw ApiError("Pagination is too large"); }
     };
-    if (method == "login") {
-        const auto username = required(args, "username");
-        const bool phone = username.size() == 11 &&
-            std::all_of(username.begin(), username.end(), [](char c){ return c >= '0' && c <= '9'; });
-        r.path = phone ? "/weapi/login/cellphone" : "/weapi/login";
-        p[phone ? "phone" : "username"] = username;
-        // Public C++ interface accepts a password, not a pre-hashed password.
-        p["password"] = args.contains("password_md5") ? required(args, "password_md5") :
-            crypto::md5(required(args, "password"));
-        p["rememberLogin"] = "true";
-        if (!phone) p["clientToken"] = "1_jVUMqWEPke0/1/Vu56xCmJpo5vP1grjn_SOVVDzOc78w8OKLVZ2JH7IfkjSXqgfmh";
-    } else if (method == "login_cellphone") {
-        r.path = "/weapi/w/login/cellphone";
-        p = {{"phone", required(args, "phone")}, {"countrycode", opt(args, "ctcode", "86")},
-             {"type", "1"}, {"https", "true"}, {"remember", "true"}, {"captcha", required(args, "captcha")}};
-    } else if (method == "captcha") {
-        r.path = "/weapi/sms/captcha/sent";
-        p = {{"cellphone", required(args, "phone")}, {"ctcode", opt(args, "ctcode", "86")},
-             {"secrete", "music_middleuser_pclogin"}};
-    } else if (method == "login_qr_create") {
+    if (method == "login_qr_create") {
         r.path = "/weapi/login/qrcode/unikey"; p["type"] = "1";
     } else if (method == "login_qr_check") {
         r.path = "/weapi/login/qrcode/client/login";
@@ -252,14 +233,18 @@ struct ApiClient::Impl {
             curl_easy_cleanup(curl);
         }
     }
-    void flush() {
-        if (!config.persist_cookies || config.cookie_file.empty()) return;
+    std::string export_cookies() {
         curl_slist* raw = nullptr;
         if(curl_easy_getinfo(curl,CURLINFO_COOKIELIST,&raw)!=CURLE_OK)
             throw ApiError("Cannot export the login session");
         std::unique_ptr<curl_slist,decltype(&curl_slist_free_all)> list(raw,curl_slist_free_all);
         std::string serialized="# Netscape HTTP Cookie File\n# CloudTune NX session. Keep private.\n\n";
         for(auto* node=list.get();node;node=node->next)serialized+=std::string(node->data)+"\n";
+        return serialized;
+    }
+    void flush() {
+        if (!config.persist_cookies || config.cookie_file.empty()) return;
+        auto serialized=export_cookies();
         // Avoid unnecessary SD writes for unchanged cookies and cover downloads.
         if(serialized==saved_cookies&&std::filesystem::exists(config.cookie_file))return;
         storage::write_file(config.cookie_file,serialized);
@@ -272,6 +257,9 @@ struct ApiClient::Impl {
         // pathname visible to another process. A real logout writes a nonempty
         // header-only jar, so retaining the last snapshot here cannot undo it.
         if(serialized.empty()&&!saved_cookies.empty())return;
+        import_cookies(serialized);
+    }
+    void import_cookies(const std::string& serialized) {
         curl_easy_setopt(curl,CURLOPT_COOKIELIST,"ALL");
         std::istringstream input(serialized);
         std::string line;
@@ -280,7 +268,7 @@ struct ApiClient::Impl {
             if(line.empty()||(line[0]=='#'&&line.rfind("#HttpOnly_",0)!=0))continue;
             curl_easy_setopt(curl,CURLOPT_COOKIELIST,line.c_str());
         }
-        saved_cookies=std::move(serialized);
+        saved_cookies=serialized;
     }
     std::string cookie(const std::string& name) {
         curl_slist* list = nullptr;
@@ -521,5 +509,14 @@ void ApiClient::flush_cookies() { std::lock_guard<std::mutex> lock(impl_->mutex)
 void ApiClient::clear_session() {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     curl_easy_setopt(impl_->curl, CURLOPT_COOKIELIST, "ALL"); impl_->xeapi_key = nullptr; impl_->flush();
+}
+std::string ApiClient::session_cookies() {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->export_cookies();
+}
+void ApiClient::adopt_session(const std::string& cookies) {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->import_cookies(cookies);
+    impl_->xeapi_key = nullptr;
 }
 } // namespace netease

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# One audited source release for host and Switch; only the ALAC decoder is built.
+# One audited source release for host and Switch; ALAC/AAC audio only.
 # The official release signature was checked against the fingerprint recorded in
 # airplay/vendor/ffmpeg-source.json. That manifest is the single source pin.
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -48,9 +48,10 @@ if [[ ! -f "$source_dir/configure" ]]; then
     tar -xJf "$archive" -C "$deps/src"
 fi
 flags=(
-    "--prefix=$prefix" --disable-autodetect --disable-everything --enable-decoder=alac
+    "--prefix=$prefix" --disable-autodetect --disable-everything --enable-decoder=alac,aac
+    --enable-avformat --enable-demuxer=aac,mov --enable-parser=aac
     --disable-programs --disable-doc --disable-debug --disable-network
-    --disable-avformat --disable-avdevice --disable-avfilter --disable-swscale
+    --disable-avdevice --disable-avfilter --disable-swscale
     --disable-swresample --disable-postproc --disable-pthreads --disable-w32threads
     --disable-os2threads --disable-asm --disable-neon --disable-runtime-cpudetect
     --enable-small --enable-static --disable-shared --enable-pic
@@ -77,8 +78,9 @@ identity="$(printf '%s\n' "$expected" "$recipe" "$prefix" "${flags[@]}" "$("$com
     sha256sum | cut -d' ' -f1)"
 if [[ -f "$prefix/.cloudtune-codec-build" &&
       "$(cat "$prefix/.cloudtune-codec-build")" == "$identity" &&
-      -f "$prefix/lib/libavcodec.a" && -f "$prefix/lib/libavutil.a" ]]; then
-    printf 'ALAC-only FFmpeg %s (%s): cached in %s\n' "$version" "$platform" "$prefix"
+      -f "$prefix/lib/libavformat.a" && -f "$prefix/lib/libavcodec.a" &&
+      -f "$prefix/lib/libavutil.a" ]]; then
+    printf 'ALAC/AAC FFmpeg %s (%s): cached in %s\n' "$version" "$platform" "$prefix"
     exit 0
 fi
 cd "$build_dir"
@@ -92,4 +94,4 @@ mkdir -p "$prefix/share/licenses/ffmpeg"
 cp "$source_dir/COPYING.LGPLv2.1" "$source_dir/COPYING.LGPLv3" "$source_dir/LICENSE.md" \
     "$prefix/share/licenses/ffmpeg/"
 printf '%s\n' "$identity" > "$prefix/.cloudtune-codec-build"
-printf 'ALAC-only FFmpeg %s (%s) installed in %s\n' "$version" "$platform" "$prefix"
+printf 'ALAC/AAC FFmpeg %s (%s) installed in %s\n' "$version" "$platform" "$prefix"

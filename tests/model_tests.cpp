@@ -2,6 +2,7 @@
 // Deterministic regression tests for navigation cancellation and worker ordering.
 #include "netease/model.hpp"
 #include "netease/playback_protocol.h"
+#include "netease/storage.hpp"
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -73,6 +74,30 @@ struct ModelTestAccess {
         std::lock_guard<std::mutex> lock(m.mutex_);
         m.pending_visible_ = 0;
         m.state_.busy = false;
+    }
+    static void private_state(Model &m) {
+        playlist(m);
+        std::lock_guard<std::mutex> lock(m.mutex_);
+        m.state_.likes.insert(444);
+        m.state_.lyrics.push_back({0, "previous account lyric"});
+        m.state_.items = m.state_.queue;
+        m.state_.subscribed = true;
+    }
+    static std::pair<uint64_t, uint64_t> qr(Model &m) {
+        std::lock_guard<std::mutex> lock(m.mutex_);
+        m.state_.qr_key = "synthetic-test-key";
+        m.state_.qr_url = "https://example.invalid/qr";
+        return {m.qr_generation_, m.account_generation_};
+    }
+    static void authorize(Model &m, std::pair<uint64_t, uint64_t> token) {
+        m.activate_qr(token.first, token.second, 33, "扫码账号",
+                      "# Netscape HTTP Cookie File\n.music.163.com\tTRUE\t/\tTRUE\t0\tMUSIC_U\tsynthetic-qr\n");
+    }
+    static void expired_account(Model &m) {
+        std::lock_guard<std::mutex> lock(m.mutex_);
+        m.state_.user_id = 0;
+        m.state_.nickname = "未登录";
+        m.state_.likes.clear();
     }
 };
 } // namespace netease
@@ -237,12 +262,139 @@ static void queue_recovery_tests(const std::filesystem::path &directory) {
         require(model.snapshot().queue.size() == 2,
                 "Interrupted Horizon rename did not recover from queue backup");
     }
+    write_bytes(path, queue_bytes(0));
+    {
+        Model model(directory.string());
+        ModelTestAccess::restore_queue(model);
+        require(model.snapshot().queue.empty(),
+                "Empty queue tombstone restored another account's backup queue");
+    }
+}
+static void account_model_tests(const std::filesystem::path& directory) {
+    const auto jar = [](const char* value) {
+        return "# Netscape HTTP Cookie File\n.music.163.com\tTRUE\t/\tTRUE\t0\tMUSIC_U\t" +
+               std::string(value) + "\n";
+    };
+    {
+        AccountStore store(directory.string());
+        store.save(11, "甲", jar("synthetic-alice"));
+        store.save(22, "乙", jar("synthetic-bob"), false);
+    }
+    Model model(directory.string());
+    require(model.snapshot().user_id == 11 && model.snapshot().accounts.size() == 2,
+            "Model did not restore saved active identity offline");
+    ModelTestAccess::private_state(model);
+    int barriers = 0;
+    model.set_account_change_callback([&] { ++barriers; });
+    Gate gate;
+    std::promise<void> entered;
+    auto future = entered.get_future();
+    ModelTestAccess::enqueue(model, [&entered, f = gate.future] {
+        entered.set_value();
+        f.wait();
+    }, false);
+    ready(future);
+    bool stale_ran = false;
+    ModelTestAccess::enqueue(model, [&] { stale_ran = true; });
+    model.switch_account(22);
+    gate.release();
+    idle(model);
+    auto state = model.snapshot();
+    require(!stale_ran && barriers == 1 && state.user_id == 22 && state.nickname == "乙",
+            "Account switch executed stale requests or failed the playback barrier");
+    require(state.items.empty() && state.queue.empty() && state.likes.empty() &&
+                state.lyrics.empty() && !state.collection && !state.subscribed &&
+                ModelTestAccess::history_size(model) == 0,
+            "Account switch leaked previous account view state");
+    require(storage::read_file((directory / "cookies.txt").string()).find("synthetic-bob") != std::string::npos,
+            "Model did not publish the selected session");
+    ModelTestAccess::enqueue(model, [&] {
+        // Emulate a service response rotating its in-memory cookie, with no
+        // actual HTTP request. The worker must commit it without a later switch.
+        model.api().adopt_session(jar("synthetic-bob-refreshed"));
+    });
+    idle(model);
+    require(storage::read_file((directory / "cookies.txt").string()).find("synthetic-bob-refreshed") != std::string::npos &&
+                AccountStore(directory.string()).active_cookies().find("synthetic-bob-refreshed") != std::string::npos,
+            "Worker completion did not persist rotated account cookies");
+
+    model.set_account_change_callback([] { throw std::runtime_error("Synthetic playback reset failure"); });
+    model.switch_account(11);
+    idle(model);
+    require(model.snapshot().user_id == 22 && !model.snapshot().error.empty() &&
+                AccountStore(directory.string()).active_user_id() == 22,
+            "Failed playback barrier changed active credentials");
+    model.set_account_change_callback([&] { ++barriers; });
+    model.remove_account(11);
+    idle(model);
+    require(model.snapshot().user_id == 22 && model.snapshot().accounts.size() == 1 && barriers == 1,
+            "Removing an inactive account disrupted playback");
+
+    // A completed authorization arriving after B/cancel must not publish its jar.
+    auto token = ModelTestAccess::qr(model);
+    model.cancel_qr();
+    ModelTestAccess::enqueue(model, [&] { ModelTestAccess::authorize(model, token); });
+    idle(model);
+    require(model.snapshot().user_id == 22 && model.snapshot().qr_url.empty() &&
+                model.snapshot().accounts.size() == 1,
+            "Cancelled QR authorization changed the active account");
+
+    // Cancellation while waiting for the playback reset wins over authorization.
+    Gate barrier_gate;
+    std::promise<void> barrier_entered;
+    auto barrier_future = barrier_entered.get_future();
+    model.set_account_change_callback([&] {
+        barrier_entered.set_value();
+        barrier_gate.future.wait();
+    });
+    token = ModelTestAccess::qr(model);
+    ModelTestAccess::enqueue(model, [&] { ModelTestAccess::authorize(model, token); });
+    ready(barrier_future);
+    model.cancel_qr();
+    barrier_gate.release();
+    idle(model);
+    require(model.snapshot().user_id == 22 && model.snapshot().accounts.size() == 1,
+            "QR cancellation during playback barrier activated a stale account");
+    model.set_account_change_callback([&] { ++barriers; });
+    token = ModelTestAccess::qr(model);
+    ModelTestAccess::enqueue(model, [&] { ModelTestAccess::authorize(model, token); });
+    idle(model);
+    require(model.snapshot().user_id == 33 && model.snapshot().accounts.size() == 2 &&
+                model.snapshot().qr_key.empty(),
+            "Successful QR authorization was not saved and activated");
+    model.remove_account(33);
+    idle(model);
+    require(model.snapshot().user_id == 0 && model.snapshot().accounts.size() == 1 &&
+                model.snapshot().queue.empty(),
+            "Removing active account silently selected another identity");
+    model.switch_account(22);
+    idle(model);
+    ModelTestAccess::expired_account(model);
+    Gate expired_gate;
+    std::promise<void> expired_entered;
+    auto expired_future = expired_entered.get_future();
+    ModelTestAccess::enqueue(model, [&expired_entered, f = expired_gate.future] {
+        expired_entered.set_value();
+        f.wait();
+    }, false);
+    ready(expired_future);
+    bool expired_job_ran = false;
+    ModelTestAccess::enqueue(model, [&] { expired_job_ran = true; });
+    const int before_removal = barriers;
+    model.remove_account(22);
+    expired_gate.release();
+    idle(model);
+    require(!expired_job_ran && barriers == before_removal + 1 &&
+                model.snapshot().user_id == 0 && model.snapshot().accounts.empty(),
+            "Removing a server-expired active session retained stale account requests");
+    model.stop();
 }
 int main() {
     try {
         const auto directory = std::filesystem::temp_directory_path() /
                                ("netease-model-test-" + std::to_string(getpid()));
         queue_recovery_tests(directory / "queue-recovery");
+        account_model_tests(directory / "accounts");
         {
             Model model(directory.string());
             // Gates are destroyed before model, so failures cannot strand the worker.
@@ -386,7 +538,7 @@ int main() {
                     "Shutdown save failure was neither handled nor reported");
         } // All destructors must tolerate that persistence failure too.
         std::filesystem::remove_all(directory);
-        std::cout << "Model FIFO / navigation / queue recovery / stale metadata / shutdown tests "
+        std::cout << "Model FIFO / navigation / queue recovery / account isolation / QR cancellation / stale metadata / shutdown tests "
                      "passed\n";
         return 0;
     } catch (const std::exception &error) {

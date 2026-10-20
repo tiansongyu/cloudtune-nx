@@ -24,13 +24,16 @@ CLOUDTUNE_BUILD_STARTED_COMMIT="$(git rev-parse HEAD)"
 export CLOUDTUNE_BUILD_STARTED_DIRTY=false
 [[ -z "$(git status --porcelain)" ]] || CLOUDTUNE_BUILD_STARTED_DIRTY=true
 ./scripts/setup-airplay-codec.sh switch
-cmake -S . -B build/switch -G Ninja -DPLATFORM_SWITCH=ON \
+switch_build="${SWITCH_BUILD_DIR:-build/switch}"
+overlay_build="${OVERLAY_BUILD_DIR:-build/overlay}"
+export SWITCH_BUILD_DIR="$switch_build" OVERLAY_BUILD_DIR="$overlay_build"
+cmake -S . -B "$switch_build" -G Ninja -DPLATFORM_SWITCH=ON \
     -DCMAKE_BUILD_TYPE=Release "$@"
-cmake --build build/switch --target CloudTune.nro cloudtune-background-package \
+cmake --build "$switch_build" --target CloudTune.nro cloudtune-background-package \
     --parallel "${BUILD_JOBS:-8}"
 # Background service and overlay are separate processes and separate binaries.
 if [[ -f overlay/Makefile ]]; then
-    make -C overlay OUTPUT_DIR="$(pwd)/build/overlay" -j"${BUILD_JOBS:-8}"
+    make -C overlay OUTPUT_DIR="$(realpath -m "$overlay_build")" -j"${BUILD_JOBS:-8}"
 fi
 python3 - <<'PY'
 import importlib.util, json, os, pathlib, re, subprocess, sys
@@ -39,7 +42,8 @@ spec = importlib.util.spec_from_file_location("package_verifier", "scripts/verif
 verifier = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verifier)
 version = re.search(r"project\(CloudTuneNX VERSION ([0-9.]+)", pathlib.Path("CMakeLists.txt").read_text()).group(1)
-_, components = verifier.validate_build("build/switch", "build/switch/background", "build/overlay", version)
+build = pathlib.Path(os.environ["SWITCH_BUILD_DIR"])
+_, components = verifier.validate_build(build, build / "background", os.environ["OVERLAY_BUILD_DIR"], version)
 commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip())
 dirty = dirty or os.environ["CLOUDTUNE_BUILD_STARTED_DIRTY"] == "true"

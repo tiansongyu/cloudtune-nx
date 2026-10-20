@@ -39,7 +39,7 @@ int main(int argc, char**) {
         rejects([] { crypto::unbase64("$$$$"); });
 
         const auto all = api_methods();
-        require(all.size() == 49, "API catalog coverage changed");
+        require(all.size() == 46, "API catalog coverage changed");
         require(std::set<std::string>(all.begin(), all.end()).size() == all.size(), "Duplicate API methods");
         const Json args = {{"id", 347230}, {"songid", 347230}, {"song_id", 347230}, {"sid", 347230},
             {"pid", 3778678}, {"uid", 1}, {"rid", 1}, {"ids", {347230}}, {"key", "test"},
@@ -51,7 +51,8 @@ int main(int argc, char**) {
             require(plan.path.rfind("/", 0) == 0 && plan.params.is_object(), "Malformed request plan");
         }
         require(plan_request("songs_detail", args).params["c"] == R"([{"id":347230}])", "Song detail JSON encoding mismatch");
-        require(plan_request("login", args).params["password"] == crypto::md5("test"), "Password hashing mismatch");
+        for (const auto* removed : {"login", "login_cellphone", "captcha"})
+            rejects([&] { plan_request(removed, args); });
         require(plan_request("search_lyrics", args).params["type"] == "1006", "Search alias mismatch");
         require(plan_request("top_song_list_highquality", {{"lasttime", 1720000000123ULL}}).params["lasttime"] == "1720000000123",
                 "Pagination timestamp was truncated");

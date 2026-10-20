@@ -4,7 +4,7 @@
 
 来源：`netease-cloud-music-gtk` 2.5.4 的 `Cargo.toml` 锁定了 [netease-cloud-music-api 2.2.0](https://github.com/gmg137/netease-cloud-music-api/tree/2.2.0)，commit `73ab46e5351fd3c31b67709ee1b4b918205b9e3e`。接口来自该开源客户端的一手代码，并非网易公开且保证兼容的商业 API。
 
-范围：**49 个服务/下载方法 + 4 个会话辅助方法**。所有服务方法均可通过 `ApiClient::call(method, arguments)` 调用；返回服务原始 JSON。机器可读版本为 [api_catalog.json](api_catalog.json)。
+参考清单：**49 个服务/下载方法 + 4 个会话辅助方法**。当前实现 **46 个服务/下载方法**，可通过 `ApiClient::call(method, arguments)` 调用。`login`、`login_cellphone`、`captcha` 已删除，仅保留参考记录；应用只支持扫码登录。机器可读版本为 [api_catalog.json](api_catalog.json)。
 
 状态含义：表内为**代码实现范围**，不等于已用真实账户和 Switch 硬件验证。实时验证结果单独记录在 [API_VALIDATION.md](API_VALIDATION.md)。
 
@@ -13,9 +13,9 @@
 | 方法 | 用途 | C++ 参数（省略项采用默认值） | 协议 | 参考端点 |
 |---|---|---|---|---|
 | `fetch_xeapi_public_key` | 取得并缓存 XEAPI 动态公钥 | 无 | FORM+AES-256 | `https://interface.music.163.com/api/gorilla/anti/crawler/security/key/get` |
-| `login` | 密码登录（邮箱或手机号） | username, password 或 password_md5 | WEAPI | `/weapi/login/cellphone`<br>`/weapi/login` |
-| `login_cellphone` | 手机短信验证码登录 | phone, captcha, ctcode=86 | WEAPI | `/weapi/w/login/cellphone` |
-| `captcha` | 发送登录短信验证码 | phone, ctcode=86 | WEAPI | `/weapi/sms/captcha/sent` |
+| `login` | 密码登录（邮箱或手机号）（已删除，仅参考） | username, password 或 password_md5 | WEAPI | `/weapi/login/cellphone`<br>`/weapi/login` |
+| `login_cellphone` | 手机短信验证码登录（已删除，仅参考） | phone, captcha, ctcode=86 | WEAPI | `/weapi/w/login/cellphone` |
+| `captcha` | 发送登录短信验证码（已删除，仅参考） | phone, ctcode=86 | WEAPI | `/weapi/sms/captcha/sent` |
 | `login_qr_create` | 取得登录二维码 key 与扫码 URL | 无 | WEAPI | `/weapi/login/qrcode/unikey` |
 | `login_qr_check` | 轮询扫码登录状态 | key | WEAPI | `/weapi/login/qrcode/client/login` |
 | `login_status` | 当前账户、个人资料与登录状态 | 无 | WEAPI | `/api/nuser/account/get` |
@@ -75,18 +75,18 @@
 - EAPI：API 路径和请求体的 MD5 摘要、AES-128-ECB/PKCS#7；播放 URL 支持账户 cookie。
 - XEAPI：动态公钥握手、HMAC-SHA256、X25519、HKDF 兼容派生、AES-GCM 与 AES-ECB；用于新版喜欢接口。
 - 底层使用 libcurl、mbedTLS 2.28 和 zlib。TLS 验证保持启用；Switch 的 CA 文件由 ApiConfig.ca_bundle 指定。
-- 会话使用 `cookies.txt` 保存。扫码授权返回的 Set-Cookie 由 libcurl cookie engine 接收，后续请求自动携带；应用自行导出 Netscape 格式并保存，退出清除会话。Horizon 不支持覆盖已有文件的 rename，因此采用先完成新文件、备份旧文件、安装新文件、失败回滚的事务式替换；异常中断后可读取 `.bak` 恢复。cookie 是账户凭据，不应提交到仓库或上传日志。
+- 多账号会话保存在 `accounts.json`，当前会话镜像为 `cookies.txt`。扫码使用独立内存 cookie engine，确认身份后保存并激活；取消不覆盖原会话。详见 [多账号说明](ACCOUNTS.md)。Horizon 不支持覆盖已有文件的 rename，因此采用先完成新文件、备份旧文件、安装新文件、失败回滚的事务式替换；异常中断后可读取 `.bak` 恢复。cookie 是账户凭据，不应提交到仓库或上传日志。
 - 扫码状态 800（失效）、801（等待）、802（已扫描）、803（授权完成）作为正常状态返回；HTTP/服务失败抛出带 code 的 ApiError。
 
 ## 与参考实现的明确差异
 
 - 参考实现若把 WEAPI 加密体发送到 `/api/`，本项目对应使用 `/weapi/` 路径；EAPI/XEAPI 保留签名 `/api/` 路径。修复参考 logout 中重复拼接主机名的问题。
 - songs_detail 的 `c` 使用标准 JSON 数组编码，不再额外插入反斜杠。
-- login 默认接收明文 password 后在本地 MD5；已计算摘要可传 password_md5。不会把密码写入日志。
+- 应用仅支持二维码登录，密码登录、手机号验证码登录和发送验证码方法均已删除。
 - user_cloud_disk 采用可分页默认 30 首，避免一次请求 10000 首占用 Switch 内存；循环请求直到不足 limit 即可。
 - 精品歌单 lasttime 接受完整毫秒时间戳，不沿用参考实现的 u8 限制。
 - 有损音质默认请求 MP3 方便后台解码，其他音质请求 FLAC；可传 encodeType 覆盖。音质 level 为 standard / higher / exhigh / lossless / hires / jyeffect / sky / jymaster。能否取得 URL 取决于会员、地区、版权与曲目权限，不绕过这些条件。
-- 应用便捷方法 `song_urls()` 对 standard / higher / exhigh 使用旧版 songs_url 的 128/192/320 kbps 请求，以匹配当前后台 MP3 解码器。完整 songs_url_v1 仍可通过 call 使用。播放器必须检查服务实际返回的 type、URL 和 freeTrialInfo。
+- 应用便捷方法 `song_urls()` 对 standard / higher / exhigh 使用旧版 songs_url 的 128/192/320 kbps 请求；lossless / hires / jyeffect / sky / jymaster 使用 songs_url_v1。播放器按实际音频内容识别 MP3 / AAC / FLAC，并检查 URL 和 freeTrialInfo；高质量源统一转换为立体声 16-bit / 48 kHz 输出。
 - 后台客户端 `persist_cookies=false`，每次请求重载 GUI 持有的 cookies.txt，且不会覆写登录/退出状态。
 - download_img/download_song 流式写入 `.part` 文件，关闭并同步后使用同样的备份/回滚替换；只接受 HTTP(S)，保留 TLS 校验。
 - Rust 的解析模型转换替换为原始 JSON，由应用模型统一处理空值、旧新字段和不可播放原因。
@@ -98,7 +98,7 @@
 | 扫码登录 | login_qr_create → 展示 qr_url → 每数秒 login_qr_check → 803 后 login_status |
 | 我的收藏 | login_status → user_song_id_list / user_song_list / album_sublist / user_radio_sublist |
 | 打开歌单 | song_list_detail → 读取 trackIds → 分批 songs_detail（保证完整列表） |
-| 播放队列 | song_urls() → songs_url（有损 MP3）→ 检查 type、URL 与权益 → 播放；过期/下一曲前重新取得 URL |
+| 播放队列 | song_urls() → songs_url / songs_url_v1 → 检查 URL 与权益 → 按内容识别音频播放；过期/下一曲前重新取得 URL |
 | 正在播放 | song_lyric → 根据播放毫秒匹配歌词；播放状态驱动黑胶旋转，暂停冻结角度 |
 | 喜欢歌曲 | like_v1 → 成功后刷新 user_song_id_list；失败保留旧 UI 状态 |
 | 发现与搜索 | banners / top_song_list / new_albums / toplist / search_* |

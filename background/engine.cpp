@@ -1,11 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "engine.hpp"
+#include "audio_decoder.hpp"
 #include "pcm_stream.hpp"
 #include "netease/api.hpp"
 #include "netease/crypto.hpp"
 #include "netease/storage.hpp"
-#define DR_MP3_IMPLEMENTATION
-#include "vendor/dr_mp3.h"
 #include <curl/curl.h>
 #ifdef __SWITCH__
 #include <switch.h>
@@ -33,7 +32,8 @@ namespace netease::playback {
 namespace {
 constexpr size_t FramesPerBuffer = 2048;
 constexpr uint32_t SampleRate = 48000;
-constexpr uint64_t MaxDownloadBytes = 128u * 1024u * 1024u;
+constexpr uint64_t MaxDownloadBytes = 512u * 1024u * 1024u;
+constexpr uint64_t RetainedCacheBytes = 512u * 1024u * 1024u;
 constexpr NcmCommand ExternalBegin = static_cast<NcmCommand>(100);
 constexpr NcmCommand ExternalEnd = static_cast<NcmCommand>(101);
 constexpr NcmCommand ExternalFlush = static_cast<NcmCommand>(102);
@@ -164,7 +164,16 @@ struct Engine::Impl {
     mutable std::mutex mutex;
     std::condition_variable cv;
     NcmPlaybackStatus snapshot{};
-    std::deque<std::pair<NcmCommand,uint32_t>> commands;
+    struct PendingCommand {
+        NcmCommand first{};
+        uint32_t second = 0;
+        uint64_t ticket = 0;
+        PendingCommand() = default;
+        PendingCommand(NcmCommand kind, uint32_t argument, uint64_t id = 0)
+            : first(kind), second(argument), ticket(id) {}
+    };
+    std::deque<PendingCommand> commands;
+    uint64_t clearRequested = 0, clearCompleted = 0;
     std::vector<NcmQueueEntry> queue;
     std::thread worker, downloader;
     std::atomic<bool> running{false}, interrupt{false}, downloadCancel{false}, downloadDone{true};
@@ -172,7 +181,7 @@ struct Engine::Impl {
     std::atomic<long> downloadError{0};
     AudioSink sink;
     std::mt19937 rng;
-    drmp3 decoder{};
+    AudioDecoder decoder;
     bool decoderOpen = false, paused = false, preview = false;
     FILE* input = nullptr;
     uint64_t cursor = 0, producedFrames = 0;
@@ -225,8 +234,8 @@ struct Engine::Impl {
             auto range=std::minmax_element(pcm,pcm+frames*2); lo=*range.first; hi=*range.second;
         }
         const auto s=getStatus();
-        std::fprintf(file,"%s id=%llu state=%u rate=%u produced=%llu queued_ms=%u pos=%u input=%llu done=%d curl=%ld audout=%08x pcm=%d..%d\n",
-            event,static_cast<unsigned long long>(s.track_id),s.state,decoder.sampleRate,
+        std::fprintf(file,"%s id=%llu state=%u codec=%s rate=%u produced=%llu queued_ms=%u pos=%u input=%llu done=%d curl=%ld audout=%08x pcm=%d..%d\n",
+            event,static_cast<unsigned long long>(s.track_id),s.state,decoder.format(),decoder.sample_rate(),
             static_cast<unsigned long long>(producedFrames),sink.queuedMs(),s.position_ms,
             static_cast<unsigned long long>(downloaded.load()),downloadDone.load(),
             downloadError.load(),sink.error(),lo,hi);
@@ -240,7 +249,8 @@ struct Engine::Impl {
         auto directory = std::filesystem::directory_iterator(config.directory + "/cache",error);
         if (error) return;
         for (const auto& item : directory) {
-            if (item.path().extension() != ".mp3" || item.path() == currentPath) continue;
+            const auto extension = item.path().extension();
+            if ((extension != ".mp3" && extension != ".audio") || item.path() == currentPath) continue;
             uint64_t size = item.file_size(error);
             if (error) { error.clear(); continue; }
             auto time = item.last_write_time(error);
@@ -250,7 +260,7 @@ struct Engine::Impl {
         }
         std::sort(files.begin(),files.end(),[](const Entry& a,const Entry& b){return a.time < b.time;});
         for (const auto& item : files) {
-            if (total <= 384u*1024u*1024u) break; // Leave room for the next bounded 128 MiB stream.
+            if (total <= RetainedCacheBytes) break; // Plus at most one 512 MiB downloading track.
             if (std::filesystem::remove(item.path,error)) {
                 total -= item.bytes;
                 std::filesystem::remove(item.path.string()+".complete",error);
@@ -265,7 +275,7 @@ struct Engine::Impl {
     void closeTrack() {
         downloadCancel = true;
         if (downloader.joinable()) downloader.join();
-        if (decoderOpen) drmp3_uninit(&decoder);
+        decoder.close();
         decoderOpen = false;
         if (input) std::fclose(input);
         input = nullptr;
@@ -368,22 +378,22 @@ struct Engine::Impl {
         self->cursor += got;
         return got;
     }
-    static drmp3_bool32 seekStream(void* context, int offset, drmp3_seek_origin origin) {
+    static bool seekStream(void* context, int64_t offset, AudioDecoder::Origin origin) {
         auto* self = static_cast<Impl*>(context);
-        if (origin == DRMP3_SEEK_END && !self->downloadDone) return DRMP3_FALSE;
-        int64_t base = origin == DRMP3_SEEK_SET ? 0 : origin == DRMP3_SEEK_CUR ?
+        if (origin == AudioDecoder::Origin::End && !self->downloadDone) return false;
+        int64_t base = origin == AudioDecoder::Origin::Start ? 0 : origin == AudioDecoder::Origin::Current ?
             static_cast<int64_t>(self->cursor) : static_cast<int64_t>(self->downloaded.load());
         int64_t target = base + offset;
-        if (target < 0 || static_cast<uint64_t>(target) > MaxDownloadBytes) return DRMP3_FALSE;
+        if (target < 0 || static_cast<uint64_t>(target) > MaxDownloadBytes) return false;
         while (self->running && !self->interrupt && !self->downloadDone &&
                self->downloaded < static_cast<uint64_t>(target)) std::this_thread::sleep_for(10ms);
         if (!self->running || self->interrupt || static_cast<uint64_t>(target) > self->downloaded)
-            return DRMP3_FALSE;
-        if (std::fseek(self->input, static_cast<long>(target), SEEK_SET) != 0) return DRMP3_FALSE;
-        self->cursor = static_cast<uint64_t>(target); return DRMP3_TRUE;
+            return false;
+        if (std::fseek(self->input, static_cast<long>(target), SEEK_SET) != 0) return false;
+        self->cursor = static_cast<uint64_t>(target); return true;
     }
-    static drmp3_bool32 tellStream(void* context, drmp3_int64* position) {
-        *position = static_cast<Impl*>(context)->cursor; return DRMP3_TRUE;
+    static bool tellStream(void* context, int64_t* position) {
+        *position = static_cast<Impl*>(context)->cursor; return true;
     }
     std::string resolveUrl(const NcmQueueEntry& entry, bool force) {
         std::string url(entry.url);
@@ -401,9 +411,9 @@ struct Engine::Impl {
             if (response.contains("data") && response["data"].is_array()) {
                 for (const auto& row : response["data"]) {
                     if (row.contains("url") && row["url"].is_string()) {
-                        if (row.contains("type") && row["type"].is_string() &&
-                            row["type"].get<std::string>() != "mp3")
-                            throw std::runtime_error("Service returned unsupported audio format");
+                        // The decoder identifies the actual response bytes.
+                        // NetEase can return MP3 or FLAC for the same quality
+                        // depending on the recording and account entitlement.
                         preview = row.contains("freeTrialInfo") && row["freeTrialInfo"].is_object();
                         if (row.contains("time") && row["time"].is_number_unsigned()) {
                             const uint64_t duration = row["time"].get<uint64_t>();
@@ -438,10 +448,15 @@ struct Engine::Impl {
         activeQuality = preferences.contains("quality") && preferences["quality"].is_string()
             ? preferences["quality"].get<std::string>() : std::string{"standard"};
         if (activeQuality == "extreme") activeQuality = "exhigh";
-        if (activeQuality != "standard" && activeQuality != "higher" && activeQuality != "exhigh")
-            activeQuality = "standard"; // Lossless modes are API-only.
+        if (activeQuality != "standard" && activeQuality != "higher" && activeQuality != "exhigh" &&
+            activeQuality != "lossless" && activeQuality != "hires" && activeQuality != "jyeffect" &&
+            activeQuality != "sky" && activeQuality != "jymaster") activeQuality = "standard";
         const bool explicitLocal = url.rfind("sdmc:/",0)==0 || url.rfind("/",0)==0;
-        const std::string cachePath = config.directory + "/cache/" + std::to_string(entry.id) + "-" + cacheIdentity() + ".mp3";
+        const std::string cacheBase = config.directory + "/cache/" + std::to_string(entry.id) + "-" + cacheIdentity();
+        std::string cachePath = cacheBase + ".audio";
+        if (!std::filesystem::exists(cachePath+".complete") &&
+            std::filesystem::is_regular_file(cacheBase+".mp3") &&
+            std::filesystem::exists(cacheBase+".mp3.complete")) cachePath=cacheBase+".mp3";
         // A completed local copy remains playable when the account API or
         // network is unavailable. No authentication request precedes this hit.
         bool cacheHit = !explicitLocal && std::filesystem::exists(cachePath+".complete") &&
@@ -461,7 +476,10 @@ struct Engine::Impl {
         if (cached) {
             std::error_code error;
             downloaded = std::filesystem::file_size(currentPath, error);
-            if (error) { state(NcmPlayback_Error, "Cached audio is missing", 3); return false; }
+            if (error || downloaded > MaxDownloadBytes) {
+                state(NcmPlayback_Error, error ? "Cached audio is missing" : "Audio exceeds 512 MiB limit", 3);
+                return false;
+            }
         } else {
             pruneCache();
             // An orphan marker must never bless a newly truncated partial
@@ -497,22 +515,21 @@ struct Engine::Impl {
                     std::this_thread::sleep_for(10ms);
             } catch (const std::exception& e) { state(NcmPlayback_Error, e.what(), 4); return false; }
         }
-        if (!input || !drmp3_init(&decoder, readStream, seekStream, tellStream, nullptr, this, nullptr)) {
+        if (!input || !decoder.open(readStream, seekStream, tellStream, this)) {
             if (cacheHit) std::remove((cachePath+".complete").c_str());
-            state(NcmPlayback_Error, downloadError ? "Audio download failed" : "Unsupported or damaged MP3", 5);
+            state(NcmPlayback_Error, downloadError ? "Audio download failed" : "Unsupported or damaged MP3/FLAC/AAC", 5);
             return false;
         }
         decoderOpen = true;
-        if (decoder.channels < 1 || decoder.channels > 2 || !decoder.sampleRate || !sink.open()) {
+        if (!sink.open()) {
             closeTrack();
             state(NcmPlayback_Error, "Audio output unavailable", 6); return false;
         }
-        if (decoder.totalPCMFrameCount != DRMP3_UINT64_MAX && decoder.totalPCMFrameCount > decoder.delayInPCMFrames + decoder.paddingInPCMFrames) {
-            const uint64_t audibleFrames=decoder.totalPCMFrameCount-decoder.delayInPCMFrames-decoder.paddingInPCMFrames;
-            const uint64_t duration=audibleFrames*1000/decoder.sampleRate;
+        if (decoder.frames()) {
+            const uint64_t duration=decoder.frames()*1000/decoder.sample_rate();
             if (duration && duration<UINT32_MAX) {
                 std::lock_guard<std::mutex> lock(mutex);
-                // MP3 Xing metadata reflects the actual entitled preview,
+                // Codec metadata reflects the actual entitled preview,
                 // including when replayed offline from the SD cache.
                 if (snapshot.duration_ms>duration+2000) preview=true;
                 snapshot.duration_ms=duration;
@@ -525,12 +542,12 @@ struct Engine::Impl {
     }
     bool readSample(int16_t& left, int16_t& right) {
         if (decodedPosition >= decodedCount) {
-            decodedCount = static_cast<size_t>(drmp3_read_pcm_frames_s16(&decoder, 4096, decoded.data()));
+            decodedCount = decoder.read(decoded.data(), 4096);
             decodedPosition = 0;
             if (!decodedCount) return false;
         }
-        left = decoded[decodedPosition * decoder.channels];
-        right = decoder.channels == 2 ? decoded[decodedPosition * 2 + 1] : left;
+        left = decoded[decodedPosition * decoder.channels()];
+        right = decoder.channels() == 2 ? decoded[decodedPosition * 2 + 1] : left;
         ++decodedPosition;
         return true;
     }
@@ -541,7 +558,7 @@ struct Engine::Impl {
             havePair = true;
         }
         size_t produced = 0;
-        const double ratio = static_cast<double>(decoder.sampleRate) / SampleRate;
+        const double ratio = static_cast<double>(decoder.sample_rate()) / SampleRate;
         while (produced < requested) {
             out[produced*2] = static_cast<int16_t>((leftA + (leftB-leftA)*phase) * volume / 1000.0);
             out[produced*2+1] = static_cast<int16_t>((rightA + (rightB-rightA)*phase) * volume / 1000.0);
@@ -567,11 +584,12 @@ struct Engine::Impl {
         NcmQueueHeader header{};
         bool valid = std::fread(&header,sizeof(header),1,file)==1 &&
             std::memcmp(header.magic,"NCMQUEUE",8)==0 && header.version==NCM_PROTOCOL_VERSION &&
-            header.count>0 && header.count<=NCM_MAX_QUEUE && index<header.count;
+            header.count<=NCM_MAX_QUEUE && (!header.count || index<header.count);
         std::vector<NcmQueueEntry> loaded;
         if (valid) {
             loaded.resize(header.count);
-            valid=std::fread(loaded.data(),sizeof(NcmQueueEntry),header.count,file)==header.count;
+            if (header.count)
+                valid=std::fread(loaded.data(),sizeof(NcmQueueEntry),header.count,file)==header.count;
         }
         std::fclose(file);
         if (!valid) {
@@ -585,6 +603,16 @@ struct Engine::Impl {
         }
         queue=std::move(loaded); failures=0;
         { std::lock_guard<std::mutex> lock(mutex); snapshot.queue_count=queue.size(); }
+        if (queue.empty()) {
+            closeTrack();
+            std::lock_guard<std::mutex> lock(mutex);
+            snapshot.queue_index=UINT32_MAX; snapshot.track_id=0;
+            snapshot.position_ms=0; snapshot.duration_ms=0; snapshot.error_code=0;
+            snapshot.title[0]=0; snapshot.artist[0]=0;
+            snapshot.state=NcmPlayback_Stopped;
+            copyText(snapshot.message,"Select a song in the app");
+            return true;
+        }
         return beginTrack(index);
     }
     bool advance(bool manual, bool previous = false) {
@@ -609,7 +637,7 @@ struct Engine::Impl {
         std::lock_guard<std::mutex> lock(mutex); return snapshot;
     }
     bool seekDecoder(uint32_t target) {
-        if (!drmp3_seek_to_pcm_frame(&decoder,static_cast<uint64_t>(target)*decoder.sampleRate/1000))
+        if (!decoder.seek(static_cast<uint64_t>(target)*decoder.sample_rate()/1000))
             return false;
         decodedCount=decodedPosition=0; havePair=false; reachedEnd=false; phase=0;
         seekBase=target; producedFrames=0;
@@ -676,6 +704,22 @@ struct Engine::Impl {
     void process(NcmCommand cmd, uint32_t argument) {
         if (processExternal(cmd, argument)) return;
         switch (cmd) {
+        case NcmCommand_ClearQueue: {
+            if (!externalMode) closeTrack();
+            queue.clear(); resumeMusic=false; failures=0;
+            std::lock_guard<std::mutex> lock(mutex);
+            suspendedMusic={};
+            suspendedMusic.version=NCM_PROTOCOL_VERSION;
+            suspendedMusic.queue_index=UINT32_MAX;
+            snapshot.queue_count=0; snapshot.queue_index=UINT32_MAX;
+            if (!externalMode) {
+                snapshot.track_id=0; snapshot.position_ms=0; snapshot.duration_ms=0;
+                snapshot.state=NcmPlayback_Stopped; snapshot.error_code=0;
+                snapshot.title[0]=0; snapshot.artist[0]=0;
+                copyText(snapshot.message,"Account playback cleared");
+            }
+            break;
+        }
         case NcmCommand_LoadQueue: resumeMusic=false; loadQueue(argument); break;
         case NcmCommand_Next: failures=0; advance(true); break;
         case NcmCommand_Previous:
@@ -740,7 +784,7 @@ struct Engine::Impl {
         std::array<int16_t, FramesPerBuffer*2> pcm{};
         auto stalledSince=std::chrono::steady_clock::time_point{};
         while (running) {
-            std::pair<NcmCommand,uint32_t> next{};
+            PendingCommand next{};
             bool hasCommand=false;
             {
                 std::lock_guard<std::mutex> lock(mutex);
@@ -749,7 +793,15 @@ struct Engine::Impl {
                     interrupt=false;
                 }
             }
-            if (hasCommand) { process(next.first,next.second); stalledSince={}; continue; }
+            if (hasCommand) {
+                process(next.first,next.second);
+                if (next.ticket) {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    clearCompleted=next.ticket;
+                    cv.notify_all();
+                }
+                stalledSince={}; continue;
+            }
             if (interrupt) { std::this_thread::sleep_for(2ms); continue; }
             if (externalMode) {
                 if (!externalPaused && external.active() && !sink.canWrite()) {
@@ -807,6 +859,10 @@ struct Engine::Impl {
                         const auto error=static_cast<uint32_t>(downloadError.load());
                         closeTrack();
                         state(NcmPlayback_Error,"Network interrupted; track skipped",error);
+                    } else if (decoder.damaged()) {
+                        std::remove((currentPath+".complete").c_str());
+                        closeTrack();
+                        state(NcmPlayback_Error,"Damaged or truncated audio; track skipped",5);
                     } else { failures=0; advance(false); }
                 } else if (!sink.write(pcm.data(),frames)) {
                     closeTrack(); state(NcmPlayback_Error,"Audio output failed",6);
@@ -863,19 +919,35 @@ void Engine::stop() {
     impl_->externalMode = false;
 }
 bool Engine::command(NcmCommand cmd,uint32_t argument) {
-    if (!impl_->running || cmd < NcmCommand_LoadQueue || cmd > NcmCommand_Stop ||
+    if (!impl_->running || cmd < NcmCommand_LoadQueue || cmd > NcmCommand_ClearQueue ||
         (cmd==NcmCommand_Volume && argument>1000) ||
         (cmd==NcmCommand_Repeat && argument>NcmRepeat_All) ||
         (cmd==NcmCommand_Shuffle && argument>1) ||
         (cmd==NcmCommand_LoadQueue && argument>=NCM_MAX_QUEUE)) return false;
-    {
-        std::lock_guard<std::mutex> lock(impl_->mutex);
-        if (impl_->commands.size()>=32) return false;
-        impl_->commands.emplace_back(cmd,argument);
-        if (cmd==NcmCommand_LoadQueue || cmd==NcmCommand_Next || cmd==NcmCommand_Previous || cmd==NcmCommand_Stop)
-            impl_->interrupt=true;
+    std::unique_lock<std::mutex> lock(impl_->mutex);
+    if (cmd==NcmCommand_ClearQueue) {
+        // Supersede stale queued music commands before waiting for the active
+        // decoder/download to stop. Keep AirPlay lifecycle and volume/modes.
+        impl_->commands.erase(std::remove_if(impl_->commands.begin(),impl_->commands.end(),
+            [](const auto& pending) {
+                return pending.first>=NcmCommand_LoadQueue && pending.first<=NcmCommand_Stop &&
+                    pending.first!=NcmCommand_Volume && pending.first!=NcmCommand_Repeat &&
+                    pending.first!=NcmCommand_Shuffle;
+            }),impl_->commands.end());
     }
-    impl_->cv.notify_one(); return true;
+    if (impl_->commands.size()>=32) return false;
+    const uint64_t ticket=cmd==NcmCommand_ClearQueue ? ++impl_->clearRequested : 0;
+    impl_->commands.emplace_back(cmd,argument,ticket);
+    if (cmd==NcmCommand_LoadQueue || cmd==NcmCommand_Next || cmd==NcmCommand_Previous ||
+        cmd==NcmCommand_Stop || cmd==NcmCommand_ClearQueue) impl_->interrupt=true;
+    impl_->cv.notify_all();
+    if (!ticket) return true;
+    // Switching accounts must wait for the worker to relinquish the old song,
+    // including an in-flight LoadQueue or download. Timeout leaves activation
+    // to the caller; it must not replace the account's cookie jar on failure.
+    return impl_->cv.wait_for(lock,5s,[this,ticket] {
+        return impl_->clearCompleted>=ticket || !impl_->running;
+    }) && impl_->clearCompleted>=ticket;
 }
 NcmPlaybackStatus Engine::status() const { return impl_->getStatus(); }
 bool Engine::begin_external(uint32_t rate) {

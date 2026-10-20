@@ -18,6 +18,8 @@ class Player {
     NcmAirplayStatus airplay_status();
     bool set_airplay_enabled(bool enabled);
     bool disconnect_airplay();
+    // Complete the music boundary before publishing another account session.
+    bool clear_account();
     bool background() const;
     std::string error() const;
     void shutdown();

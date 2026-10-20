@@ -18,7 +18,9 @@ typedef enum NcmCommand {
     NcmCommand_LoadQueue = 10, NcmCommand_PlayPause = 11, NcmCommand_Play = 12,
     NcmCommand_Pause = 13, NcmCommand_Next = 14, NcmCommand_Previous = 15,
     NcmCommand_Volume = 16, NcmCommand_Seek = 17, NcmCommand_Repeat = 18,
-    NcmCommand_Shuffle = 19, NcmCommand_Stop = 20
+    NcmCommand_Shuffle = 19, NcmCommand_Stop = 20,
+    /* Synchronous account boundary; clears music without stopping AirPlay. */
+    NcmCommand_ClearQueue = 21
 } NcmCommand;
 typedef enum NcmPlaybackState {
     NcmPlayback_Stopped = 0, NcmPlayback_Buffering = 1,
@@ -60,7 +62,7 @@ typedef struct NcmQueueEntry {
     char title[128];
     char artist[128];
     char album[128];
-    char url[1024]; /* HTTPS URL, or sdmc:/ local cached MP3 */
+    char url[1024]; /* HTTPS URL, or sdmc:/ local MP3 / FLAC audio */
 } NcmQueueEntry;
 
 /* Publishes path.tmp. POSIX replacement is atomic; Horizon uses a recoverable

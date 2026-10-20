@@ -44,6 +44,7 @@ Result ncmPlaybackSeek(uint32_t v) { return value(NcmCommand_Seek, v); }
 Result ncmPlaybackSetRepeat(NcmRepeatMode v) { return value(NcmCommand_Repeat, v); }
 Result ncmPlaybackSetShuffle(bool v) { return value(NcmCommand_Shuffle, v ? 1u : 0u); }
 Result ncmPlaybackStop(void) { return simple(NcmCommand_Stop); }
+Result ncmPlaybackClearQueue(void) { return simple(NcmCommand_ClearQueue); }
 Result ncmAirplayGetStatus(NcmAirplayStatus* status) {
     if (!status) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     memset(status, 0, sizeof(*status));

@@ -93,7 +93,8 @@ sdmc:/config/netease-switch/airplay.json
 经典协议的 RSA/AES 处理和 mDNS。ALAC 解码使用固定版本 FFmpeg 7.1.5，
 仅启用所需解码器；立体声 16 位 PCM 经有界缓冲进入唯一的音频工作线程。
 ALAC 接受 44.1 / 48 kHz，原始 L16 接受 44.1 kHz；输出统一重采样至 48 kHz。
-这不增加网易云文件播放器对 AAC、FLAC 或视频文件的支持。
+网易云文件播放器另有 MP3 / AAC / FLAC 解码路径；AirPlay 接收不依赖当前网易云账号。
+切换或移除网易云账号会清空原音乐队列，已在进行的 AirPlay 投送可以继续。
 
 `background::Runtime` 负责接收器、音乐引擎和 `airplay.json` 的生命周期；
 接收线程不直接调用 SDL 或 Switch `audout`。新工具状态为独立的

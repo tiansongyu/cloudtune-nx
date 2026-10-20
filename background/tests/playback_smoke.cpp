@@ -18,7 +18,7 @@ template<class Test> static void waitFor(Test test,const char* failure,int timeo
     throw std::runtime_error(failure);
 }
 int main(int argc,char** argv) {
-    if(argc<3) { std::fprintf(stderr,"usage: ncm-playback-smoke CONFIG_DIR LOCAL_MP3_OR_HTTPS_URL [CA_BUNDLE] [SECOND_MP3]\n");return 2; }
+    if(argc<3) { std::fprintf(stderr,"usage: ncm-playback-smoke CONFIG_DIR LOCAL_AUDIO_OR_HTTPS_URL [CA_BUNDLE] [SECOND_AUDIO]\n");return 2; }
     curl_global_init(CURL_GLOBAL_DEFAULT);
     try {
         std::string directory=argv[1];
@@ -108,7 +108,7 @@ int main(int argc,char** argv) {
         engine.command(NcmCommand_LoadQueue,0);
         waitFor([&]{return engine.status().state==NcmPlayback_Error && engine.status().queue_count==0;},"malformed queue accepted");
         engine.stop();
-        std::puts("PASS queue / progressive MP3 decode / SDL output / clock / pause / seek / volume / repeat / shuffle / next / previous / natural advance / end / stop / malformed queue (HTTPS also verifies quality/session cache isolation)");
+        std::puts("PASS queue / content-detected audio decode / SDL output / clock / pause / seek / volume / repeat / shuffle / next / previous / natural advance / end / stop / malformed queue (HTTPS also verifies quality/session cache isolation)");
     } catch(const std::exception& e) {
         std::fprintf(stderr,"FAIL %s\n",e.what());curl_global_cleanup();return 1;
     }

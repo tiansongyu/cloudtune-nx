@@ -20,6 +20,7 @@ cookies*
 queue.nsq
 settings.json
 session.json
+accounts.json*
 __pycache__/
 *.py[cod]
 .DS_Store

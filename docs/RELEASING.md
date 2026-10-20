@@ -26,7 +26,7 @@ CI 输出确切的 artifact ID，发布任务按该 ID 下载**本次运行**生
 `workflow_run` 拼接未经对应校验的产物。
 
 宿主验证执行 `./scripts/test-host.sh`，包含 5 项 CTest、独立 XEAPI
-验证，以及本地和节流 HTTPS 的生成 MP3 播放测试。Switch 验证使用固定
+验证，以及生成的 MP3 / AAC / FLAC、节流 HTTPS、多账号存储与播放隔离测试。Switch 验证使用固定
 devkitPro 基础镜像构建 NRO、后台 NSP 和覆盖层，并检查包格式、程序 ID
 及配套 ELF。具体命令和依赖见 [BUILDING.md](BUILDING.md)。
 

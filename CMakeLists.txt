@@ -37,6 +37,8 @@ target_include_directories(netease_api PUBLIC include vendor/nlohmann/include "$
 target_link_libraries(netease_api PUBLIC CURL::libcurl ${MBEDTLS_LIBRARY} ${MBEDX509_LIBRARY} ${MBEDCRYPTO_LIBRARY} z Threads::Threads)
 add_library(netease_library STATIC src/library.cpp)
 target_link_libraries(netease_library PUBLIC netease_api)
+add_library(netease_accounts STATIC src/accounts.cpp)
+target_link_libraries(netease_accounts PUBLIC netease_api)
 add_subdirectory(airplay)
 add_subdirectory(background)
 if(CLOUDTUNE_BUILD_OVERLAY_PREVIEW)
@@ -51,15 +53,16 @@ target_include_directories(borealis PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vendor/
 add_executable(CloudTune src/main.cpp src/model.cpp src/player.cpp src/ui.cpp vendor/qrcodegen/qrcodegen.cpp)
 target_compile_definitions(CloudTune PRIVATE CLOUDTUNE_VERSION="${PROJECT_VERSION}")
 target_include_directories(CloudTune PRIVATE vendor/qrcodegen)
-target_link_libraries(CloudTune PRIVATE borealis netease_library ncm_runtime)
+target_link_libraries(CloudTune PRIVATE borealis netease_library netease_accounts ncm_runtime)
 if(PLATFORM_SWITCH)
   target_sources(CloudTune PRIVATE ${BOREALIS_LIBRARY}/lib/platforms/switch/switch_wrapper.c)
   target_link_libraries(CloudTune PRIVATE ncm_ipc_client)
   add_custom_target(CloudTune.nro
     COMMAND ${NX_NACPTOOL_EXE} --create "CloudTune NX" "CloudTune NX contributors" "${PROJECT_VERSION}" CloudTune.nacp
     COMMAND ${NX_ELF2NRO_EXE} $<TARGET_FILE:CloudTune> CloudTune.nro
+      --icon=${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/icon.jpg
       --nacp=CloudTune.nacp --romfsdir=${CMAKE_CURRENT_SOURCE_DIR}/resources
-    DEPENDS CloudTune
+    DEPENDS CloudTune resources/icon/icon.jpg resources/icon/cloudtune.svg
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     VERBATIM)
 else()
@@ -74,18 +77,38 @@ else()
   add_executable(ncm-api-probe tools/api_probe.cpp)
   target_link_libraries(ncm-api-probe PRIVATE netease_api)
   add_executable(ncm-model-tests tests/model_tests.cpp src/model.cpp)
-  target_link_libraries(ncm-model-tests PRIVATE netease_library)
+  target_link_libraries(ncm-model-tests PRIVATE netease_library netease_accounts)
   add_test(NAME model COMMAND ncm-model-tests)
+  add_executable(ncm-accounts-tests tests/accounts_tests.cpp)
+  target_link_libraries(ncm-accounts-tests PRIVATE netease_accounts)
+  add_test(NAME accounts COMMAND ncm-accounts-tests)
   add_executable(ncm-storage-tests tests/storage_tests.cpp)
   target_link_libraries(ncm-storage-tests PRIVATE netease_api)
   add_test(NAME storage COMMAND ncm-storage-tests)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_executable(ncm-player-account-tests tests/player_account_tests.cpp src/player.cpp)
+  target_link_libraries(ncm-player-account-tests PRIVATE netease_library ncm_runtime)
+  add_test(NAME player-account-boundary
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/player_account_tests.py"
+      $<TARGET_FILE:ncm-player-account-tests>)
+  set_tests_properties(player-account-boundary PROPERTIES TIMEOUT 30)
   add_executable(ncm-airplay-audio-tests tests/airplay_audio_tests.cpp)
   target_link_libraries(ncm-airplay-audio-tests PRIVATE ncm_engine)
   add_test(NAME airplay-audio-handoff
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/airplay_audio_tests.py"
       $<TARGET_FILE:ncm-airplay-audio-tests>)
   set_tests_properties(airplay-audio-handoff PROPERTIES TIMEOUT 60)
+  add_test(NAME flac-playback
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/background/tests/flac_tests.py"
+      $<TARGET_FILE:ncm-decoder-tests> $<TARGET_FILE:ncm-flac-engine-tests>
+      $<TARGET_FILE:ncm-playback-smoke> $<TARGET_FILE:ncm-airplay-audio-tests>)
+  set_tests_properties(flac-playback PROPERTIES TIMEOUT 240)
+  add_executable(ncm-aac-decoder-tests tests/aac_decoder_tests.cpp)
+  target_link_libraries(ncm-aac-decoder-tests PRIVATE ncm_engine)
+  add_test(NAME aac-playback
+    COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/test-aac.sh"
+      $<TARGET_FILE:ncm-aac-decoder-tests> "${CMAKE_BINARY_DIR}/aac-fixtures")
+  set_tests_properties(aac-playback PROPERTIES TIMEOUT 90)
   add_executable(ncm-airplay-codec-tests tests/airplay_codec_tests.cpp)
   target_link_libraries(ncm-airplay-codec-tests PRIVATE cloudtune_airplay)
   add_test(NAME airplay-codec COMMAND ncm-airplay-codec-tests)

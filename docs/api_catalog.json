@@ -8,6 +8,7 @@
     "license": "GPL-3.0"
   },
   "count": 49,
+  "implemented_count": 46,
   "session_helpers": {
     "new": "ApiClient(ApiConfig)",
     "from_cookie_jar": "ApiConfig.cookie_file（libcurl Netscape Cookie 格式）",
@@ -47,8 +48,8 @@
       "used_by_gtk": false,
       "reference_signature": "pub async fn login(&self, username: String, password: String) -> Result<LoginInfo>",
       "reference_line": 402,
-      "implementation": "ApiClient::call",
-      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+      "implementation": "removed: QR-only sign-in",
+      "validation": "reference only; not callable"
     },
     {
       "method": "login_cellphone",
@@ -64,8 +65,8 @@
       "used_by_gtk": true,
       "reference_signature": "pub async fn login_cellphone(\n        &self,\n        ctcode: String,\n        phone: String,\n        captcha: String,\n    ) -> Result<LoginInfo>",
       "reference_line": 430,
-      "implementation": "ApiClient::call",
-      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+      "implementation": "removed: QR-only sign-in",
+      "validation": "reference only; not callable"
     },
     {
       "method": "captcha",
@@ -81,8 +82,8 @@
       "used_by_gtk": true,
       "reference_signature": "pub async fn captcha(&self, ctcode: String, phone: String) -> Result<()>",
       "reference_line": 454,
-      "implementation": "ApiClient::call",
-      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+      "implementation": "removed: QR-only sign-in",
+      "validation": "reference only; not callable"
     },
     {
       "method": "login_qr_create",

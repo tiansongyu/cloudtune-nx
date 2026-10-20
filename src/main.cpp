@@ -54,6 +54,10 @@ int main(int argc, char **argv) {
             model.report(player.background() ? "已交由后台播放，可返回 HOME 开始游戏"
                                              : "前台播放：游戏内 BGM 需要安装后台服务");
     });
+    model.set_account_change_callback([&] {
+        if (!player.clear_account())
+            throw std::runtime_error(player.error());
+    });
     // Stop network/audio workers while libnx, ROMFS and graphics still exist.
     auto shutdown = [&] {
         // Stop local audio first; the remote service deliberately survives.

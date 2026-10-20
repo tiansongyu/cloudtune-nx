@@ -11,10 +11,25 @@ const NVGcolor white = nvgRGB(245, 243, 240), muted = nvgRGB(150, 151, 161),
                red = nvgRGB(244, 68, 79);
 const char *labels[] = {"发现音乐", "排行榜",   "搜索",     "我的音乐",
                         "正在播放", "播放队列", "我的账号", "设置"};
-enum SettingRow { QualitySetting, ProxySetting, AirplaySetting, StopSetting, ExitSetting,
-                  SettingsCount };
-constexpr float SettingsLeft = 256, SettingsWidth = 974, SettingsTop = 180,
-                SettingsStride = 64, SettingsHeight = 56;
+enum SettingRow { AccountSetting, QualitySetting, ProxySetting, AirplaySetting, StopSetting,
+                  ExitSetting, SettingsCount };
+constexpr float SettingsLeft = 256, SettingsWidth = 974, SettingsTop = 150,
+                SettingsStride = 61, SettingsHeight = 53;
+constexpr float AccountLeft = 711, AccountTop = 220, AccountWidth = 475,
+                AccountStride = 55, AccountHeight = 44;
+int account_rows(const Snapshot &s) {
+    return s.user_id ? 3 : 2;
+}
+std::string quality_name(const std::string &quality) {
+    if (quality == "higher") return "较高 · 192 kbps";
+    if (quality == "exhigh" || quality == "extreme") return "极高 · 320 kbps";
+    if (quality == "lossless") return "无损 · FLAC";
+    if (quality == "hires") return "Hi-Res · FLAC";
+    if (quality == "jyeffect") return "高清环绕";
+    if (quality == "sky") return "沉浸环绕";
+    if (quality == "jymaster") return "超清母带";
+    return "标准 · 128 kbps";
+}
 const char *airplay_state(const NcmAirplayStatus &status) {
     if (status.version != NCM_AIRPLAY_VERSION)
         return "请更新后台服务";
@@ -100,7 +115,10 @@ MusicView::MusicView(Model &m, Player &p) : model_(m), player_(p) {
     bind(brls::BUTTON_A, [this] { activate(); });
     bind(brls::BUTTON_B, [this] {
         auto s = model_.snapshot();
-        if (s.collection) {
+        if (s.page == Page::Account &&
+            (!s.qr_key.empty() || !s.qr_url.empty() || !s.qr_message.empty())) {
+            model_.cancel_qr();
+        } else if (s.collection) {
             model_.back();
             selection_ = scroll_ = 0;
         } else
@@ -187,6 +205,8 @@ MusicView::MusicView(Model &m, Player &p) : model_(m), player_(p) {
 }
 MusicView::~MusicView() {
     auto vg = brls::Application::getNVGContext();
+    if (vg && app_icon_ > 0)
+        nvgDeleteImage(vg, app_icon_);
     if (vg)
         for (auto &[path, id] : textures_)
             if (id > 0)
@@ -227,15 +247,21 @@ void MusicView::button(NVGcontext *v, float x, float y, float w, const std::stri
     text(v, x + 16, y + 26, 16, white, title, w - 26);
 }
 void MusicView::options(const std::string &title, const std::vector<std::string> &values,
-                        std::function<void(int)> f) {
+                        std::function<void(int)> f, int selected) {
     brls::Application::pushActivity(
-        new brls::Activity(new brls::Dropdown(title, values, [f](int i) {
+        new brls::Activity(new brls::Dropdown(title, values, [](int) {}, selected, [f](int i) {
+            // Open child dialogs only after the dropdown has been dismissed.
+            // Otherwise its popActivity() would immediately pop the child.
             if (i >= 0)
                 f(i);
         })));
 }
 void MusicView::switch_page(Page p) {
-    if (model_.snapshot().busy)
+    const auto s = model_.snapshot();
+    const bool leaving_account = s.page == Page::Account && p != Page::Account;
+    if (leaving_account)
+        model_.cancel_qr();
+    if (s.busy && !leaving_account)
         return;
     nav_ = static_cast<int>(p);
     selection_ = scroll_ = 0;
@@ -279,7 +305,7 @@ void MusicView::navigate(int d) {
         selection_ += grid(s) ? d * 4 : d;
     int count = static_cast<int>(s.items.size()) + (s.more ? 1 : 0);
     if (s.page == Page::Account)
-        count = 4;
+        count = account_rows(s);
     if (s.page == Page::Settings)
         count = SettingsCount;
     selection_ = std::clamp(selection_, 0, std::max(0, count - 1));
@@ -316,31 +342,54 @@ void MusicView::input_search() {
         },
         "搜索网易云音乐", "歌曲、歌单、专辑、歌手", 80, model_.snapshot().search_query);
 }
-void MusicView::phone_login() {
-    brls::Application::getImeManager()->openForText(
-        [this](std::string phone) {
-            if (phone.empty())
-                return;
-            brls::Application::getImeManager()->openForText(
-                [this, phone](std::string country) {
-                    if (country.empty())
-                        country = "86";
-                    options("手机号登录", {"发送验证码（每次只发送一次）", "输入已收到的验证码"},
-                            [this, phone, country](int i) {
-                                if (i == 0)
-                                    model_.send_captcha(phone, country);
-                                else
-                                    brls::Application::getImeManager()->openForText(
-                                        [this, phone, country](std::string code) {
-                                            if (!code.empty())
-                                                model_.login_phone(phone, country, code);
-                                        },
-                                        "输入短信验证码", "验证码不会写入日志", 8);
-                            });
-                },
-                "国家/地区代码", "中国大陆为 86", 6, "86");
-        },
-        "手机号", "仅用于网易云音乐验证码登录", 20);
+void MusicView::account_tools() {
+    const auto s = model_.snapshot();
+    std::vector<std::string> names;
+    int selected = 0;
+    for (const auto &account : s.accounts) {
+        if (account.user_id == s.user_id)
+            selected = static_cast<int>(names.size());
+        names.push_back((account.user_id == s.user_id ? "当前 · " : "") + account.nickname +
+                        "  (ID " + std::to_string(account.user_id) + ")");
+    }
+    names.push_back("＋ 扫码添加账号");
+    options("账号管理 · 已保存 " + std::to_string(s.accounts.size()) + " 个账号", names,
+            [this, accounts = s.accounts](int i) {
+                if (i < static_cast<int>(accounts.size())) {
+                    account_actions(accounts[i].user_id);
+                    return;
+                }
+                switch_page(Page::Account);
+                model_.login_qr();
+            }, selected);
+}
+void MusicView::account_actions(uint64_t user_id) {
+    const auto s = model_.snapshot();
+    const auto account = std::find_if(s.accounts.begin(), s.accounts.end(),
+                                      [user_id](const auto &a) { return a.user_id == user_id; });
+    if (account == s.accounts.end())
+        return;
+    const auto nickname = account->nickname;
+    auto *dialog = new brls::Dialog(nickname + "\nID " + std::to_string(user_id) +
+                                   (s.user_id == user_id ? "\n当前正在使用此账号"
+                                                         : "\n切换后使用该账号的音乐收藏"));
+    if (s.user_id != user_id)
+        dialog->addButton("切换账号", [this, user_id] {
+            model_.switch_account(user_id);
+            selection_ = scroll_ = 0;
+        });
+    dialog->addButton("移除此账号", [this, user_id, nickname] {
+        auto *confirm = new brls::Dialog("从此设备移除「" + nickname +
+                                        "」的登录信息？\n再次使用时需要重新扫码登录。");
+        confirm->addButton("取消", [] {});
+        confirm->addButton("确认移除", [this, user_id] {
+            model_.remove_account(user_id);
+            selection_ = scroll_ = 0;
+        });
+        confirm->open();
+    });
+    dialog->addButton("返回", [] {});
+    dialog->open();
 }
 void MusicView::activate() {
     if (sidebar_) {
@@ -358,23 +407,25 @@ void MusicView::activate() {
         if (selection_ == 0)
             model_.login_qr();
         if (selection_ == 1)
-            phone_login();
-        if (selection_ == 2)
-            options("退出网易云账号", {"取消", "退出并清除本地登录会话"}, [this](int i) {
-                if (i == 1)
-                    model_.logout();
-            });
-        if (selection_ == 3)
+            account_tools();
+        if (selection_ == 2 && s.user_id)
             model_.check_in();
         return;
     }
     if (s.page == Page::Settings) {
-        if (selection_ == QualitySetting)
-            options("播放音质", {"标准 · 128 kbps", "较高 · 192 kbps", "极高 · 320 kbps"},
-                    [this](int i) {
-                        model_.set_quality(
-                            std::vector<std::string>{"standard", "higher", "exhigh"}[i]);
-                    });
+        if (selection_ == AccountSetting)
+            account_tools();
+        if (selection_ == QualitySetting) {
+            const std::vector<std::string> levels{"standard", "higher", "exhigh", "lossless",
+                                                   "hires", "jyeffect", "sky", "jymaster"};
+            const auto current = std::find(levels.begin(), levels.end(),
+                                            s.quality == "extreme" ? "exhigh" : s.quality);
+            options("播放音质 · 取决于账号与曲目权益",
+                    {"标准 · 128 kbps", "较高 · 192 kbps", "极高 · 320 kbps",
+                     "无损 · FLAC", "Hi-Res · FLAC", "高清环绕", "沉浸环绕", "超清母带"},
+                    [this, levels](int i) { model_.set_quality(levels[i]); },
+                    current == levels.end() ? 0 : static_cast<int>(current - levels.begin()));
+        }
         if (selection_ == ProxySetting)
             brls::Application::getImeManager()->openForText(
                 [this](std::string proxy) { model_.set_proxy(proxy); }, "HTTP / SOCKS5 代理",
@@ -455,6 +506,14 @@ void MusicView::action_x() {
     }
     if (s.busy)
         return;
+    if (s.page == Page::Account) {
+        account_tools();
+        return;
+    }
+    if (s.page == Page::Settings) {
+        activate();
+        return;
+    }
     if (s.collection) {
         options("收藏与播放",
                 {"收藏 / 取消收藏此歌单或专辑", "喜欢 / 取消喜欢选中歌曲", "心动模式", "刷新"},
@@ -605,9 +664,16 @@ void MusicView::tap(float x, float y) {
         }
         return;
     }
-    if (s.page == Page::Account && x > 710 && y > 220 && y < 440) {
-        selection_ = int((y - 220) / 55);
-        activate();
+    if (s.page == Page::Account) {
+        if (x >= AccountLeft && x < AccountLeft + AccountWidth && y >= AccountTop &&
+            y < AccountTop + account_rows(s) * AccountStride) {
+            const int row = static_cast<int>((y - AccountTop) / AccountStride);
+            if (y - AccountTop - row * AccountStride < AccountHeight) {
+                selection_ = row;
+                sidebar_ = false;
+                activate();
+            }
+        }
         return;
     }
     if (s.page == Page::Settings) {
@@ -722,9 +788,14 @@ void MusicView::vinyl(NVGcontext *v, const Snapshot &s, float x, float y, float 
 void MusicView::paint_sidebar(NVGcontext *v, const Snapshot &s) {
     rect(v, 0, 0, 220, 620, panel);
     line(v, 220, 0, 220, 620, nvgRGB(43, 44, 49));
-    circle(v, 44, 53, 20, red);
-    circle(v, 44, 53, 11, panel);
-    circle(v, 44, 53, 4, red);
+    if (app_icon_ < 0)
+        app_icon_ = nvgCreateImage(v, BRLS_ASSET("icon/icon.png"), NVG_IMAGE_GENERATE_MIPMAPS);
+    if (app_icon_ > 0) {
+        nvgBeginPath(v);
+        nvgRoundedRect(v, 24, 33, 40, 40, 9);
+        nvgFillPaint(v, nvgImagePattern(v, 24, 33, 40, 40, 0, app_icon_, 1));
+        nvgFill(v);
+    }
     text(v, 76, 50, 19, white, "CloudTune", 130);
     text(v, 77, 72, 10, muted, "NX · MUSIC PLAYER", 130);
     text(v, 28, 125, 10, muted, "M U S I C   E V E R Y W H E R E");
@@ -938,22 +1009,33 @@ void MusicView::paint_account(NVGcontext *v, const Snapshot &s) {
     }
     text(v, 288, 573, 14, muted, s.qr_message.empty() ? "登录状态仅保存于本机 SD 卡" : s.qr_message,
          810);
-    const char *options[] = {"扫码登录 / 刷新二维码", "手机号验证码登录", "退出账号", "每日签到"};
-    for (int i = 0; i < 4; ++i) {
+    const std::string options[] = {
+        s.qr_url.empty() ? (s.user_id ? "扫码添加账号" : "扫码登录") : "刷新登录二维码",
+        "管理已保存账号（" + std::to_string(s.accounts.size()) + "）", "每日签到"};
+    for (int i = 0; i < account_rows(s); ++i) {
         bool selected = !sidebar_ && selection_ == i;
-        rect(v, 711, 220 + i * 55, 475, 44, selected ? nvgRGB(78, 37, 46) : raised, 8);
-        text(v, 734, 249 + i * 55, 17, white, options[i], 430);
+        rect(v, AccountLeft, AccountTop + i * AccountStride, AccountWidth, AccountHeight,
+             selected ? nvgRGB(78, 37, 46) : raised, 8);
+        text(v, AccountLeft + 23, AccountTop + 29 + i * AccountStride, 17, white, options[i],
+             AccountWidth - 45);
     }
-    text(v, 714, 481, 14, muted, "登录后同步喜欢的音乐、收藏歌单和专辑。", 480);
-    text(v, 714, 509, 13, muted, "扫码需要手机端确认，验证码不会写入日志。", 480);
+    text(v, 714, 426, 17, white, s.user_id ? "当前账号：" + s.nickname : "使用网易云音乐手机 App",
+         480);
+    text(v, 714, 466, 14, muted, "打开「扫一扫」，扫码后在手机上确认登录。", 480);
+    text(v, 714, 496, 13, muted, "账号保存在此设备，可在「设置 → 账号管理」切换。", 480);
+    if (!s.qr_url.empty())
+        text(v, 714, 526, 13, muted, "B 取消本次扫码，当前账号保持登录。", 480);
 }
 void MusicView::paint_settings(NVGcontext *v, const Snapshot &s) {
-    const char *names[SettingsCount] = {"音质", "网络代理", "AirPlay 1 接收", "停止播放", "退出应用"};
+    const char *names[SettingsCount] = {"账号管理", "音质", "网络代理", "AirPlay 1 接收",
+                                       "停止播放", "退出应用"};
     std::string tool = airplay_state(airplay_);
     const auto name = status_text(airplay_.name);
     if (!name.empty())
         tool += " · " + name;
-    std::vector<std::string> desc = {s.quality, s.proxy.empty() ? "直连" : s.proxy,
+    std::vector<std::string> desc = {s.nickname + " · 已保存 " +
+                                         std::to_string(s.accounts.size()) + " 个账号",
+                                     quality_name(s.quality), s.proxy.empty() ? "直连" : s.proxy,
                                      tool,
                                      player_.background() ? "独立后台服务" : "本应用音频引擎",
                                      player_.background() ? "退出应用后，后台服务继续播放"
@@ -965,8 +1047,9 @@ void MusicView::paint_settings(NVGcontext *v, const Snapshot &s) {
         text(v, 280, top + 35, 18, white, names[i], 270);
         text(v, 573, top + 35, 14, muted, desc[i], 625);
     }
-    text(v, 260, 532, 14, muted, "CloudTune NX " CLOUDTUNE_VERSION " · Borealis / libnx · GPL-3.0-or-later", 970);
-    text(v, 260, 561, 13, muted, "游戏内播放需要 SD 卡上的后台服务与 Tesla / Ultrahand 覆盖层。",
+    text(v, 260, 534, 13, muted, "MP3 / AAC / FLAC 自动识别 · 立体声 16-bit / 48 kHz 输出", 970);
+    text(v, 260, 558, 13, muted, "CloudTune NX " CLOUDTUNE_VERSION " · Borealis / libnx · GPL-3.0-or-later", 970);
+    text(v, 260, 582, 13, muted, "游戏内播放需要 SD 卡上的后台服务与 Tesla / Ultrahand 覆盖层。",
          970);
 }
 void MusicView::draw(NVGcontext *v, float x, float y, float w, float h, brls::Style,
@@ -1005,7 +1088,11 @@ void MusicView::draw(NVGcontext *v, float x, float y, float w, float h, brls::St
     }
     if (revision_ != s.revision) {
         revision_ = s.revision;
-        if (s.page != Page::Account && s.page != Page::Settings) {
+        if (s.page == Page::Account) {
+            selection_ = std::clamp(selection_, 0, account_rows(s) - 1);
+        } else if (s.page == Page::Settings) {
+            selection_ = std::clamp(selection_, 0, SettingsCount - 1);
+        } else {
             selection_ =
                 std::clamp(selection_, 0, std::max(0, int(s.items.size()) - (s.more ? 0 : 1)));
             const int columns = grid(s) ? 4 : 1;

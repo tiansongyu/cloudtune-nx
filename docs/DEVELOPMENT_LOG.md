@@ -297,3 +297,34 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
   confirmed that real iPhone playback was audible and normal in the
   emulator. Detailed iPhone controls, long-run stability and physical
   Switch acceptance remain separate checks.
+
+## QR accounts, vector icon and expanded audio (2026-10-20)
+
+- Removed password/SMS sign-in routes and UI; retained the original API inventory
+  with the three removed methods marked as reference only (46 callable methods).
+- Added transactional local multi-account storage, legacy-cookie migration,
+  isolated in-memory QR authorization, cancellation generations and saved-account
+  switching/removal. Old account jobs, library state and playback queues are
+  invalidated before publishing a different session. AirPlay remains independent.
+- Added a synchronous music-queue clearing command with an acknowledgement barrier;
+  old background services reject unsupported switching instead of mixing sessions.
+- Added a scalable icon adapted from the referenced GTK project, retaining its
+  attribution; exported crisp desktop PNG and NRO JPEG assets from the SVG master.
+- Added content detection and streaming FLAC/AAC decoders, 24-bit/192-kHz FLAC
+  validation, multichannel-to-stereo mixing, eight quality request levels and
+  format-neutral caches. FFmpeg remains pinned, with only AAC/ALAC codecs and
+  AAC/MOV demuxers; upstream source and license packaging were updated.
+- Fixed a nested-dropdown lifecycle problem discovered in actual UI testing:
+  account dialogs now open after the parent dropdown has finished closing.
+  Current account and quality selections are reflected in the menu markers.
+- Fixed a progressive M4A issue found by the real throttled-HTTPS engine test:
+  a seekable MOV demuxer had waited for the end of the media before decoding.
+  Unknown-length streams now parse their headers without that premature seek.
+- Host validation passed all 15 CTest checks, independent XEAPI verification,
+  and generated local/throttled-HTTPS MP3 integration. New cases cover FLAC/AAC
+  PCM fidelity, seeking, mixed formats, incomplete downloads, account barriers,
+  cookie persistence, QR cancellation and AirPlay handoff. AAC also passed
+  ASan/UBSan/leak checks and strict devkitA64 compilation.
+- Tested settings and account interactions on an isolated Xvfb display using
+  synthetic accounts; no live user profile or the visible iPhone receiver was
+  interrupted. Switch builds use separate output directories for the same reason.

@@ -10,6 +10,14 @@
   MIT-0 / public-domain license and embedded minimp3 attributions remain in
   the file. SHA-256:
   `997b7ee18de6e6b81e2a83f1ea9fc62aef25c62b28d48db95635f49e65de0a2f`.
+- `background/vendor/dr_flac.h` is David Reid's dr_flac 0.13.4 from
+  [dr_libs revision dfe8377](https://github.com/mackron/dr_libs/blob/dfe8377631000664666519fdb83da193fd8037f4/dr_flac.h).
+  Its MIT-0 / public-domain dual license and upstream notices remain embedded.
+  SHA-256: `111144e778f55738db6851cb226015c419e00d04b916a09506d4856d9cff945c`.
+- AAC file decoding uses the same pinned FFmpeg release as the independent
+  AirPlay ALAC receiver. The limited codec and demuxer build, complete
+  corresponding source and license packaging are described in
+  [the project notices](../THIRD_PARTY_NOTICES.md).
 - `overlay/vendor/libtesla/tesla.hpp` is the original WerWolv libtesla,
   <https://github.com/WerWolv/libtesla>, retrieved 2026-10-20. Its GPL-2.0
   license is included as `overlay/vendor/libtesla/LICENSE`. SHA-256:

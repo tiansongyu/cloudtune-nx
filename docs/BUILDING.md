@@ -55,7 +55,8 @@ The API client uses mbedTLS for AES, RSA, X25519 and GCM. The official Switch
 portlibs image does not provide an OpenSSL package. Do not link host
 `libcrypto.so` into a Switch build.
 
-AirPlay uses an isolated, static ALAC-only FFmpeg build. Its source version,
+Audio uses an isolated, static FFmpeg build limited to AAC / ALAC decoding
+and AAC / MOV demuxing; networking remains in the application. Its source version,
 official URL and SHA-256 are maintained in
 [`airplay/vendor/ffmpeg-source.json`](../airplay/vendor/ffmpeg-source.json).
 The Docker build runs `scripts/setup-airplay-codec.sh switch` automatically
@@ -111,6 +112,12 @@ SHA256SUMS
 ```
 
 The manifest records the source revision and per-file SHA-256 hashes.
+
+To keep an emulator's currently loaded NRO untouched, an isolated build can use
+`SWITCH_BUILD_DIR=build/update-switch OVERLAY_BUILD_DIR=build/update-overlay
+./scripts/docker-build.sh`. Use the same variables for `./scripts/package.sh`.
+Use repository-relative paths with the Docker wrapper so they resolve inside
+its `/workspace` mount.
 The documentation archive also contains the exact FFmpeg source tarball,
 source manifest, ALAC build recipe, upstream licenses, and retained Shairport
 protocol-material header and notices under `third-party-source/` and
@@ -177,7 +184,7 @@ cmake -S . -B build/desktop -G Ninja \
 Both dependency source archives are pinned by SHA-256. These scripts require
 a host C compiler, CMake, Ninja, GNU Make, Python 3, curl, tar and xz
 (`xzutils` on Ubuntu/Debian). They do not run `apt`, repair existing package
-state, require root, or write to `/usr`. The ALAC-only host libraries are
+state, require root, or write to `/usr`. The AAC / ALAC host libraries are
 installed under `.deps/ffmpeg-host`; both platforms use the same source pin.
 
 Run the native application in the separate virtual desktop:
@@ -204,8 +211,9 @@ it does not establish audible output quality.
 
 This configures a Debug build (assertions enabled), runs the API, library,
 model and filesystem tests, checks XEAPI output with an independent Python
-implementation, then exercises generated MP3 audio locally and over a
-throttled local HTTPS server. The audio test covers transport controls,
+implementation, then exercises generated MP3, AAC and FLAC audio and account
+isolation, including progressive transfers from a throttled local HTTPS server.
+The audio test covers transport controls,
 natural track changes, end-of-queue behavior, malformed queues and cache
 isolation by quality/session. AirPlay tests cover bounded ALAC decoding,
 DNS-SD advertisements, encrypted RTSP/RTP with an independent cryptography

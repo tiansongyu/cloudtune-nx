@@ -63,6 +63,10 @@ public:
     void set_proxy(const std::string& proxy);
     void flush_cookies();
     void clear_session();
+    // Account management only. Treat the returned Netscape jar as a secret.
+    std::string session_cookies();
+    // Adopt an already committed cookie jar without writing or logging it.
+    void adopt_session(const std::string& cookies);
 
 private:
     struct Impl;

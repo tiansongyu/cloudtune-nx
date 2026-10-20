@@ -56,7 +56,7 @@ bool read_queue(const std::string &path, std::vector<Media> &queue) {
         little_endian(header + 8, 4) != NCM_PROTOCOL_VERSION)
         return false;
     const auto count = little_endian(header + 12, 4);
-    if (!count || count > NCM_MAX_QUEUE ||
+    if (count > NCM_MAX_QUEUE ||
         length != static_cast<std::streamoff>(header_size + count * entry_size))
         return false;
     std::vector<Media> restored;
@@ -91,6 +91,12 @@ bool read_queue(const std::string &path, std::vector<Media> &queue) {
 } // namespace
 Model::Model(std::string directory) : directory_(std::move(directory)) {
     std::filesystem::create_directories(directory_ + "/artwork");
+    try {
+        accounts_ = std::make_unique<AccountStore>(directory_);
+        sync_accounts();
+    } catch (const std::exception& error) {
+        state_.error = error.what();
+    }
     try {
         const auto saved = storage::read_file(directory_ + "/settings.json");
         if (!saved.empty()) {
@@ -132,6 +138,8 @@ void Model::stop() {
         thread_.join();
     try {
         api_->flush_cookies();
+        if (accounts_)
+            accounts_->update_active(api_->session_cookies());
     } catch (const std::exception &error) {
         // Persistence errors contain filesystem reasons/paths, never cookie data.
         std::cerr << "Session save failed during shutdown: " << error.what() << '\n';
@@ -152,7 +160,7 @@ void Model::enqueue(std::string label, std::function<void()> job, bool visible,
     }
     {
         std::lock_guard<std::mutex> l(jobs_mutex_);
-        Job entry{visible, std::move(label), std::move(job), generation};
+        Job entry{visible, std::move(label), std::move(job), generation, account_generation_};
         // User operations retain FIFO order and precede queued artwork.
         if (visible)
             jobs_.insert(
@@ -168,7 +176,8 @@ void Model::enqueue_view(std::string label, std::function<void()> job) {
     enqueue(std::move(label), std::move(job), true, generation);
 }
 bool Model::current_view() const {
-    return !active_view_generation_ || active_view_generation_ == view_generation_.load();
+    return active_account_generation_ == account_generation_.load() &&
+           (!active_view_generation_ || active_view_generation_ == view_generation_.load());
 }
 void Model::worker() {
     while (!stopping_) {
@@ -182,9 +191,14 @@ void Model::worker() {
             jobs_.pop_front();
         }
         active_view_generation_ = job.view_generation;
+        active_account_generation_ = job.account_generation;
         if (current_view()) {
             try {
                 job.run();
+                // Service responses may rotate cookies. Keep the committed
+                // registry current as well as the playback compatibility mirror.
+                if (accounts_ && accounts_->active_user_id())
+                    accounts_->update_active(api_->session_cookies());
             } catch (const std::exception &e) {
                 if (job.visible && current_view()) {
                     std::lock_guard<std::mutex> l(mutex_);
@@ -263,10 +277,16 @@ bool Model::apply_track_metadata(uint64_t generation, const Media &song) {
 }
 void Model::account() {
     auto j = api_->login_status();
+    if (!current_view())
+        return;
     auto p = object_at(j, "profile");
     if (p.empty())
         p = object_at(object_at(j, "data"), "profile");
     auto uid = json_id(p, "userId");
+    if (uid && accounts_) {
+        accounts_->save(uid, json_text(p, "nickname", "网易云用户"), api_->session_cookies());
+        sync_accounts();
+    }
     {
         std::lock_guard<std::mutex> l(mutex_);
         if (state_.user_id != uid || !uid)
@@ -274,18 +294,25 @@ void Model::account() {
         state_.user_id = uid;
         state_.nickname = json_text(p, "nickname", "未登录");
     }
-    if (uid) {
-        try {
-            auto ids = api_->call("user_song_id_list", {{"uid", uid}});
-            std::set<uint64_t> likes;
-            for (const auto &i : array_at(ids, {"ids"}))
-                if (i.is_number_unsigned() || i.is_number_integer())
-                    likes.insert(i.get<uint64_t>());
-            std::lock_guard<std::mutex> l(mutex_);
-            state_.likes = std::move(likes);
-        } catch (...) {
-        }
-    }
+    if (uid)
+        try { load_likes(true); } catch (...) {}
+}
+void Model::load_likes(bool refresh) {
+    if (likes_loaded_ && !refresh)
+        return;
+    const auto uid = snapshot().user_id;
+    if (!uid)
+        return;
+    const auto ids = api_->call("user_song_id_list", {{"uid", uid}});
+    std::set<uint64_t> likes;
+    for (const auto &id : array_at(ids, {"ids"}))
+        if (id.is_number_unsigned() || id.is_number_integer())
+            likes.insert(id.get<uint64_t>());
+    if (!current_view())
+        return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.likes = std::move(likes);
+    likes_loaded_ = true;
 }
 void Model::assign(std::vector<Media> items, std::string title, std::string subtitle, bool more) {
     {
@@ -408,7 +435,7 @@ void Model::browse(Page page) {
         return;
     }
     if (page == Page::Settings) {
-        assign({}, "设置", "音质、网络与运行信息");
+        assign({}, "设置", "账号、音质、网络与运行信息");
         return;
     }
     if (page == Page::Player) {
@@ -650,6 +677,10 @@ void Model::library_section(int section, bool more) {
     }
     const int offset = more ? s.offset + 100 : 0;
     enqueue_view("正在加载我的音乐", [this, section, uid = s.user_id, offset, more] {
+        if (snapshot().user_id != uid)
+            return;
+        if (section == 1)
+            load_likes(!more);
         std::vector<Media> items;
         std::string title;
         bool has_more = false;
@@ -727,85 +758,232 @@ void Model::fm() {
         assign(parse_songs(array_at(j, {"data"})), "私人 FM", "听见下一首惊喜 · X 换一批");
     });
 }
+void Model::sync_accounts() {
+    if (!accounts_)
+        return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.accounts = accounts_->list();
+    state_.user_id = accounts_->active_user_id();
+    state_.nickname = "未登录";
+    for (const auto& entry : state_.accounts)
+        if (entry.user_id == state_.user_id)
+            state_.nickname = entry.nickname;
+    ++state_.revision;
+}
+void Model::save_current_session() {
+    if (!accounts_)
+        throw std::runtime_error("账号存储不可用，请检查 accounts.json");
+    api_->flush_cookies();
+    accounts_->update_active(api_->session_cookies());
+}
+void Model::reset_account_state() {
+    ++view_generation_;
+    lyric_id_ = 0;
+    library_mode_ = 0;
+    likes_loaded_ = false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.items.clear();
+    state_.queue.clear();
+    state_.likes.clear();
+    state_.lyrics.clear();
+    state_.qr_key.clear();
+    state_.qr_url.clear();
+    state_.qr_message.clear();
+    state_.search_query.clear();
+    state_.search_type = 1;
+    state_.collection = false;
+    state_.collection_id = 0;
+    state_.subscribed = false;
+    state_.more = false;
+    state_.offset = 0;
+    state_.error.clear();
+    if (state_.page == Page::Settings) {
+        state_.title = "设置";
+        state_.subtitle = "账号、音质、网络与运行信息";
+    } else {
+        state_.page = Page::Account;
+        state_.title = "我的账号";
+        state_.subtitle = "扫码登录，在设置中管理多个账号";
+    }
+    history_.clear();
+    artwork_pending_.clear();
+    artwork_retry_after_.clear();
+    ++queue_generation_;
+    ++state_.revision;
+}
+void Model::set_account_change_callback(std::function<void()> callback) {
+    on_account_change_ = std::move(callback);
+}
+void Model::cancel_qr() {
+    std::lock_guard<std::mutex> qr_lock(qr_mutex_);
+    ++qr_generation_;
+    qr_pending_ = false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.qr_key.clear();
+    state_.qr_url.clear();
+    state_.qr_message.clear();
+    ++state_.revision;
+}
 void Model::login_qr() {
-    enqueue("正在生成登录二维码", [this] {
-        auto j = api_->qr_create();
-        auto d = object_at(j, "data");
-        std::lock_guard<std::mutex> l(mutex_);
-        state_.qr_key = json_text(j, "unikey", json_text(d, "unikey"));
-        state_.qr_url =
-            json_text(j, "qr_url", "https://music.163.com/login?codekey=" + state_.qr_key);
-        state_.qr_message = "打开网易云音乐，扫描二维码";
-    });
+    cancel_qr();
+    std::lock_guard<std::mutex> qr_lock(qr_mutex_);
+    const auto generation = qr_generation_.load();
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        state_.qr_message = "正在生成登录二维码";
+    }
+    enqueue("", [this, generation] {
+        try {
+            ApiConfig config;
+            config.proxy = snapshot().proxy;
+            config.timeout_seconds = 15;
+            config.persist_cookies = false;
+#ifdef __SWITCH__
+            config.ca_bundle = "romfs:/certs/cacert.pem";
+#endif
+            // No cookie filename: a cancelled scan cannot change any saved login.
+            auto pending = std::make_unique<ApiClient>(config);
+            auto j = pending->qr_create();
+            std::lock_guard<std::mutex> qr_lock(qr_mutex_);
+            if (generation != qr_generation_ || !current_view())
+                return;
+            auto d = object_at(j, "data");
+            qr_api_ = std::move(pending);
+            std::lock_guard<std::mutex> lock(mutex_);
+            state_.qr_key = json_text(j, "unikey", json_text(d, "unikey"));
+            state_.qr_url = json_text(j, "qr_url", "https://music.163.com/login?codekey=" + state_.qr_key);
+            state_.qr_message = "打开网易云音乐，扫描二维码";
+            ++state_.revision;
+        } catch (const std::exception& error) {
+            std::lock_guard<std::mutex> qr_lock(qr_mutex_);
+            if (generation == qr_generation_) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                state_.qr_message = error.what();
+                ++state_.revision;
+            }
+        }
+    }, false);
+}
+void Model::activate_qr(uint64_t generation, uint64_t account_generation,
+                        uint64_t uid, std::string nickname, std::string cookies) {
+    if (generation != qr_generation_ || account_generation != account_generation_ || stopping_)
+        return;
+    if (!uid)
+        throw std::runtime_error("扫码授权未返回有效账号，请重新扫码");
+    save_current_session();
+    if (on_account_change_)
+        on_account_change_();
+    // A cancel or switch while the playback barrier was waiting must win.
+    std::lock_guard<std::mutex> qr_lock(qr_mutex_);
+    if (generation != qr_generation_ || account_generation != account_generation_ || stopping_)
+        return;
+    accounts_->save(uid, std::move(nickname), std::move(cookies));
+    api_->adopt_session(accounts_->active_cookies());
+    ++account_generation_;
+    active_account_generation_ = account_generation_;
+    ++qr_generation_;
+    qr_api_.reset();
+    reset_account_state();
+    sync_accounts();
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        state_.qr_message = "登录成功";
+        state_.notice = "账号已保存，可在设置中切换";
+    }
 }
 void Model::poll_qr() {
-    auto key = snapshot().qr_key;
+    std::lock_guard<std::mutex> qr_lock(qr_mutex_);
+    const auto key = snapshot().qr_key;
+    const auto generation = qr_generation_.load();
+    const auto account_generation = account_generation_.load();
     if (key.empty() || qr_pending_.exchange(true))
         return;
-    enqueue(
-        "",
-        [this, key] {
-            try {
-                auto j = api_->qr_check(key);
-                auto code = json_id(j, "code");
-                if (code == 803) {
-                    api_->flush_cookies();
-                    account();
-                    std::lock_guard<std::mutex> l(mutex_);
-                    state_.qr_key.clear();
-                    state_.qr_url.clear();
-                    state_.qr_message = "登录成功";
-                    state_.notice = "登录成功，欢迎回来";
-                } else {
-                    std::lock_guard<std::mutex> l(mutex_);
-                    state_.qr_message = code == 800   ? "二维码已过期，按 A 刷新"
-                                        : code == 802 ? "已扫码，请在手机上确认"
-                                                      : "等待扫码";
-                    if (code == 800)
-                        state_.qr_key.clear();
-                }
-            } catch (const std::exception &e) {
-                std::lock_guard<std::mutex> l(mutex_);
-                state_.qr_message = e.what();
-            }
-            qr_pending_ = false;
-        },
-        false);
-}
-void Model::send_captcha(std::string phone, std::string country) {
-    enqueue("正在发送验证码", [this, phone, country] {
-        api_->call("captcha", {{"phone", phone}, {"ctcode", country}});
-        report("验证码已发送，请输入手机收到的验证码");
-    });
-}
-void Model::login_phone(std::string phone, std::string country, std::string captcha) {
-    enqueue("正在登录", [this, phone, country, captcha] {
-        api_->call("login_cellphone",
-                   {{"phone", phone}, {"ctcode", country}, {"captcha", captcha}});
-        api_->flush_cookies();
-        account();
-        report("登录成功");
-    });
-}
-void Model::logout() {
-    enqueue("正在退出账号", [this] {
-        bool remote_confirmed = true;
+    enqueue("", [this, key, generation, account_generation] {
         try {
-            api_->call("logout");
-        } catch (...) {
-            remote_confirmed = false;
+            if (generation != qr_generation_ || !qr_api_)
+                return;
+            auto j = qr_api_->qr_check(key);
+            if (generation != qr_generation_ || account_generation != account_generation_)
+                return;
+            auto code = json_id(j, "code");
+            if (code == 803) {
+                auto status = qr_api_->login_status();
+                auto profile = object_at(status, "profile");
+                if (profile.empty())
+                    profile = object_at(object_at(status, "data"), "profile");
+                activate_qr(generation, account_generation, json_id(profile, "userId"),
+                            json_text(profile, "nickname", "网易云用户"), qr_api_->session_cookies());
+            } else {
+                std::lock_guard<std::mutex> qr_lock(qr_mutex_);
+                if (generation != qr_generation_ || account_generation != account_generation_)
+                    return;
+                std::lock_guard<std::mutex> lock(mutex_);
+                state_.qr_message = code == 800 ? "二维码已过期，按 A 刷新"
+                                    : code == 802 ? "已扫码，请在手机上确认" : "等待扫码";
+                if (code == 800)
+                    state_.qr_key.clear();
+                ++state_.revision;
+            }
+        } catch (const std::exception& error) {
+            std::lock_guard<std::mutex> qr_lock(qr_mutex_);
+            if (generation == qr_generation_) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                state_.qr_message = error.what();
+                ++state_.revision;
+            }
         }
-        api_->clear_session();
-        {
-            std::lock_guard<std::mutex> l(mutex_);
-            state_.user_id = 0;
-            state_.nickname = "未登录";
-            state_.likes.clear();
-            state_.qr_key.clear();
-            state_.qr_url.clear();
+        if (generation == qr_generation_ || account_generation != account_generation_)
+            qr_pending_ = false;
+    }, false);
+}
+void Model::switch_account(uint64_t uid) {
+    cancel_qr();
+    ++account_generation_; // Invalidate already queued operations for the old account.
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        artwork_pending_.clear();
+    }
+    enqueue("正在切换账号", [this, uid] {
+        save_current_session();
+        const auto entries = accounts_->list();
+        if (!uid || std::none_of(entries.begin(), entries.end(),
+                                [uid](const SavedAccount& a) { return a.user_id == uid; }))
+            throw std::runtime_error("保存的账号不存在");
+        if (on_account_change_)
+            on_account_change_();
+        if (!current_view())
+            return;
+        accounts_->switch_to(uid);
+        api_->adopt_session(accounts_->active_cookies());
+        reset_account_state();
+        sync_accounts();
+        report("账号已切换，打开音乐库查看收藏");
+    });
+}
+void Model::remove_account(uint64_t uid) {
+    cancel_qr();
+    // A server-expired session can leave user_id == 0 while its local slot is
+    // still active. Invalidate old data jobs for every removal; inactive-account
+    // removal still leaves the playback engine untouched.
+    ++account_generation_;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        artwork_pending_.clear();
+    }
+    enqueue("正在移除本机账号", [this, uid] {
+        save_current_session();
+        const bool active = accounts_->active_user_id() == uid;
+        if (active && on_account_change_)
+            on_account_change_();
+        if (!current_view())
+            return;
+        accounts_->remove(uid);
+        if (active) {
+            api_->adopt_session(accounts_->active_cookies());
+            reset_account_state();
         }
-        report(remote_confirmed ? "账号已退出，本地会话已清除"
-                                : "本地会话已清除；网络退出暂未确认");
+        sync_accounts();
+        report(active ? "当前账号已从本机移除，请扫码登录或切换其他账号" : "账号已从本机移除");
     });
 }
 void Model::like(uint64_t id) {
@@ -817,8 +995,13 @@ void Model::like(uint64_t id) {
         return;
     }
     enqueue("正在更新喜欢状态", [this, id] {
+        load_likes();
+        if (!current_view())
+            return;
         const bool add = !snapshot().likes.count(id);
         api_->call("like_v1", {{"songid", id}, {"like", add}});
+        if (!current_view())
+            return;
         std::lock_guard<std::mutex> l(mutex_);
         if (add)
             state_.likes.insert(id);
@@ -841,6 +1024,8 @@ void Model::subscribe_collection() {
                   : s.subscribed);
         api_->call(s.collection_kind == MediaKind::Album ? "album_like" : "song_list_like",
                    {{"id", s.collection_id}, {"like", add}});
+        if (!current_view())
+            return;
         std::lock_guard<std::mutex> l(mutex_);
         if (state_.collection_id == s.collection_id && state_.collection_kind == s.collection_kind)
             state_.subscribed = add;
@@ -850,7 +1035,8 @@ void Model::subscribe_collection() {
 void Model::check_in() {
     enqueue("正在签到", [this] {
         auto j = api_->call("daily_task");
-        report(json_text(j, "msg", "签到完成"));
+        if (current_view())
+            report(json_text(j, "msg", "签到完成"));
     });
 }
 Json Model::intelligence_arguments(uint64_t current_track_id) const {
@@ -880,7 +1066,8 @@ void Model::intelligence(uint64_t current_track_id) {
 void Model::fm_dislike(uint64_t id) {
     enqueue("正在跳过不喜欢的歌曲", [this, id] {
         api_->call("fm_trash", {{"songid", id}});
-        report("已反馈");
+        if (current_view())
+            report("已反馈");
     });
 }
 void Model::set_play_callback(std::function<void(const std::vector<Media> &, size_t)> cb) {

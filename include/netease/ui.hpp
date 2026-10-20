@@ -22,9 +22,11 @@ class MusicView : public brls::View {
     void tap(float x, float y);
     void scroll_rows(int rows);
     void input_search();
-    void phone_login();
+    void account_tools();
+    void account_actions(uint64_t user_id);
     void airplay_tools();
-    void options(const std::string &, const std::vector<std::string> &, std::function<void(int)>);
+    void options(const std::string &, const std::vector<std::string> &, std::function<void(int)>,
+                 int selected = 0);
     void paint_sidebar(NVGcontext *, const Snapshot &);
     void paint_list(NVGcontext *, const Snapshot &);
     void paint_player(NVGcontext *, const Snapshot &, bool full);
@@ -42,6 +44,7 @@ class MusicView : public brls::View {
     NcmAirplayStatus airplay_{};
     Snapshot display_;
     std::map<std::string, int> textures_;
+    int app_icon_ = -1;
     std::unique_ptr<qrcodegen::QrCode> qr_;
     std::string qr_source_;
     int selection_ = 0, scroll_ = 0, nav_ = 0, revision_ = -1;

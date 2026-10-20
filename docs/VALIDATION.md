@@ -260,3 +260,34 @@ suite in CI; all 11 native tests, including the overlay regression, passed.
 Details and reproduction steps are in [EMULATOR.md](EMULATOR.md).
 This session does not establish physical-console background playback or
 long-duration reliability.
+
+## Audio formats and QR account update — 2026-10-20
+
+This section describes the newer development branch; previous release records
+above retain their original scope. No real account credentials are test fixtures.
+
+| Check | Observed result |
+| --- | --- |
+| Full host script | 15/15 CTest checks, independent XEAPI verification and generated local/HTTPS MP3 integration passed |
+| FLAC decoding | Generated 16/24-bit mono/stereo at 44.1/48/96/192 kHz; reference PCM, seek, native/Ogg/ID3 and misleading extensions passed |
+| Multichannel | FLAC quad/5.1/7.1 and AAC 5.1/7.1 mixed to stereo against independent FFmpeg reference output |
+| AAC decoding | ADTS and M4A faststart/tail-moov, 44.1-kHz mono and 48-kHz stereo; PCM tolerance at most one S16 unit, priming/tail/seek/cancellation and malformed-input checks passed |
+| Progressive engine playback | Throttled local HTTPS FLAC, AAC ADTS and faststart M4A started before the completed-cache marker; pause/seek/resume and later offline-cache replay passed |
+| Shared engine | MP3/FLAC/AAC mixed queues, normal controls, AirPlay handoff, synchronous account clearing and pending-load races passed |
+| Account persistence | Migration, UID deduplication, restart, active/nonactive removal, failed-save rollback, stale QR response rejection, cancellation during the playback barrier and session rotation passed |
+| UI | Isolated Xvfb with synthetic accounts: switching persisted the selected UID, both accounts remained saved, the queue tombstone was written; all eight quality options were reachable and the selected level persisted |
+| Icon | SVG rendered to 512px PNG / 256px baseline JPEG; embedded NRO bytes matched the committed JPEG exactly |
+| AAC instrumentation | ASan/UBSan/leak checks and strict devkitA64 compilation passed |
+
+Local evidence is retained under `build/validation/update-host-tests.log`,
+`build/validation/flac/`, `build/validation/aac/` and
+`build/validation/account-ui/`. These directories are ignored and are not
+included in public source or release packages.
+
+High-quality source decoding is not bit-perfect hardware output: the current
+shared player outputs stereo S16 at 48 kHz with its existing linear resampler.
+AAC exact seeking decodes forward from the beginning; long tracks can seek more
+slowly. Tail-moov M4A waits for its trailing index. Real multi-account server
+sessions, entitlements and concurrent Atmosphere/game playback still require
+user/device validation. See [audio details](AUDIO_FORMATS.md) and
+[account behavior](ACCOUNTS.md).

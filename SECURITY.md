@@ -3,11 +3,17 @@
 Authentication is sent directly to NetEase endpoints over verified HTTPS.
 The application never needs a third-party API proxy to operate.
 
-`sdmc:/config/netease-switch/cookies.txt` is an account credential. Do not
-include it in issues, screenshots, public SD backups or patches. The QR key,
-authorization responses, phone numbers and SMS codes are also private.
+`sdmc:/config/netease-switch/accounts.json` contains all locally saved account
+credentials. `cookies.txt` mirrors the active session. Both files, their backups
+and staging files must stay private; never include them in issues, screenshots,
+public SD backups or patches. QR keys and authorization responses are private too.
+QR scanning is the only supported sign-in method.
 The background service reads the session without overwriting the foreground
-application's newer login. Signing out removes the local session.
+application's newer login. Removing an account erases its local saved session;
+other accounts remain saved. Switching accounts clears the old music queue before
+publishing the new active cookie jar. On desktop the files are written with mode
+0600; FAT SD storage has no equivalent per-user permissions. These are local
+session stores, not encrypted vaults.
 The directory keeps its original name so CloudTune NX can reuse existing
 sessions after the project rename; it is not a stale installation artifact.
 

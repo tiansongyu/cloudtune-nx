@@ -7,16 +7,21 @@ else()
   set(_codec_platform host)
 endif()
 set(CLOUDTUNE_FFMPEG_ROOT "${_cloudtune_root}/.deps/ffmpeg-${_codec_platform}"
-  CACHE PATH "Pinned ALAC-only FFmpeg installation")
-if(NOT EXISTS "${CLOUDTUNE_FFMPEG_ROOT}/lib/libavcodec.a")
+  CACHE PATH "Pinned ALAC/AAC FFmpeg installation")
+if(NOT EXISTS "${CLOUDTUNE_FFMPEG_ROOT}/lib/libavformat.a" OR
+   NOT EXISTS "${CLOUDTUNE_FFMPEG_ROOT}/lib/libavcodec.a")
   message(FATAL_ERROR
-    "Build the isolated ALAC decoder first: scripts/setup-airplay-codec.sh ${_codec_platform}")
+    "Build the isolated audio codecs first: scripts/setup-airplay-codec.sh ${_codec_platform}")
 endif()
+add_library(cloudtune_audio_codecs INTERFACE)
+target_include_directories(cloudtune_audio_codecs INTERFACE "${CLOUDTUNE_FFMPEG_ROOT}/include")
+target_link_libraries(cloudtune_audio_codecs INTERFACE
+  "${CLOUDTUNE_FFMPEG_ROOT}/lib/libavformat.a"
+  "${CLOUDTUNE_FFMPEG_ROOT}/lib/libavcodec.a"
+  "${CLOUDTUNE_FFMPEG_ROOT}/lib/libavutil.a" m)
 add_library(cloudtune_airplay STATIC receiver.cpp crypto.cpp codec.cpp mdns.cpp)
 target_include_directories(cloudtune_airplay PUBLIC
   "${_cloudtune_root}" "${_cloudtune_root}/include"
   PRIVATE "${CLOUDTUNE_FFMPEG_ROOT}/include" "${MBEDTLS_INCLUDE_DIR}")
-target_link_libraries(cloudtune_airplay PRIVATE
-  "${CLOUDTUNE_FFMPEG_ROOT}/lib/libavcodec.a"
-  "${CLOUDTUNE_FFMPEG_ROOT}/lib/libavutil.a"
-  "${MBEDCRYPTO_LIBRARY}" m Threads::Threads)
+target_link_libraries(cloudtune_airplay PRIVATE cloudtune_audio_codecs
+  "${MBEDCRYPTO_LIBRARY}" Threads::Threads)

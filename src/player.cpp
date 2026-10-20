@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "netease/player.hpp"
+#include "netease/storage.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -126,6 +127,32 @@ bool Player::command(NcmCommand cmd, uint32_t arg) {
         return false;
     return command_locked(cmd, arg);
 }
+bool Player::clear_account() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopped_)
+        return false;
+    try {
+        const NcmQueueHeader empty{{'N','C','M','Q','U','E','U','E'}, NCM_PROTOCOL_VERSION, 0};
+        storage::write_file(directory_ + "/queue.nsq",
+                            std::string(reinterpret_cast<const char*>(&empty), sizeof(empty)));
+        if (!ensure_runtime())
+            return false;
+#ifdef __SWITCH__
+        if (background_) {
+            if (R_SUCCEEDED(ncmPlaybackClearQueue()))
+                return true;
+            error_ = "无法清除后台播放队列；请更新后台服务后重试账号切换";
+            return false;
+        }
+#endif
+        if (local_ && local_->command(NcmCommand_ClearQueue))
+            return true;
+        error_ = "播放队列尚未清除，请稍后重试账号切换";
+    } catch (const std::exception&) {
+        error_ = "无法清除账号播放队列，请检查存储空间";
+    }
+    return false;
+}
 bool Player::command_locked(NcmCommand cmd, uint32_t arg) {
 #ifdef __SWITCH__
     if (background_) {
@@ -163,6 +190,9 @@ bool Player::command_locked(NcmCommand cmd, uint32_t arg) {
             break;
         case NcmCommand_Stop:
             rc = ncmPlaybackStop();
+            break;
+        case NcmCommand_ClearQueue:
+            rc = ncmPlaybackClearQueue();
             break;
         default:
             return false;

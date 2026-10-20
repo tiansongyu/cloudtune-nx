@@ -163,7 +163,8 @@ try:
         if name.startswith(("vendor/", "resources/", "background/vendor/", "overlay/vendor/")):
             if any(word in pathlib.Path(name).name.upper() for word in ("LICENSE", "COPYING", "NOTICE")):
                 copy(root / name, docs / "licenses" / name)
-    for name in ("vendor/qrcodegen/qrcodegen.hpp", "background/vendor/dr_mp3.h"):
+    for name in ("vendor/qrcodegen/qrcodegen.hpp", "background/vendor/dr_mp3.h",
+                 "background/vendor/dr_flac.h"):
         copy(root / name, docs / "licenses" / name)
     # Rebuildable third-party sources accompany the binary assets. No runtime
     # directory, generated key or account file participates in this whitelist.
@@ -184,7 +185,7 @@ try:
         f"- [Complete project source at this commit](https://github.com/tiansongyu/cloudtune-nx/tree/{commit})\n"
         f"- [Download the project source](https://github.com/tiansongyu/cloudtune-nx/archive/{commit}.tar.gz)\n"
         "- The unmodified FFmpeg release archive, exact version/SHA256 manifest, "
-        "and ALAC-only build recipe are included in this directory.\n"
+        "and limited AAC / ALAC build recipe are included in this directory.\n"
         "- From this directory, run `bash scripts/setup-airplay-codec.sh host` "
         "or `bash scripts/setup-airplay-codec.sh switch` with devkitA64/libnx installed. "
         "The recipe uses the bundled archive without downloading it; host builds need "
