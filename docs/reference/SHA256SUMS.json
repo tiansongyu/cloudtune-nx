@@ -1,0 +1,12 @@
+{
+  "devkitpro-LICENSE": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+  "devkitpro-devkita64.Dockerfile": "a8d590e149f311ec3b58a4d12c4a10b38cc7811f80055619217aac00861b89f5",
+  "eden-release-0.2.1.json": "0a65afb02bce5abb4a10de8f39ca49fb714249d4aba5bb149d81ef3078e9fdc5",
+  "libnx/LICENSE.md": "5b6675f85016009624d29c9222201d3c0fc6a2d5c59253367f27d3e15011cdb2",
+  "libnx/applet.h": "972fc4dddfe0c57e28707c380792de1ad187d9e136d267a7160dbdcdbac47f0a",
+  "libnx/audout.h": "5092dbe2948da5f7c54e1785ef5a036a73a116093fcf4d439e4325d92b7fa4a2",
+  "libnx/index.html": "954046cd68f3bb770ad48ad357bb462b524380623925f9107cb2d0bb4710f1af",
+  "libnx/service.h": "f774751e638d9025f89a796655266a24908801a2f14be46421fe816c757bbe94",
+  "switch-examples/README.upstream.md": "efc5ae9eb3385f5b658ebd54f4d701336319242d2670dbac646d924e41325613",
+  "switch-examples/application.Makefile": "ef3376322f62bb88339bc61a5299b3bc130eb9c794b594f3ff41d41ce44ff50f"
+}
