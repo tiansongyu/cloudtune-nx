@@ -171,3 +171,35 @@ versions, installed binary hashes and matching ELFs.
 - Sleep/resume, lost Wi-Fi, reconnection and expired media URLs.
 - Multi-hour playback, memory growth and audio interruption.
 - Crash-report symbolication against the exact tested ELF.
+
+## Overlay preview — 2026-10-20
+
+The real `CloudTune.ovl` was attempted in isolated Eden 0.2.1 and failed
+before rendering: Tesla's HOME/SLEEP event handles were unavailable,
+followed by `0xE401`. The exact hash and failure evidence are recorded in
+[OVERLAY_PREVIEW.md](OVERLAY_PREVIEW.md).
+
+An optional Linux preview compiles the same production overlay UI with
+an SDL2 adapter and connects to the actual engine in a separate process.
+Generated local MP3s require no account or network.
+
+| Check | Result |
+| --- | --- |
+| Native GUI and playback service builds | Passed |
+| Service regression | 26 checks passed; also passed through CTest |
+| Client protocol boundary checks | 9 checks passed |
+| Launcher process lifecycle checks | 10 mock checks passed, including duplicate launch and cleanup after rebuilding |
+| Isolated Xvfb UI checks | 13 checks passed |
+| Chinese text | Visually inspected; bundled Noto rendered correctly |
+| Vinyl animation | Screenshot comparison changed during playback and remained unchanged while paused |
+| UI controls | Play/pause, L/R, volume, repeat, shuffle, stop, reconnect and mouse clicks affected the independent engine |
+| Window resizing | Mouse hit testing passed at both 1280×720 and 1600×900 |
+| UI closure | Playback position continued advancing after the window exited |
+
+Local evidence: `build/validation/overlay-preview-ui-tests.json`,
+`overlay-preview-client-tests.json`, `overlay-preview-service-regression.json`,
+`overlay-preview-launcher-tests.json`,
+and the `overlay-preview-playing-*.png` / `overlay-preview-paused-*.png`
+screenshots. The desktop demo starts muted. Service regression uses SDL's
+dummy audio device; these results verify decoding and control behavior,
+not hardware sound quality, real Tesla loading, or game audio coexistence.

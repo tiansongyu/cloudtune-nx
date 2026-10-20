@@ -202,3 +202,23 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - Workflow lint and positive/negative version checks passed locally.
   Hosted CI outcomes are recorded by the corresponding GitHub Actions runs;
   each published release links its own run and source commit.
+
+## 2026-10-20 · Interactive overlay preview
+
+- Attempted the actual OVL in an isolated Eden 0.2.1 profile. The emulator
+  exited before rendering because Tesla could not acquire HOME/SLEEP event
+  handles. Preserved the exact binary hash, error log and black-screen result.
+- Added an optional native preview that compiles the production overlay UI
+  unchanged through an SDL2/stb adapter with bundled Chinese fonts.
+- Kept the GUI and GPLv3 audio engine in separate processes, using the shared
+  status/command ABI over a private Unix socket. A generated local queue
+  avoids account access; a new playback process starts paused and muted.
+- Added a launcher, explicit process cleanup, isolated build/runtime
+  directories and a reusable 26-check service regression in GitHub Actions.
+- Native builds, CTest, nine client boundary checks and 13 isolated GUI
+  checks passed. Screenshot comparison verified rotating vinyl during
+  playback and a stationary disc while paused. Closing the window left
+  playback advancing; resized mouse hit testing also passed.
+- The user requested a visible desktop demonstration for this task.
+  Preparation remained isolated; the final preview is explicitly labeled
+  as desktop simulation. Atmosphère/Tesla and game BGM remain hardware checks.

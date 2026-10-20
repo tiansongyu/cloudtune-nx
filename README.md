@@ -221,6 +221,16 @@ Borealis 的平台输入法；手机验证码只在明确选择「发送验证�
 完整配置、日志和截图位置见 [模拟器调试](docs/EMULATOR.md)。
 运行本项目自制 NRO 不需要从第三方下载主机密钥或固件。
 
+覆盖层另有 [Linux 桌面预览](docs/OVERLAY_PREVIEW.md)，复用实际覆盖层 UI，
+连接独立音频测试进程，支持中文、旋转黑胶和播放控制：
+
+```bash
+python3 scripts/overlay-preview.py
+```
+
+首次启动使用生成的本地音频并静音。关闭窗口后播放器继续运行；
+用 `python3 scripts/overlay-preview.py --stop` 结束本次预览及播放进程。
+
 模拟器不等同于运行 Atmosphère 的真实 Switch。游戏内后台混音、系统休眠、
 蓝牙耳机、底座切换和资源占用使用 [实机验收表](docs/HARDWARE_TESTING.md) 检查。
 问题报告请附相同构建的 ELF 对应信息和已脱敏日志。

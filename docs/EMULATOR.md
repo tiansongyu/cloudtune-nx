@@ -109,6 +109,12 @@ checks and their individual results.
 
 ## Scope of emulator results
 
+The actual Tesla overlay was also attempted in Eden 0.2.1. Its HOME/SLEEP
+event acquisition failed before rendering; see the binary hash and captured
+failure in [the overlay preview guide](OVERLAY_PREVIEW.md). That guide also
+provides an optional native desktop preview using the production UI and an
+independent host audio process.
+
 A successful standalone NRO test establishes that the application can boot
 and render in Eden. It does not establish Atmosphère sysmodule startup,
 Tesla/Ultrahand overlay loading, audio coexistence with retail games, HOME

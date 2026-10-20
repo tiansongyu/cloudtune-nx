@@ -48,13 +48,22 @@ jobs:
         run: |
           mkdir -p build/validation
           ./scripts/test-host.sh 2>&1 | tee build/validation/ci-host.log
+      - name: Build the desktop overlay preview and test its independent player
+        run: |
+          cmake -S . -B build/desktop -DCLOUDTUNE_BUILD_OVERLAY_PREVIEW=ON
+          cmake --build build/desktop --parallel 2 --target \
+            cloudtune-overlay-preview cloudtune-preview-service
+          ctest --test-dir build/desktop --output-on-failure \
+            -R '^overlay-preview-service$' 2>&1 | tee build/validation/ci-overlay-preview.log
       - name: Retain host test log
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cloudtune-host-logs
           # Never upload generated HTTPS keys, cookies, caches or runtime data.
-          path: build/validation/ci-host.log
+          path: |
+            build/validation/ci-host.log
+            build/validation/ci-overlay-preview.log
           if-no-files-found: ignore
           retention-days: 7
           include-hidden-files: false
