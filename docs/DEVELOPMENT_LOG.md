@@ -159,3 +159,24 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - Earlier logs, binary names, hashes and screenshots retain their historical
   meaning. A renamed build must have its own validation and package manifest;
   the documentation change does not imply new runtime or hardware results.
+
+## 2026-10-20 · Publication checks and redistributable history
+
+- Rebuilt all three CloudTune NX components with the Docker toolchain and
+  checked package headers, program ID, NACP branding and matching ELF IDs.
+- Passed all five host tests, the independent XEAPI verifier and local/HTTPS
+  audio integration checks. The actual NRO passed anonymous startup and
+  Chinese native-dialog regression on isolated virtual display `:121`.
+- Refreshed public discovery and vinyl screenshots from the desktop client
+  on a separate anonymous virtual display. No user session data was copied.
+- Audited every historical blob before publishing. Two proprietary font
+  blobs from the reference baseline were replaced with the current licensed
+  DejaVu assets, and their license was added to the initial snapshot.
+- Preserved all ten existing development milestones, author/committer
+  identities, timestamps and messages. Only historical font assets and their
+  license changed; the current source tree remained identical. Commit IDs
+  changed as a consequence. Earlier local validation hashes retain their
+  original historical meaning.
+- Kept an ignored local backup bundle and commit map. The publication branch
+  cannot reach the two original font blobs; private runtime files, credentials
+  and generated artifacts are excluded from the source repository.

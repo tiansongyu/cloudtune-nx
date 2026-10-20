@@ -8,6 +8,37 @@ retained as historical evidence; current filenames and commands are documented
 in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
 hardware or emulator validation.
 
+## CloudTune NX publication build — 2026-10-20
+
+The renamed build passed Docker compilation for `CloudTune.nro`,
+`cloudtune-background.nsp` and `CloudTune.ovl`. Package validation checked
+the NRO/NSO headers, program ID, branding metadata and all three matching
+ELF build IDs. The host suite passed 5/5 CTest checks, independent XEAPI
+verification and generated local/throttled HTTPS MP3 integration checks.
+
+The actual NRO ran in Eden 0.2.1 on isolated virtual display `:121`.
+Discovery, the CloudTune branding, Chinese account confirmation and quality
+menus rendered correctly, including controller hints and system icons. The
+anonymous test profile contained no user credentials; the process exited
+normally. README images were captured separately from the same-source desktop
+client on `:122`. These checks do not establish physical-console BGM behavior.
+
+Local evidence is retained under `build/validation/`:
+
+- `cloudtune-switch-build.log`, `cloudtune-artifacts.json`
+- `cloudtune-host-tests.log`
+- `cloudtune-eden-start.log`, `cloudtune-eden-tested-SHA256SUMS`
+- `cloudtune-eden-start.png`, `cloudtune-eden-account-dialog.png`,
+  `cloudtune-eden-quality-dialog.png`
+
+Tested binary SHA-256:
+
+```text
+a23b2d33d8c469b36f99fb7470426b8605c9929069b93c188bc9893352f11ca4  CloudTune.nro
+9a61da5b5979bd0f112583ad5fdfc8edcd4aeb396d69f26e2075c084eb37c8da  cloudtune-background.nsp
+f087f944b5159639752e2b39dc03a1f5bf3e4499a4671750954903a0cd0de348  CloudTune.ovl
+```
+
 ## Toolchain and emulator baseline — 2026-10-20
 
 | Check | Result | Evidence |
