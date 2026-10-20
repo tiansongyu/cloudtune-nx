@@ -350,3 +350,65 @@ also emits existing dependency warnings.
 
 This pass did not repeat the real iPhone session or establish physical-console
 background playback. The current user profile was not used as a fixture.
+
+## Second detailed regression pass — 2026-10-20
+
+Implementation commit `fbfa383` fixes the additional defects described in
+[the second review](CODE_REVIEW.md#second-review--account-failures-and-playback-boundaries).
+Commit `9f055a8` adds the full UBSan CTest suite to GitHub Actions. Tests use
+generated audio and synthetic account records; real login data is excluded.
+
+| Check | Observed result |
+| --- | --- |
+| Complete native validation | 20/20 CTest checks passed, followed by independent XEAPI verification and generated local/HTTPS MP3 integration |
+| Full CTest under UBSan | 20/20 passed with `halt_on_error=1` and nonrecovering instrumentation; the initial run reproduced AirPlay's out-of-range enum before its fix |
+| Decoder/PCM boundaries | 1,219 fixed cases passed: MP3 CBR/VBR/no-Xing, FLAC, ADTS, M4A faststart/tail index, truncated/mutated data, exact seeks, blocked-input cancellation and concurrent PCM access |
+| Instrumented audio | The same 1,219 cases passed with ASan/UBSan/leak checks, including instrumented pinned FFmpeg; separate mono/stereo/5.1/7.1 AAC reference checks passed |
+| Account/API instrumentation | Five account/API/model/storage/transport tests passed under ASan/UBSan/leak checks, including the first-publication double failure and same-object retry |
+| Playback session ownership | Independently decrypted real loopback EAPI requests matched the canonical queue session and session-specific cache files despite stale mirrors and a later account change |
+| AirPlay receiver | Fragmented RTSP, 16 pipelined requests, five malformed metadata cases, 103 truncated UDP packets, 12 incomplete sessions and four restarts passed, with valid PCM recovery and stable descriptor counts |
+| Runtime and IPC | Concurrent enable/disconnect/status, failed-save rollback, invalid ports, partial client responses, 1,024 guarded word-count layouts and 512 handle layouts passed |
+| Overlay preview service | Existing 26 control/disconnect/resume cases passed using the actual independent desktop service; this does not execute a Horizon kernel |
+| Switch build | Docker rebuilt the NRO, background ExeFS and OVL successfully, including raw command validation before enum conversion |
+| Static/script checks | ShellCheck, Python compilation, YAML/Bash workflow checks and Git whitespace checks passed |
+
+The full UBSan build instruments repository code and the included dr_mp3/dr_flac
+implementations. Its prebuilt FFmpeg is not instrumented; the separate audio
+run above rebuilds that dependency with sanitizers. Neither run is a claim of
+whole-console sanitizer coverage or exhaustive fuzzing.
+
+### Isolated NRO playback
+
+The final implementation NRO ran in Eden 0.2.1 on virtual display `:194`, using
+a fresh synthetic SD profile, disabled AirPlay, a blocked API proxy and muted
+host output. It played generated stereo MP3 at 48 kHz, FLAC at 96 kHz, then
+AAC/M4A at 44.1 kHz by natural queue advance. All three produced nonzero PCM,
+advancing clocks and a successful `audout` result. Chinese text rendered
+correctly. Screenshots show the vinyl moving during playback and remaining
+still during pause; the paused clock stayed at 0:02. Resuming and seeking to
+about 0:09 worked, followed by natural advance again.
+
+Tested NRO SHA-256:
+
+```text
+cab09ffd1fc174048b67c5c13d7f9275d8f57ce03f1f59713879eb5eef912825
+```
+
+This is emulator execution and PCM evidence, not a human listening check.
+Eden logged shader translator diagnostics during startup and GPU syncpoint
+diagnostics after selecting application exit. A clean emulator-side shutdown
+is therefore not established by this run; only the isolated test processes
+were terminated afterward. No user desktop process or account profile was
+modified.
+
+Local evidence is in `build/validation/review2-host-final-tests.log`,
+`review2-ubsan-final-tests.log`, `review2-switch-final-build.log` and the
+`review2-accounts/`, `review2-codec/`, `review2-airplay/`,
+`review2-engine/` and `review2-eden/` directories under `build/validation/`.
+These ignored paths retain before/after failures, test logs and screenshots.
+
+Remaining acceptance work includes Atmosphère service/overlay playback while a
+game runs on a physical Switch, real SD power loss and long-duration network
+testing. The prior iPhone listening confirmation was not repeated in this pass.
+Server-side entitlements and live login behavior are not proven by local
+synthetic fixtures.

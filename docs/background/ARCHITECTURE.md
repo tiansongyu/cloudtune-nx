@@ -48,8 +48,30 @@ A queue has a 16-byte header followed by fixed-size
 module's memory. Larger remote collections must be presented in windows by the
 application. Each entry can contain a resolved HTTPS URL or only a song ID.
 The background process resolves missing/expired URLs using the same API client
-and the application's cookie jar. Only the application persists cookies; the
-background reader reloads them without overwriting a newer login or logout.
+and a session snapshot captured when it loads the queue. It reads the active
+session from the committed `accounts.json`, recovering its `.bak` when needed,
+then imports and exports the jar through libcurl to normalize cookie syntax.
+Both API authentication and cache identity use that same normalized snapshot.
+Next/previous, repeat, and resuming music after AirPlay preserve it; an
+acknowledged `ClearQueue` discards it before an account change. Only a newly
+loaded queue captures another session. The background reader never repairs
+the compatibility mirror or persists cookies.
+
+`cookies.txt` is a legacy fallback only when neither `accounts.json` nor its
+backup exists and no `accounts.json.pending` marker or marker backup exists.
+A committed signed-out record always selects an anonymous session, regardless
+of stale mirror contents. Empty or damaged account archives reject new queue
+loads, including cold play from the overlay. An existing loaded queue and
+AirPlay are not stopped merely because a file later becomes unreadable.
+
+First-time account publication writes a non-sensitive `.pending` marker before
+changing the legacy mirror. Successful commit or verified restoration of the
+old mirror removes it. If both publication and rollback fail, the marker
+prevents restart or a retry on the same store object from accepting the staged
+mirror as a legacy session. A valid committed archive takes precedence over a
+residual marker. Recovery must restore the committed archive, or restore the
+previous legacy session before removing the marker; see
+[account recovery](../ACCOUNTS.md).
 
 Accepted controls: play, pause, toggle, next, previous, stop, millisecond seek,
 volume from 0 to 1,000, shuffle, and repeat off/one/all. Previous restarts the
@@ -72,11 +94,12 @@ only after a successful complete response. Incomplete downloads are never
 mistaken for an offline cache hit. Before a new transfer, oldest cache files
 are evicted to retain at most 512 MiB of other tracks, plus at most 512 MiB
 for the current download (approximately 1 GiB total).
-Cache filenames include the song ID and a digest of the active login session
-and requested quality. Logging in or changing quality therefore cannot silently reuse
-an anonymous preview or a lower-quality download. Session tokens never appear
-in cache filenames. Saved settings and cookies recover their `.bak` snapshot
-if read during a Horizon replacement operation.
+Cache filenames include the song ID and a digest of the loaded queue's
+authenticated session identity and requested quality. Loading a queue after
+login or changing quality therefore cannot silently reuse an anonymous preview
+or a lower-quality download. Session tokens never appear in cache filenames.
+Saved settings and account archives recover their `.bak` snapshot if read
+during a Horizon replacement operation.
 
 The shared decoder selects MP3, FLAC or AAC from actual content, independently
 of URL suffix and service format labels. AAC supports ADTS and M4A; FLAC also

@@ -362,3 +362,30 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - Added shell/Python checks to GitHub Actions and corrected outdated background
   architecture notes. No real session files or private runtime evidence were
   added to source control. Findings and remaining limits are in `CODE_REVIEW.md`.
+
+## Second detailed review (2026-10-20)
+
+- Added fault injection and independent cross-review around account publication.
+  Queue playback now captures the committed, normalized account session; API
+  authentication and cache ownership stay consistent until queue replacement.
+  Expired and path-restricted cookies no longer supply custom authentication.
+- Guarded first account publication with a non-secret pending marker. A failed
+  publication plus failed rollback cannot expose an uncommitted legacy session,
+  including retries through the same store object. Shutdown cancels pending
+  account publication after a playback barrier.
+- Fixed sample-offset errors in MP3 seeking and early-EOF detection when a
+  reliable frame count is available. Added 1,219 bounded codec/PCM cases, with
+  generated fixtures and a separate fully instrumented decoder/FFmpeg run.
+- A full UBSan run reproduced out-of-range AirPlay lifecycle enums. Internal
+  events now use integer storage; raw IPC commands are checked before conversion.
+  Added strict AirPlay port parsing and failed-response clearing.
+- Expanded RTSP/UDP/metadata, receiver restart, concurrent runtime, IPC layout
+  and account/cache isolation regressions. Final native and UBSan CTest suites
+  both passed 20/20. Independent XEAPI and local/HTTPS playback also passed.
+- Built all three Switch components and exercised the implementation NRO in an
+  isolated virtual Eden desktop: MP3/FLAC/AAC automatic detection and natural
+  advance, pause/resume/seek, Chinese text and vinyl animation. Emulator
+  diagnostics and the limits of muted synthetic playback are recorded in
+  `VALIDATION.md`.
+- Added full UBSan validation to the GitHub Actions host job. Updated account
+  recovery, background session ownership and audio seeking documentation.

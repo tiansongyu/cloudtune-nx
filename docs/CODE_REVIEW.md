@@ -52,3 +52,33 @@ complete analysis of every platform/dependency path.
 - Existing real iPhone/Eden and generated NRO playback evidence keeps the scope
   described in the validation report. This review does not replace physical
   console acceptance or long-duration network testing.
+
+## Second review — account failures and playback boundaries
+
+The second pass added fault injection, independent cross-review and sanitizer
+coverage. It found additional defects despite the first pass's green tests.
+The new cases use synthetic sessions, generated music and local servers.
+
+| Area | Reproduced defect | Fix and regression evidence |
+| --- | --- | --- |
+| Queue identity | An interrupted account save could leave the cookie mirror newer than the committed archive. Reloading it between songs could change the API identity and cache owner within one queue. | Capture the active canonical session when loading the queue, normalize it through libcurl, and retain it until the queue is cleared or replaced. A TLS fixture independently decrypts EAPI requests and verifies Alice/Alice/Bob identity and cache ownership across playback, next track and reload. The player never rewrites account files. |
+| Authentication fields | Expired cookies and cookies scoped to an unrelated path could enter custom API authentication fields. | Select unexpired root-path cookies from the official domain using the normalized cookie jar. Transport tests check the actual header and decrypted request body. libcurl's exported list can contain expired cookies; see [CURLINFO_COOKIELIST](https://curl.se/libcurl/c/CURLINFO_COOKIELIST.html). |
+| First account publication | If both canonical publication and cookie rollback failed, an uncommitted mirror could be treated as a legacy login. Retrying on the same store could also discard the recovery guard. | Persist a non-secret initialization marker before changing the mirror. Refuse legacy fallback and retries until a trusted session is restored. FIFO/directory fault injection verifies both failures, the retry guard and preservation of file contents. |
+| Shutdown | A pending account job could still publish a switch/removal after shutdown started. | Include the stopping state in the account-generation check. A deterministic blocked-playback-barrier test verifies cancellation. |
+| MP3 seeking and truncation | Encoder-delay handling made forward seeks return the wrong samples. Early EOF with a reliable declared frame count was not marked damaged. | Seek relative to the audible cursor by bounded decoding, rewind when necessary, and compare short reads with the declared length. Sample-exact forward/backward/EOF tests and truncated Xing streams reproduce the original defects. |
+| AirPlay handoff | Internal events 100–102 were cast into a public enum whose representable range ended at 31. UBSan rejected the handoff. | Store internal event numbers as integers, retain the public ABI, and validate incoming raw IPC command numbers before converting them to the enum. Both MP3 and FLAC handoff tests now run under UBSan. |
+| AirPlay configuration/status | Fractional or oversized ports could truncate/wrap; failed IPC could leave a partially written AirPlay status. | Require an integer port in range and clear failed status results. Boundary, persistence-failure and partial-response tests cover both changes. |
+
+Additional checks exercise 1,219 deterministic codec/PCM cases, fragmented and
+pipelined RTSP, malformed metadata and UDP packets, receiver restarts,
+concurrent runtime controls and guarded IPC layouts. These are bounded
+regressions, not exhaustive fuzzing. UBSan is now part of the GitHub Actions host
+job; separate ASan/UBSan/leak runs cover accounts/API and the audio decoder with
+instrumented pinned FFmpeg. See [the validation report](VALIDATION.md) for results
+and evidence locations.
+
+The initialization marker prevents unsafe recovery after observed write
+failures; actual SD-card power-loss behavior still requires hardware testing.
+MP3 without a reliable declared frame count cannot distinguish ordinary EOF
+from every truncated stream. Exact MP3 seeks may decode intervening samples and
+take longer on distant targets.
