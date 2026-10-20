@@ -10,21 +10,18 @@ TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
 TARGET      := CloudTune
-BUILD       := build
+OVERLAY_ROOT := $(abspath $(dir $(firstword $(MAKEFILE_LIST))))
+# Keep every generated file outside the source tree, including recursive make
+# objects and the linker map. OUTPUT_DIR may be overridden for an isolated build.
+OUTPUT_DIR  ?= $(abspath $(OVERLAY_ROOT)/../build/overlay)
+override OUTPUT_DIR := $(abspath $(OUTPUT_DIR))
+BUILD       := $(OUTPUT_DIR)/obj
 SOURCES     := source ../background/client
 INCLUDES    := ../include vendor/libtesla
 APP_TITLE   := CloudTune NX
 APP_AUTHOR  := CloudTune NX contributors
-APP_VERSION := 0.1.0
+APP_VERSION := $(shell sed -n '/^project/s/.*VERSION //p' $(OVERLAY_ROOT)/../CMakeLists.txt | cut -d' ' -f1)
 NO_ICON     := 1
-
-ifeq ($(LIGHTWEIGHT),1)
-APP_TITLE   := CloudTune NX Lite
-APP_VERSION := 0.1.0-lite1
-DEFINES     += -DSWITIFY_LIGHTWEIGHT_OVERLAY=1
-endif
-
-
 
 ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS      := -Os -g -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter -ffunction-sections -fdata-sections \
@@ -34,16 +31,17 @@ CFLAGS      += $(INCLUDE) -DNDEBUG=1
 CXXFLAGS    := $(CFLAGS) -std=gnu++20 -fno-exceptions
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) \
-               -Wl,--gc-sections,-Map,$(notdir $*.map)
+               -Wl,--gc-sections,-Map,$(OUTPUT_DIR)/$(TARGET).map
 LIBS        := -lnx
 LIBDIRS     := $(PORTLIBS) $(LIBNX)
 
-ifneq ($(BUILD),$(notdir $(CURDIR)))
+ifneq ($(BUILD),$(CURDIR))
 
-export OUTPUT := $(CURDIR)/$(TARGET)
+export OUTPUT_DIR
+export OUTPUT := $(OUTPUT_DIR)/$(TARGET)
 export TOPDIR := $(CURDIR)
 export VPATH := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
-export DEPSDIR := $(CURDIR)/$(BUILD)
+export DEPSDIR := $(BUILD)
 
 CFILES   := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
@@ -53,9 +51,9 @@ export LD := $(CXX)
 export OFILES := $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
                   $(foreach dir,$(LIBDIRS),-I$(dir)/include) \
-                  -I$(CURDIR)/$(BUILD)
+                  -I$(BUILD)
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
-export NROFLAGS := --nacp=$(CURDIR)/$(TARGET).nacp
+export NROFLAGS := --nacp=$(OUTPUT).nacp
 
 .PHONY: all clean $(BUILD)
 
@@ -66,8 +64,8 @@ $(BUILD):
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 clean:
-	@rm -rf $(BUILD) $(TARGET).ovl $(TARGET).nacp $(TARGET).elf \
-	        $(TARGET).map
+	@rm -rf "$(BUILD)" "$(OUTPUT).ovl" "$(OUTPUT).nacp" "$(OUTPUT).elf" \
+	        "$(OUTPUT).map"
 
 else
 
@@ -81,6 +79,8 @@ $(OUTPUT).ovl: $(OUTPUT).elf $(OUTPUT).nacp
 	@echo built ... $(notdir $@)
 
 $(OUTPUT).elf: $(OFILES)
+
+$(OUTPUT).nacp: $(OVERLAY_ROOT)/../CMakeLists.txt
 
 -include $(DEPENDS)
 

@@ -2,178 +2,201 @@
 set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
-build_dir="${SWITCH_BUILD_DIR:-$repo_root/build/switch}"
-background_dir="${BACKGROUND_BUILD_DIR:-$build_dir/background}"
-overlay_dir="${OVERLAY_BUILD_DIR:-$repo_root/overlay}"
-version="${RELEASE_VERSION:-$(sed -n 's/^project(CloudTuneNX VERSION \([^ ]*\).*/\1/p' CMakeLists.txt)}"
-[[ "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]] || {
-    echo "Invalid release version: $version" >&2; exit 1;
-}
+mode="${1:-local}"
+case "$mode" in
+    local|--check|--release) ;;
+    --help|-h)
+        echo "Usage: scripts/package.sh [--check|--release]"
+        echo "Default: timestamped development archives in dist/; staging in build/package/."
+        echo "--release: clean, verified build -> exactly five assets in dist/release/."
+        exit 0 ;;
+    *) echo "Unknown option: $mode" >&2; exit 2 ;;
+esac
+[[ $# -le 1 ]] || { echo "Too many arguments" >&2; exit 2; }
 
-app="$build_dir/CloudTune.nro"
-app_elf="$build_dir/CloudTune.elf"
-service="$background_dir/cloudtune-background.nsp"
-service_elf="$background_dir/cloudtune-background.elf"
-overlay="$overlay_dir/CloudTune.ovl"
-overlay_elf="$overlay_dir/CloudTune.elf"
-for artifact in "$app" "$app_elf" "$service" "$service_elf" "$overlay" "$overlay_elf" \
-    resources/certs/cacert.pem background/toolbox.json; do
-    [[ -s "$artifact" ]] || { echo "Missing artifact: $artifact" >&2; exit 1; }
-done
-python3 - "$app" "$overlay" "$service" "$app_elf" "$service_elf" "$overlay_elf" <<'PY'
-import pathlib, struct, sys
-for arg in sys.argv[1:3]:
-    with open(arg, 'rb') as f:
-        f.seek(16)
-        assert f.read(4) == b'NRO0', f'Invalid NRO/overlay header: {arg}'
-package = pathlib.Path(sys.argv[3]).read_bytes()
-assert package[:4] == b'PFS0', 'Background service is not an ExeFS PFS0 package'
-count, string_size = struct.unpack_from('<II', package, 4)
-strings = 16 + count * 24
-data = strings + string_size
-entries = {}
-for n in range(count):
-    offset, size, name_offset = struct.unpack_from('<QQI', package, 16 + n * 24)
-    name = package[strings+name_offset:].split(b'\0', 1)[0].decode()
-    assert data + offset + size <= len(package), 'Invalid PFS0 file size'
-    entries[name] = package[data+offset:data+offset+size]
-assert 'main' in entries and 'main.npdm' in entries, 'Incomplete ExeFS package'
-assert entries['main'][:4] == b'NSO0', 'Background main is not an NSO'
-b = entries['main.npdm']
-aci = struct.unpack_from('<I', b, 0x70)[0]
-acid = struct.unpack_from('<I', b, 0x78)[0]
-program = struct.unpack_from('<Q', b, aci+0x10)[0]
-lo, hi = struct.unpack_from('<QQ', b, acid+0x210)
-assert b[:4] == b'META' and b[aci:aci+4] == b'ACI0'
-assert b[acid+0x200:acid+0x204] == b'ACID'
-assert program == lo == hi == 0x42000000004E434D, 'Incorrect system-module program ID'
-def elf_build_id(arg):
-    elf = pathlib.Path(arg).read_bytes()
-    assert elf[:4] == b'\x7fELF' and elf[4:6] == b'\x02\x01', 'Expected ELF64 little endian'
-    assert struct.unpack_from('<H', elf, 18)[0] == 183, f'Expected AArch64 ELF: {arg}'
-    section_offset = struct.unpack_from('<Q', elf, 40)[0]
-    section_size, section_count = struct.unpack_from('<HH', elf, 58)
-    for index in range(section_count):
-        section = section_offset + index * section_size
-        if struct.unpack_from('<I', elf, section+4)[0] != 7:
-            continue
-        offset, size = struct.unpack_from('<QQ', elf, section+24)
-        end = offset + size
-        while offset + 12 <= end:
-            name_size, desc_size, kind = struct.unpack_from('<III', elf, offset)
-            offset += 12
-            name = elf[offset:offset+name_size]
-            offset += (name_size + 3) & ~3
-            desc = elf[offset:offset+desc_size]
-            offset += (desc_size + 3) & ~3
-            if name.rstrip(b'\0') == b'GNU' and kind == 3:
-                return desc
-    raise AssertionError(f'ELF lacks GNU build ID: {arg}')
-for elf, binary in (
-    (sys.argv[4], pathlib.Path(sys.argv[1]).read_bytes()),
-    (sys.argv[5], entries['main']),
-    (sys.argv[6], pathlib.Path(sys.argv[2]).read_bytes()),
-):
-    build_id = elf_build_id(elf)
-    assert binary[64:96] == build_id.ljust(32, b'\0'), f'ELF does not match binary: {elf}'
-print('NRO, overlay, NSO, NPDM program ID and all matching ELF build IDs verified.')
-PY
-[[ "${1:-}" != "--check" ]] || exit 0
+python3 - "$repo_root" "$mode" <<'PY'
+import datetime
+import fcntl
+import importlib.util
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import zipfile
 
-# A unique directory preserves earlier release candidates and matching ELFs.
-stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-release_name="CloudTuneNX-${version}-${stamp}"
-release_dir="$repo_root/dist/$release_name"
-mkdir -p "$release_dir"
-sd="$release_dir/sd"
-symbols="$release_dir/symbols"
-title="42000000004E434D"
-mkdir -p "$sd/switch/CloudTune" "$sd/switch/.overlays" \
-    "$sd/atmosphere/contents/$title/flags" "$sd/config/netease-switch" \
-    "$symbols/app" "$symbols/background" "$symbols/overlay"
-cp "$app" "$sd/switch/CloudTune/CloudTune.nro"
-cp "$overlay" "$sd/switch/.overlays/CloudTune.ovl"
-cp "$service" "$sd/atmosphere/contents/$title/exefs.nsp"
-cp background/toolbox.json "$sd/atmosphere/contents/$title/toolbox.json"
-: > "$sd/atmosphere/contents/$title/flags/boot2.flag"
-cp resources/certs/cacert.pem "$sd/config/netease-switch/cacert.pem"
-cp "$app_elf" "$symbols/app/CloudTune.elf"
-cp "$service_elf" "$symbols/background/cloudtune-background.elf"
-cp "$overlay_elf" "$symbols/overlay/CloudTune.elf"
-[[ ! -f "$build_dir/CloudTune.map" ]] || cp "$build_dir/CloudTune.map" "$symbols/app/"
-[[ ! -f "$overlay_dir/CloudTune.map" ]] || cp "$overlay_dir/CloudTune.map" "$symbols/overlay/"
-[[ ! -f build/validation/toolchain-packages.txt ]] || \
-    cp build/validation/toolchain-packages.txt "$symbols/"
+sys.dont_write_bytecode = True
+root = pathlib.Path(sys.argv[1])
+mode = sys.argv[2]
+release = mode == "--release"
+spec = importlib.util.spec_from_file_location("package_verifier", root / "scripts/verify-package.py")
+verifier = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(verifier)
+require = verifier.require
 
-cp docs/INSTALLING.md "$release_dir/INSTALLING.md"
-cp docs/VALIDATION.md "$release_dir/VALIDATION.md"
-cp README.md "$release_dir/README.md"
-cp -R docs "$release_dir/docs"
-mkdir -p "$release_dir/licenses"
-cp resources/certs/LICENSE-MPL-2.0.txt "$release_dir/licenses/"
-[[ ! -f LICENSE ]] || cp LICENSE "$release_dir/licenses/CloudTuneNX-LICENSE"
-[[ ! -f THIRD_PARTY_NOTICES.md ]] || cp THIRD_PARTY_NOTICES.md "$release_dir/licenses/"
-[[ ! -f background/THIRD_PARTY_NOTICES.md ]] || \
-    cp background/THIRD_PARTY_NOTICES.md "$release_dir/licenses/background-THIRD_PARTY_NOTICES.md"
-[[ ! -f overlay/vendor/libtesla/LICENSE ]] || \
-    cp overlay/vendor/libtesla/LICENSE "$release_dir/licenses/libtesla-LICENSE"
-# Retain the actual dependency notices, including font licenses and source-
-# embedded notices, rather than only a table that points back into the repo.
-python3 - "$release_dir/licenses" <<'PY'
-import pathlib, shutil, sys
-destination = pathlib.Path(sys.argv[1])
-sources = []
-for root in ('vendor', 'resources', 'background/vendor', 'overlay/vendor'):
-    for p in pathlib.Path(root).rglob('*'):
-        if p.is_file() and any(word in p.name.upper() for word in ('LICENSE', 'COPYING', 'NOTICE')):
-            sources.append(p)
-sources += [pathlib.Path('vendor/qrcodegen/qrcodegen.hpp'),
-            pathlib.Path('background/vendor/dr_mp3.h')]
-for p in sources:
-    target = destination / p
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(p, target)
-PY
-export NCM_PACKAGE_VERSION="$version" NCM_PACKAGE_STAMP="$stamp"
-python3 - "$release_dir" <<'PY'
-import hashlib, json, os, pathlib, subprocess, sys
-p = pathlib.Path(sys.argv[1])
+
 def git(*args):
-    r = subprocess.run(['git', *args], text=True, capture_output=True)
-    return r.stdout.strip() if r.returncode == 0 else None
-manifest = {
-    'product': 'CloudTune NX',
-    'version': os.environ['NCM_PACKAGE_VERSION'],
-    'packaged_utc': os.environ['NCM_PACKAGE_STAMP'],
-    'git_commit': git('rev-parse', 'HEAD'),
-    'source_has_uncommitted_changes': bool(git('status', '--porcelain')),
-    'background_title_id': '42000000004E434D',
-    'files': {},
-}
-for f in sorted(p.rglob('*')):
-    if f.is_file():
-        manifest['files'][str(f.relative_to(p))] = {
-            'bytes': f.stat().st_size,
-            'sha256': hashlib.sha256(f.read_bytes()).hexdigest(),
-        }
-(p/'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-lines = []
-for f in sorted(p.rglob('*')):
-    if f.is_file():
-        lines.append(hashlib.sha256(f.read_bytes()).hexdigest() + '  ' + str(f.relative_to(p)))
-(p/'SHA256SUMS').write_text('\n'.join(lines) + '\n')
+    return subprocess.check_output(["git", *args], cwd=root, text=True).strip()
+
+
+def copy(source, target):
+    source = pathlib.Path(source)
+    require(source.is_file() and not source.is_symlink(), f"Missing/unsafe package input: {source}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+
+
+def archive(source, destination, *, prefix="", epoch):
+    records = {}
+    timestamp = datetime.datetime.fromtimestamp(max(epoch, 315532800), datetime.timezone.utc)
+    date = (timestamp.year, timestamp.month, timestamp.day,
+            timestamp.hour, timestamp.minute, timestamp.second)
+    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        # Explicit directory entries preserve the hidden .overlays directory.
+        for path in sorted(source.rglob("*")):
+            require(not path.is_symlink(), f"Symlink in staging: {path}")
+            name = prefix + path.relative_to(source).as_posix()
+            info = zipfile.ZipInfo(name + ("/" if path.is_dir() else ""), date)
+            info.create_system = 3
+            info.external_attr = ((0o40755 if path.is_dir() else 0o100644) << 16)
+            if path.is_dir():
+                info.external_attr |= 0x10
+                z.writestr(info, b"")
+            else:
+                data = path.read_bytes()
+                z.writestr(info, data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+                records[name] = verifier.file_record(data)
+    return records
+
+
+try:
+    match = re.search(r"project\(CloudTuneNX\s+VERSION\s+(\d+\.\d+\.\d+)\b",
+                      (root / "CMakeLists.txt").read_text())
+    require(match is not None, "Cannot read CMake project version")
+    version = match.group(1)
+    requested = os.environ.get("RELEASE_VERSION")
+    require(requested is None or requested == version, "RELEASE_VERSION must equal CMake version")
+    commit = git("rev-parse", "HEAD")
+    dirty = bool(git("status", "--porcelain"))
+    if release:
+        require(not dirty, "Release packaging requires a clean Git worktree and index")
+        require(not (root / "dist/release").exists(),
+                "dist/release already exists; preserve it elsewhere before a new release build")
+
+    build = pathlib.Path(os.environ.get("SWITCH_BUILD_DIR", root / "build/switch"))
+    background = pathlib.Path(os.environ.get("BACKGROUND_BUILD_DIR", build / "background"))
+    overlay = pathlib.Path(os.environ.get("OVERLAY_BUILD_DIR", root / "build/overlay"))
+    paths, components = verifier.validate_build(build, background, overlay, version)
+    print("Verified NRO/OVL NACP versions, ExeFS/NPDM and three matching AArch64 ELFs.")
+    if mode == "--check":
+        sys.exit(0)
+
+    provenance_path = root / "build/validation/build-provenance.json"
+    provenance = json.loads(provenance_path.read_text()) if provenance_path.is_file() else None
+    if release:
+        require(provenance is not None, "Missing build provenance; run scripts/docker-build.sh first")
+        require(provenance.get("git_commit") == commit
+                and provenance.get("version") == version
+                and provenance.get("source_has_uncommitted_changes") is False,
+                "Build provenance is not from this clean commit; rebuild after committing changes")
+        require(provenance.get("components") == components,
+                "Build artifacts changed after their provenance was recorded")
+
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    prefix = f"CloudTuneNX-{version}" + ("" if release else f"-{stamp}")
+    dist = root / "dist"
+    dist.mkdir(exist_ok=True)
+    lock = (dist / ".package.lock").open("a")
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    names = {kind: f"{prefix}-{kind}.zip" for kind in ("sd", "symbols", "docs")}
+    manifest_name = f"{prefix}-manifest.json"
+    local_names = list(names.values()) + [manifest_name, f"{prefix}-SHA256SUMS"]
+    if release:
+        require(not (dist / "release").exists(), "Refusing to overwrite existing release assets")
+    else:
+        require(not any((dist / name).exists() for name in local_names),
+                "Timestamped package already exists; retry with a new timestamp")
+    staging_parent = root / "build/package"
+    staging_parent.mkdir(parents=True, exist_ok=True)
+    stage = pathlib.Path(tempfile.mkdtemp(prefix=prefix + "-", dir=staging_parent))
+    sd, symbols, docs, output = [stage / name for name in ("sd", "symbols", "documentation", "assets")]
+    for path in (sd, symbols, docs, output):
+        path.mkdir()
+
+    for component, (binary_path, elf_path) in verifier.COMPONENT_PATHS.items():
+        copy(paths[component][0], sd / binary_path)
+        copy(paths[component][1], stage / elf_path)
+    title = verifier.TITLE_ID
+    copy(root / "background/toolbox.json", sd / f"atmosphere/contents/{title}/toolbox.json")
+    flag = sd / f"atmosphere/contents/{title}/flags/boot2.flag"
+    flag.parent.mkdir(parents=True)
+    flag.write_bytes(b"")
+    copy(root / "resources/certs/cacert.pem", sd / "config/netease-switch/cacert.pem")
+    for source, target in (
+        (build / "CloudTune.map", symbols / "app/CloudTune.map"),
+        (overlay / "CloudTune.map", symbols / "overlay/CloudTune.map"),
+        (root / "build/validation/toolchain-packages.txt", symbols / "toolchain-packages.txt"),
+    ):
+        if source.is_file():
+            copy(source, target)
+
+    for name in ("README.md", "LICENSE", "CONTRIBUTING.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md"):
+        copy(root / name, docs / name)
+    for name in ("INSTALLING.md", "VALIDATION.md"):
+        copy(root / "docs" / name, docs / name)
+    # Include committed repository documentation, never ignored local test logs.
+    tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0")
+    for name in tracked:
+        if name.startswith("docs/"):
+            copy(root / name, docs / name)
+    copy(root / "overlay/vendor/libtesla/LICENSE", docs / "overlay/vendor/libtesla/LICENSE")
+    copy(root / "LICENSE", docs / "licenses/CloudTuneNX-LICENSE")
+    copy(root / "THIRD_PARTY_NOTICES.md", docs / "licenses/THIRD_PARTY_NOTICES.md")
+    copy(root / "background/THIRD_PARTY_NOTICES.md", docs / "licenses/background-THIRD_PARTY_NOTICES.md")
+    for name in tracked:
+        if name.startswith(("vendor/", "resources/", "background/vendor/", "overlay/vendor/")):
+            if any(word in pathlib.Path(name).name.upper() for word in ("LICENSE", "COPYING", "NOTICE")):
+                copy(root / name, docs / "licenses" / name)
+    for name in ("vendor/qrcodegen/qrcodegen.hpp", "background/vendor/dr_mp3.h"):
+        copy(root / name, docs / "licenses" / name)
+
+    epoch = int(git("show", "-s", "--format=%ct", "HEAD"))
+    archives = {}
+    for kind, source in (("sd", sd), ("symbols", symbols), ("docs", docs)):
+        target = output / names[kind]
+        members = archive(source, target, prefix="symbols/" if kind == "symbols" else "", epoch=epoch)
+        archives[target.name] = {"kind": kind, **verifier.file_record(target.read_bytes()),
+                                 "files": members}
+    require(git("rev-parse", "HEAD") == commit, "Git commit changed during packaging")
+    dirty = dirty or bool(git("status", "--porcelain"))
+    if release:
+        require(not dirty, "Source files changed while packaging; release aborted")
+    manifest = {
+        "format_version": 1, "product": "CloudTune NX", "version": version, "release": release,
+        "packaged_utc": stamp, "git_commit": commit,
+        "source_has_uncommitted_changes": dirty, "background_title_id": title,
+        "build_provenance": provenance, "components": components, "archives": archives,
+    }
+    (output / manifest_name).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    sums = [verifier.digest((output / name).read_bytes()) + "  " + name
+            for name in sorted(list(names.values()) + [manifest_name])]
+    (output / "SHA256SUMS").write_text("\n".join(sums) + "\n")
+    verifier.verify_package(output, version, commit, require_release=release)
+    if release:
+        # One same-filesystem rename publishes a complete five-file directory.
+        require(not (dist / "release").exists(), "Refusing to replace existing release assets")
+        output.rename(dist / "release")
+        print(f"Release assets verified and published: {dist / 'release'}")
+    else:
+        for source in sorted(output.iterdir()):
+            destination = dist / (f"{prefix}-SHA256SUMS" if source.name == "SHA256SUMS" else source.name)
+            source.rename(destination)
+        print(f"Development assets verified: {dist / (prefix + '-sd.zip')}")
+    print(f"Isolated staging retained for inspection: {stage}")
+except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError, zipfile.BadZipFile) as error:
+    print(f"Packaging failed: {error}", file=sys.stderr)
+    sys.exit(1)
 PY
-# SD zip has the SD-card directories at its root. Symbols never go on the SD.
-(cd "$sd" && zip -q -X -r "$repo_root/dist/$release_name-sd.zip" .)
-(cd "$release_dir" && zip -q -X -r "$repo_root/dist/$release_name-symbols.zip" \
-    symbols manifest.json SHA256SUMS)
-(cd "$release_dir" && zip -q -X -r "$repo_root/dist/$release_name-docs.zip" \
-    README.md INSTALLING.md VALIDATION.md docs licenses manifest.json SHA256SUMS)
-(
-    cd "$repo_root/dist"
-    sha256sum "$release_name-sd.zip" "$release_name-symbols.zip" "$release_name-docs.zip" \
-        > "$release_name-SHA256SUMS"
-)
-printf '\nRelease directory: %s\nSD archive: %s\nSymbols archive: %s\n' \
-    "$release_dir" "$repo_root/dist/$release_name-sd.zip" \
-    "$repo_root/dist/$release_name-symbols.zip"
