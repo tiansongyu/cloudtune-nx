@@ -5,11 +5,10 @@
 
 <p align="center">
   <a href="https://github.com/tiansongyu/cloudtune-nx/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/tiansongyu/cloudtune-nx/actions/workflows/ci.yml/badge.svg?branch=main"></a>
-  <a href="https://github.com/tiansongyu/cloudtune-nx/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/tiansongyu/cloudtune-nx?include_prereleases&amp;label=release"></a>
-  <img alt="Development preview" src="https://img.shields.io/badge/status-development%20preview-E84550">
+  <a href="https://github.com/tiansongyu/cloudtune-nx/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/tiansongyu/cloudtune-nx?label=release"></a>
 </p>
 
-**v0.2.1 开发预览** · 支持扫码登录、多账号、旋转黑胶播放器、AirPlay 1 和独立后台服务。
+**v0.2.1** · 支持扫码登录、多账号、旋转黑胶播放器、AirPlay 1 和独立后台服务。
 Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[验证记录](docs/VALIDATION.md)。
 
 ## 下载
@@ -94,7 +93,7 @@ sha256sum --check --ignore-missing SHA256SUMS
 
 ## 当前限制
 
-- **开发预览**：桌面测试与 Eden 测试不能代替实机验收。游戏内后台混音、休眠恢复、
+- **实机验证**：桌面测试与 Eden 测试不能代替实机验收。游戏内后台混音、休眠恢复、
   蓝牙耳机、底座切换及资源占用仍需按[实机验收表](docs/HARDWARE_TESTING.md)检查。
 - **统一音频输出**：高位深、高采样率音源会转换为立体声、16-bit / 48 kHz；Hi-Res 音源选项不代表原格式直通。
 - **服务权限**：会员、版权、地区和试听限制由网易云音乐决定；服务接口变化可能需要更新客户端。

@@ -102,7 +102,8 @@ Release 模式的固定文件名便于用户按版本下载，不表示不同构
 下载产物是 `CloudTuneNX-X.Y.Z-sd.zip`，包含 `CloudTune.nro`、
 `exefs.nsp` 和 `CloudTune.ovl`，另有 symbols、docs、manifest 和 `SHA256SUMS`。
 不需要手工上传二进制，也不需要额外配置个人访问令牌。
-默认 `0.x.y` 仍为开发预览；输入已发布版本或已有草稿会停止操作，不覆盖原附件。
+后续通过本工作流发布的版本均为正式 Release（`prerelease=false`），并标记为 Latest。
+输入已发布版本或已有草稿会停止操作，不覆盖原附件。
 
 手动运行以点击时所选 ref 的提交为准，运行期间分支后续更新不会改变构建来源；
 本地可复用 CI 使用同一提交。相关机制见 GitHub 的
@@ -122,7 +123,7 @@ Release 模式的固定文件名便于用户按版本下载，不表示不同构
    ```sh
    git switch main
    git pull --ff-only
-   git tag -a v0.2.2 -m "CloudTune NX v0.2.2 development preview"
+   git tag -a v0.2.2 -m "CloudTune NX v0.2.2"
    git push origin v0.2.2
    ```
 
@@ -131,8 +132,8 @@ Release 模式的固定文件名便于用户按版本下载，不表示不同构
    宿主或 Switch 任一必需检查失败时不会进入发布任务。修复后按实际失败阶段重新运行，
    或在需要修改源代码时提交新版本。
 5. 检查 Release 页面上的版本、发布说明、五个附件及源提交是否一致，
-   下载 SD 包重新核对 SHA-256。当前所有 `0.x.y` 版本
-   均标记为 **pre-release / 开发预览**。
+   下载 SD 包重新核对 SHA-256。手动发布与标签触发均发布为
+   **正式 Release**，包括 `0.x.y` 版本。
 
 已发布的版本标签与附件作为历史记录保留。不强制移动标签，不用同名新包替换
 已发布的附件；源代码修复应提升版本并创建新标签。失败运行的日志保留用于排查，

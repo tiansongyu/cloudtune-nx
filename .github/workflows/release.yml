@@ -31,7 +31,6 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       version: ${{ steps.tag.outputs.version }}
-      prerelease: ${{ steps.tag.outputs.prerelease }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,11 +51,6 @@ jobs:
           python3 scripts/release-target.py "$RELEASE_TAG" --commit "$GITHUB_SHA" "${arguments[@]}"
           printf 'tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          if [[ "$version" == 0.* ]]; then
-            echo 'prerelease=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'prerelease=false' >> "$GITHUB_OUTPUT"
-          fi
 
   ci:
     name: Test and build this tag
@@ -79,7 +73,6 @@ jobs:
     env:
       RELEASE_TAG: ${{ needs.validate.outputs.tag }}
       RELEASE_VERSION: ${{ needs.validate.outputs.version }}
-      RELEASE_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
       RELEASE_EVENT: ${{ github.event_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -126,7 +119,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" --verify-tag --target "$GITHUB_SHA" \
             --title "CloudTune NX $RELEASE_TAG" \
             --notes-file "$notes" \
-            --draft --prerelease="$RELEASE_PRERELEASE"
+            --draft --prerelease=false
           # Leave a failed draft intact for inspection; never replace its assets.
           roundtrip="$RUNNER_TEMP/cloudtune-release-roundtrip"
           mkdir "$roundtrip"
@@ -138,7 +131,7 @@ jobs:
           done
           python3 scripts/release-target.py "$RELEASE_TAG" --commit "$GITHUB_SHA" --verify-tag-only
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --verify-tag --draft=false --prerelease="$RELEASE_PRERELEASE"
+            --verify-tag --draft=false --prerelease=false --latest
           {
             printf '## CloudTune NX %s\n\n' "$RELEASE_TAG"
             printf '[下载 SD 安装包](%s/%s/releases/download/%s/CloudTuneNX-%s-sd.zip)\n\n' \

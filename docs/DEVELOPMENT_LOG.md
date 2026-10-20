@@ -439,3 +439,13 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - All 24 target/transport tests, Python syntax, ShellCheck and actionlint
   v1.7.12 passed locally. Tests include missing/annotated/conflicting tags,
   existing drafts, HTTP failures and concurrent creation without force updates.
+
+## Release status policy (2026-10-20)
+
+- Changed both manual and tag-triggered publication to full GitHub Releases,
+  including 0.x versions, and explicitly mark the published version Latest.
+- Updated current README and release documentation to match that policy.
+  Hardware validation requirements remain documented independently of the
+  GitHub release label.
+- Promoted the existing v0.2.1 release by updating its metadata; its tag and
+  compiled assets remain the previously verified build.
