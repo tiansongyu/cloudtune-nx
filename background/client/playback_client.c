@@ -44,6 +44,29 @@ Result ncmPlaybackSeek(uint32_t v) { return value(NcmCommand_Seek, v); }
 Result ncmPlaybackSetRepeat(NcmRepeatMode v) { return value(NcmCommand_Repeat, v); }
 Result ncmPlaybackSetShuffle(bool v) { return value(NcmCommand_Shuffle, v ? 1u : 0u); }
 Result ncmPlaybackStop(void) { return simple(NcmCommand_Stop); }
+Result ncmAirplayGetStatus(NcmAirplayStatus* status) {
+    if (!status) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    memset(status, 0, sizeof(*status));
+    Result result = serviceDispatchOut(&g_service, NCM_COMMAND_AIRPLAY_STATUS, *status);
+    if (R_FAILED(result)) return result;
+    if (status->version != NCM_AIRPLAY_VERSION) {
+        memset(status, 0, sizeof(*status));
+        return MAKERESULT(421, 1);
+    }
+    status->name[sizeof(status->name)-1] = 0;
+    status->address[sizeof(status->address)-1] = 0;
+    status->title[sizeof(status->title)-1] = 0;
+    status->artist[sizeof(status->artist)-1] = 0;
+    status->message[sizeof(status->message)-1] = 0;
+    return 0;
+}
+Result ncmAirplaySetEnabled(bool enabled) {
+    const uint32_t value = enabled ? 1u : 0u;
+    return serviceDispatchIn(&g_service, NCM_COMMAND_AIRPLAY_ENABLED, value);
+}
+Result ncmAirplayDisconnect(void) {
+    return serviceDispatch(&g_service, NCM_COMMAND_AIRPLAY_DISCONNECT);
+}
 Result ncmPlaybackLaunchBackground(void) {
     if (!hosversionIsAtmosphere())
         return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);

@@ -24,6 +24,14 @@ public:
     /* Returns false for invalid arguments or a full bounded command queue. */
     bool command(NcmCommand command, uint32_t argument = 0);
     NcmPlaybackStatus status() const;
+    /* Independent tools deliver bounded stereo signed-16 PCM. The same worker
+     * pauses music and owns the output device; sender threads never open it. */
+    bool begin_external(uint32_t sample_rate);
+    bool write_external(const int16_t* stereo, size_t frames);
+    void flush_external();
+    void end_external();
+    void external_volume(uint32_t permille);
+    bool external_active() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

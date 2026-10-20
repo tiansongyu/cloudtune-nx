@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "name": "FFmpeg",
+  "version": "7.1.5",
+  "archive": "ffmpeg-7.1.5.tar.xz",
+  "url": "https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz",
+  "sha256": "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f",
+  "signing_key_fingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8",
+  "license_files": [
+    "COPYING.LGPLv2.1",
+    "COPYING.LGPLv3",
+    "LICENSE.md"
+  ]
+}

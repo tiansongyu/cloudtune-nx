@@ -1,6 +1,7 @@
 #pragma once
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "netease/playback_protocol.h"
+#include "netease/airplay_protocol.h"
 #include <switch.h>
 #ifdef __cplusplus
 extern "C" {
@@ -21,6 +22,10 @@ Result ncmPlaybackSeek(uint32_t milliseconds);
 Result ncmPlaybackSetRepeat(NcmRepeatMode mode);
 Result ncmPlaybackSetShuffle(bool enabled);
 Result ncmPlaybackStop(void);
+/* Separate tool commands leave NcmPlaybackStatus and the overlay ABI intact. */
+Result ncmAirplayGetStatus(NcmAirplayStatus* status);
+Result ncmAirplaySetEnabled(bool enabled);
+Result ncmAirplayDisconnect(void);
 /* Launch the installed Atmosphere program if it has not booted yet. */
 Result ncmPlaybackLaunchBackground(void);
 #ifdef __cplusplus

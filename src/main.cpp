@@ -42,6 +42,11 @@ int main(int argc, char **argv) {
     std::filesystem::create_directories(directory);
     netease::Model model(directory);
     netease::Player player(directory);
+    // One bounded startup attempt runs before the UI loop. Runtime restores
+    // its saved AirPlay preference; attaching to a background owner never
+    // creates a second receiver in this process.
+    if (!player.start_tools())
+        model.report(player.error());
     model.set_play_callback([&](const std::vector<netease::Media> &list, size_t index) {
         if (!player.play(list, index))
             model.report(player.error());

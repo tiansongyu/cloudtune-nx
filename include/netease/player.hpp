@@ -1,30 +1,36 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
-#include "engine.hpp"
+#include "runtime.hpp"
 #include "netease/library.hpp"
 #include "netease/playback_protocol.h"
 #include <memory>
+#include <mutex>
 
 namespace netease {
 class Player {
   public:
     explicit Player(std::string directory);
     ~Player();
+    bool start_tools();
     bool play(const std::vector<Media> &tracks, size_t index);
     bool command(NcmCommand command, uint32_t argument = 0);
     NcmPlaybackStatus status();
-    bool background() const {
-        return background_;
-    }
-    const std::string &error() const {
-        return error_;
-    }
+    NcmAirplayStatus airplay_status();
+    bool set_airplay_enabled(bool enabled);
+    bool disconnect_airplay();
+    bool background() const;
+    std::string error() const;
     void shutdown();
 
   private:
-    bool ensure_engine();
+    // All helpers below run while mutex_ is held. IPC and local ownership
+    // cannot change while the model worker and UI submit commands concurrently.
+    bool ensure_runtime();
+    bool command_locked(NcmCommand command, uint32_t argument);
+    NcmAirplayStatus airplay_status_locked();
+    mutable std::mutex mutex_;
     std::string directory_, error_;
-    bool background_ = false;
-    std::unique_ptr<playback::Engine> local_;
+    bool background_ = false, remote_seen_ = false, stopped_ = false;
+    std::unique_ptr<playback::Runtime> local_;
 };
 } // namespace netease

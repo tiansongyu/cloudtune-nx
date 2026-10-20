@@ -11,6 +11,34 @@ const NVGcolor white = nvgRGB(245, 243, 240), muted = nvgRGB(150, 151, 161),
                red = nvgRGB(244, 68, 79);
 const char *labels[] = {"发现音乐", "排行榜",   "搜索",     "我的音乐",
                         "正在播放", "播放队列", "我的账号", "设置"};
+enum SettingRow { QualitySetting, ProxySetting, AirplaySetting, StopSetting, ExitSetting,
+                  SettingsCount };
+constexpr float SettingsLeft = 256, SettingsWidth = 974, SettingsTop = 180,
+                SettingsStride = 64, SettingsHeight = 56;
+const char *airplay_state(const NcmAirplayStatus &status) {
+    if (status.version != NCM_AIRPLAY_VERSION)
+        return "请更新后台服务";
+    switch (status.state) {
+    case NcmAirplay_Disabled: return "已关闭";
+    case NcmAirplay_Starting: return "正在启动";
+    case NcmAirplay_Ready: return "等待连接";
+    case NcmAirplay_Connected: return "设备已连接";
+    case NcmAirplay_Playing: return "正在接收音频";
+    case NcmAirplay_Error: return "服务异常";
+    default: return "状态未知";
+    }
+}
+template <size_t N> std::string status_text(const char (&value)[N]) {
+    const char *end = static_cast<const char *>(std::memchr(value, '\0', N));
+    return std::string(value, end ? static_cast<size_t>(end - value) : N);
+}
+bool airplay_source(const NcmPlaybackStatus &status) {
+    // The music ABI remains unchanged. The engine marks every external-source
+    // state, including local pause and output failure, with this prefix.
+    // Receiver Playing alone cannot tell whether local audio is paused.
+    return status.track_id == 0 && status.state != NcmPlayback_Stopped &&
+           status_text(status.message).rfind("AirPlay ", 0) == 0;
+}
 void rect(NVGcontext *v, float x, float y, float w, float h, NVGcolor color, float r = 0) {
     nvgBeginPath(v);
     if (r)
@@ -59,6 +87,7 @@ MusicView::MusicView(Model &m, Player &p) : model_(m), player_(p) {
     setHideClickAnimation(true);
     last_frame_ = last_poll_ = last_qr_ = std::chrono::steady_clock::now();
     last_poll_ -= std::chrono::seconds(1);
+    last_airplay_poll_ = last_poll_;
     auto bind = [this](brls::ControllerButton b, std::function<void()> f, bool repeat = false) {
         registerAction(
             "", b,
@@ -226,9 +255,11 @@ void MusicView::navigate(int d) {
     }
     if (s.page == Page::Player) {
         if (d == -2 || d == 2) {
-            auto t = static_cast<int64_t>(playback_.position_ms) + (d > 0 ? 10000 : -10000);
-            player_.command(NcmCommand_Seek, static_cast<uint32_t>(std::max<int64_t>(
-                                                 0, std::min<int64_t>(t, playback_.duration_ms))));
+            if (!airplay_source(playback_)) {
+                auto t = static_cast<int64_t>(playback_.position_ms) + (d > 0 ? 10000 : -10000);
+                player_.command(NcmCommand_Seek, static_cast<uint32_t>(std::max<int64_t>(
+                                                     0, std::min<int64_t>(t, playback_.duration_ms))));
+            }
         } else
             player_.command(
                 NcmCommand_Volume,
@@ -250,7 +281,7 @@ void MusicView::navigate(int d) {
     if (s.page == Page::Account)
         count = 4;
     if (s.page == Page::Settings)
-        count = 4;
+        count = SettingsCount;
     selection_ = std::clamp(selection_, 0, std::max(0, count - 1));
     int rows = grid(s) ? 2 : 6, index = grid(s) ? selection_ / 4 : selection_;
     if (index < scroll_)
@@ -338,22 +369,24 @@ void MusicView::activate() {
         return;
     }
     if (s.page == Page::Settings) {
-        if (selection_ == 0)
+        if (selection_ == QualitySetting)
             options("播放音质", {"标准 · 128 kbps", "较高 · 192 kbps", "极高 · 320 kbps"},
                     [this](int i) {
                         model_.set_quality(
                             std::vector<std::string>{"standard", "higher", "exhigh"}[i]);
                     });
-        if (selection_ == 1)
+        if (selection_ == ProxySetting)
             brls::Application::getImeManager()->openForText(
                 [this](std::string proxy) { model_.set_proxy(proxy); }, "HTTP / SOCKS5 代理",
                 "留空使用直连", 200, s.proxy);
-        if (selection_ == 2)
+        if (selection_ == AirplaySetting)
+            airplay_tools();
+        if (selection_ == StopSetting)
             options("播放控制", {"取消", "停止播放并清空当前音频"}, [this](int i) {
                 if (i == 1)
                     player_.command(NcmCommand_Stop);
             });
-        if (selection_ == 3)
+        if (selection_ == ExitSetting)
             brls::Application::quit();
         return;
     }
@@ -374,8 +407,52 @@ void MusicView::activate() {
         selection_ = scroll_ = 0;
     }
 }
+void MusicView::airplay_tools() {
+    airplay_ = player_.airplay_status();
+    std::string description = "AirPlay 1 · 独立工具\n";
+    description += "状态：" + std::string(airplay_state(airplay_));
+    if (airplay_.version == NCM_AIRPLAY_VERSION) {
+        auto name = status_text(airplay_.name);
+        auto address = status_text(airplay_.address);
+        description += "\n设备：" + (name.empty() ? std::string("尚未就绪") : name);
+        description += "\n地址：" + (address.empty() ? std::string("尚未获取局域网 IP") : address);
+        if (!address.empty() && airplay_.port)
+            description += ":" + std::to_string(airplay_.port);
+        if (airplay_.state == NcmAirplay_Error && airplay_.message[0])
+            description += "\n" + status_text(airplay_.message);
+        description += player_.background() ? "\n退出应用后，后台接收保持运行"
+                                            : "\n退出应用后，本地接收会停止";
+    } else {
+        description += "\n音乐播放仍可使用；更新后台服务后再开启接收。";
+    }
+    auto *dialog = new brls::Dialog(description);
+    if (airplay_.version == NCM_AIRPLAY_VERSION) {
+        const bool enable = !airplay_.enabled;
+        dialog->addButton(enable ? "开启接收" : "关闭接收", [this, enable] {
+            if (!player_.set_airplay_enabled(enable))
+                model_.report(player_.error());
+            else
+                model_.report(enable ? "AirPlay 开启偏好已保存，请查看实际接收状态"
+                                     : "AirPlay 已关闭，下次启动保持关闭");
+            airplay_ = player_.airplay_status();
+        });
+        dialog->addButton("断开当前会话", [this] {
+            if (!player_.disconnect_airplay())
+                model_.report(player_.error());
+            else
+                model_.report("当前 AirPlay 会话已断开，接收开关保持原设置");
+            airplay_ = player_.airplay_status();
+        });
+    }
+    dialog->addButton("返回", [] {});
+    dialog->open();
+}
 void MusicView::action_x() {
     auto s = model_.snapshot();
+    if ((s.page == Page::Player || s.page == Page::Queue) && airplay_source(playback_)) {
+        airplay_tools();
+        return;
+    }
     if (s.busy)
         return;
     if (s.collection) {
@@ -446,6 +523,11 @@ void MusicView::action_x() {
                 {"喜欢 / 取消喜欢当前歌曲", "随机播放 开/关", "顺序播放", "列表循环", "单曲循环",
                  "私人 FM 不喜欢", "停止播放"},
                 [this](int i) {
+                    // The source may change while this menu is open.
+                    if (airplay_source(playback_)) {
+                        model_.report("AirPlay 曲目由发送端控制；X 打开接收设置");
+                        return;
+                    }
                     if (i == 0)
                         model_.like(playback_.track_id);
                     if (i == 1)
@@ -474,7 +556,8 @@ void MusicView::tap(float x, float y) {
     }
     if (y >= 621) {
         if (y > 680 && x >= 490 && x < 974) {
-            player_.command(NcmCommand_Seek, playback_.duration_ms * (x - 490) / 484);
+            if (!airplay_source(playback_))
+                player_.command(NcmCommand_Seek, playback_.duration_ms * (x - 490) / 484);
             return;
         }
         if (x < 490) {
@@ -527,16 +610,23 @@ void MusicView::tap(float x, float y) {
         activate();
         return;
     }
-    if (s.page == Page::Settings && y >= 200 && y < 480) {
-        selection_ = int((y - 200) / 70);
-        activate();
+    if (s.page == Page::Settings) {
+        if (x >= SettingsLeft && x < SettingsLeft + SettingsWidth &&
+            y >= SettingsTop && y < SettingsTop + SettingsCount * SettingsStride) {
+            const int row = static_cast<int>((y - SettingsTop) / SettingsStride);
+            if (y - SettingsTop - row * SettingsStride < SettingsHeight) {
+                selection_ = row;
+                sidebar_ = false;
+                activate();
+            }
+        }
         return;
     }
     if (s.page == Page::Player) {
-        if (x < 760)
-            player_.command(NcmCommand_PlayPause);
-        else if (y > 500)
+        if (x >= 746 && x < 970 && y >= 548 && y < 587)
             action_x();
+        else if (x >= 250 && x < 720)
+            player_.command(NcmCommand_PlayPause);
         return;
     }
     if (x > 250 && y > 190 && y < 590) {
@@ -607,11 +697,12 @@ void MusicView::vinyl(NVGcontext *v, const Snapshot &s, float x, float y, float 
         nvgFill(v);
     }
     std::string artwork;
-    for (const auto &m : s.queue)
-        if (m.id == playback_.track_id) {
-            artwork = m.cover;
-            break;
-        }
+    if (!airplay_source(playback_))
+        for (const auto &m : s.queue)
+            if (m.id == playback_.track_id) {
+                artwork = m.cover;
+                break;
+            }
     cover(v, s, artwork, -radius * .37f, -radius * .37f, radius * .74f, radius * .37f);
     circle(v, 0, 0, 9, nvgRGB(195, 193, 192));
     circle(v, 0, 0, 4, bg);
@@ -740,17 +831,28 @@ void MusicView::paint_list(NVGcontext *v, const Snapshot &s) {
     }
 }
 void MusicView::paint_player(NVGcontext *v, const Snapshot &s, bool full) {
-    bool paused = playback_.state != NcmPlayback_Playing;
-    std::string title = playback_.track_id ? playback_.title : "还没有开始播放";
-    std::string artist = playback_.track_id ? playback_.artist : "发现一首好歌，让游戏更动听";
+    const bool incoming = airplay_source(playback_);
+    const bool paused = playback_.state != NcmPlayback_Playing;
+    const bool has_source = playback_.track_id || incoming;
+    std::string title = has_source ? status_text(playback_.title) : "还没有开始播放";
+    std::string artist = has_source ? status_text(playback_.artist) : "发现一首好歌，让游戏更动听";
+    if (incoming && title.empty()) title = "AirPlay 1";
+    if (incoming && artist.empty()) artist = "局域网音频接收";
     if (full) {
-        text(v, 262, 148, 11, red, player_.background() ? "BACKGROUND AUDIO" : "NOW PLAYING");
+        text(v, 262, 148, 11, red,
+             incoming ? "AIRPLAY 1" : player_.background() ? "BACKGROUND AUDIO" : "NOW PLAYING");
         vinyl(v, s, 494, 365, 172);
         text(v, 288, 577, 19, white, title, 410);
         text(v, 744, 168, 27, white, title, 483);
         text(v, 746, 204, 16, muted, artist, 475);
-        const int active = lyric_index(s.lyrics, playback_.position_ms);
-        if (s.lyrics.empty()) {
+        const int active = incoming ? -1 : lyric_index(s.lyrics, playback_.position_ms);
+        if (incoming) {
+            text(v, 747, 330, 20, white, "由发送端控制曲目", 478);
+            text(v, 747, 366, 15, muted,
+                 playback_.state == NcmPlayback_Error ? "音频输出异常" :
+                 paused ? "本地音频已暂停" : "正在接收局域网音频", 478);
+            text(v, 747, 401, 13, muted, "L / R 结束投送并切回网易云", 478);
+        } else if (s.lyrics.empty()) {
             text(v, 747, 354, 18, muted,
                  playback_.track_id ? "暂无滚动歌词" : "播放音乐后，黑胶唱片将随音乐旋转", 478);
         } else {
@@ -766,18 +868,19 @@ void MusicView::paint_player(NVGcontext *v, const Snapshot &s, bool full) {
                          470);
             }
         }
-        button(v, 746, 548, 224,
+        button(v, 746, 548, 224, incoming ? "X AirPlay 接收设置" :
                s.likes.count(playback_.track_id) ? "X 已喜欢 · 播放选项" : "X 喜欢 · 播放选项");
-        text(v, 995, 575, 12, muted, "← / → 快进 10 秒", 235);
+        text(v, 995, 575, 12, muted, incoming ? "↑ / ↓ 本地音量" : "← / → 快进 10 秒", 235);
     }
     rect(v, 0, 620, 1280, 100, nvgRGB(25, 26, 31));
     line(v, 0, 620, 1280, 620, nvgRGB(54, 42, 47));
     std::string artwork;
-    for (const auto &m : s.queue)
-        if (m.id == playback_.track_id) {
-            artwork = m.cover;
-            break;
-        }
+    if (!incoming)
+        for (const auto &m : s.queue)
+            if (m.id == playback_.track_id) {
+                artwork = m.cover;
+                break;
+            }
     cover(v, s, artwork, 22, 640, 58, 10);
     text(v, 96, 661, 16, white, title, 337);
     text(v, 96, 686, 12, muted, artist, 337);
@@ -786,9 +889,12 @@ void MusicView::paint_player(NVGcontext *v, const Snapshot &s, bool full) {
     play_icon(v, 700, 657, paused, 18);
     text(v, 757, 664, 24, white, "›", 30);
     text(v, 494, 671, 10, muted, duration_text(playback_.position_ms), 70);
-    text(v, 921, 671, 10, muted, duration_text(playback_.duration_ms), 70);
-    rect(v, 491, 687, 484, 3, nvgRGB(68, 67, 73), 1);
-    if (playback_.duration_ms)
+    text(v, 921, 671, 10, muted, incoming ? "AIRPLAY" : duration_text(playback_.duration_ms), 70);
+    if (incoming)
+        text(v, 491, 699, 11, muted, "实时音频 · 曲目由发送端控制", 484);
+    else
+        rect(v, 491, 687, 484, 3, nvgRGB(68, 67, 73), 1);
+    if (!incoming && playback_.duration_ms)
         rect(v, 491, 687, 484 * std::min(1.f, float(playback_.position_ms) / playback_.duration_ms),
              3, red, 1);
     text(v, 1036, 650, 10, player_.background() ? nvgRGB(110, 206, 158) : muted,
@@ -842,15 +948,22 @@ void MusicView::paint_account(NVGcontext *v, const Snapshot &s) {
     text(v, 714, 509, 13, muted, "扫码需要手机端确认，验证码不会写入日志。", 480);
 }
 void MusicView::paint_settings(NVGcontext *v, const Snapshot &s) {
-    std::vector<std::string> names = {"音质", "网络代理", "停止播放", "退出应用"};
+    const char *names[SettingsCount] = {"音质", "网络代理", "AirPlay 1 接收", "停止播放", "退出应用"};
+    std::string tool = airplay_state(airplay_);
+    const auto name = status_text(airplay_.name);
+    if (!name.empty())
+        tool += " · " + name;
     std::vector<std::string> desc = {s.quality, s.proxy.empty() ? "直连" : s.proxy,
+                                     tool,
                                      player_.background() ? "独立后台服务" : "本应用音频引擎",
                                      player_.background() ? "退出应用后，后台服务继续播放"
                                                           : "退出应用后，前台音频将停止"};
-    for (int i = 0; i < 4; ++i) {
-        rect(v, 256, 200 + i * 70, 974, 61, !sidebar_ && selection_ == i ? raised : panel, 9);
-        text(v, 280, 235 + i * 70, 18, white, names[i], 270);
-        text(v, 573, 235 + i * 70, 14, muted, desc[i], 625);
+    for (int i = 0; i < SettingsCount; ++i) {
+        const float top = SettingsTop + i * SettingsStride;
+        rect(v, SettingsLeft, top, SettingsWidth, SettingsHeight,
+             !sidebar_ && selection_ == i ? raised : panel, 9);
+        text(v, 280, top + 35, 18, white, names[i], 270);
+        text(v, 573, top + 35, 14, muted, desc[i], 625);
     }
     text(v, 260, 532, 14, muted, "CloudTune NX " CLOUDTUNE_VERSION " · Borealis / libnx · GPL-3.0-or-later", 970);
     text(v, 260, 561, 13, muted, "游戏内播放需要 SD 卡上的后台服务与 Tesla / Ultrahand 覆盖层。",
@@ -864,7 +977,8 @@ void MusicView::draw(NVGcontext *v, float x, float y, float w, float h, brls::St
     if (now - last_poll_ > std::chrono::milliseconds(200)) {
         playback_ = player_.status();
         last_poll_ = now;
-        model_.lyrics_for(playback_.track_id);
+        if (!airplay_source(playback_))
+            model_.lyrics_for(playback_.track_id);
         display_ = model_.snapshot();
         std::vector<Media> visible;
         const auto first = static_cast<size_t>(std::max(0, grid(display_) ? scroll_ * 4 : scroll_));
@@ -877,6 +991,10 @@ void MusicView::draw(NVGcontext *v, float x, float y, float w, float h, brls::St
                 break;
             }
         model_.ensure_artwork(visible);
+    }
+    if (now - last_airplay_poll_ > std::chrono::milliseconds(500)) {
+        airplay_ = player_.airplay_status();
+        last_airplay_poll_ = now;
     }
     if (playback_.state == NcmPlayback_Playing)
         angle_ = std::fmod(angle_ + std::min(dt, .1f) * 3.4906585f, 6.2831853f);
@@ -902,7 +1020,9 @@ void MusicView::draw(NVGcontext *v, float x, float y, float w, float h, brls::St
     rect(v, 0, 0, 1280, 720, bg);
     paint_sidebar(v, s);
     text(v, 256, 58, 29, white, s.title, 800);
-    text(v, 258, 91, 14, muted, s.page == Page::Player ? "让音乐，陪伴每一次冒险。" : s.subtitle,
+    text(v, 258, 91, 14, muted, s.page == Page::Player
+         ? (airplay_source(playback_) ? "AirPlay 1 · 局域网音频接收" : "让音乐，陪伴每一次冒险。")
+         : s.subtitle,
          900);
     if (s.busy) {
         circle(v, 1224, 51, 5, red);

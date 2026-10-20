@@ -23,6 +23,7 @@ class MusicView : public brls::View {
     void scroll_rows(int rows);
     void input_search();
     void phone_login();
+    void airplay_tools();
     void options(const std::string &, const std::vector<std::string> &, std::function<void(int)>);
     void paint_sidebar(NVGcontext *, const Snapshot &);
     void paint_list(NVGcontext *, const Snapshot &);
@@ -38,6 +39,7 @@ class MusicView : public brls::View {
     Model &model_;
     Player &player_;
     NcmPlaybackStatus playback_{};
+    NcmAirplayStatus airplay_{};
     Snapshot display_;
     std::map<std::string, int> textures_;
     std::unique_ptr<qrcodegen::QrCode> qr_;
@@ -46,6 +48,6 @@ class MusicView : public brls::View {
     bool sidebar_ = false;
     float angle_ = 0;
     float pan_distance_ = 0;
-    std::chrono::steady_clock::time_point last_frame_, last_poll_, last_qr_;
+    std::chrono::steady_clock::time_point last_frame_, last_poll_, last_qr_, last_airplay_poll_;
 };
 } // namespace netease

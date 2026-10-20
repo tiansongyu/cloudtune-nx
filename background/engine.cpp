@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "engine.hpp"
+#include "pcm_stream.hpp"
 #include "netease/api.hpp"
 #include "netease/crypto.hpp"
 #include "netease/storage.hpp"
@@ -33,6 +34,9 @@ namespace {
 constexpr size_t FramesPerBuffer = 2048;
 constexpr uint32_t SampleRate = 48000;
 constexpr uint64_t MaxDownloadBytes = 128u * 1024u * 1024u;
+constexpr NcmCommand ExternalBegin = static_cast<NcmCommand>(100);
+constexpr NcmCommand ExternalEnd = static_cast<NcmCommand>(101);
+constexpr NcmCommand ExternalFlush = static_cast<NcmCommand>(102);
 using namespace std::chrono_literals;
 template <size_t N> void copyText(char (&dst)[N], const char* src) {
     std::snprintf(dst, N, "%s", src ? src : "");
@@ -128,7 +132,10 @@ public:
     }
     uint32_t queuedMs() const {
 #ifdef __SWITCH__
-        return static_cast<uint32_t>(std::count(busy_.begin(), busy_.end(), true) * FramesPerBuffer * 1000 / SampleRate);
+        uint64_t frames = 0;
+        for (size_t i = 0; i < buffers_.size(); ++i)
+            if (busy_[i]) frames += buffers_[i].data_size / 4;
+        return static_cast<uint32_t>(frames * 1000 / SampleRate);
 #else
         return device_ ? SDL_GetQueuedAudioSize(device_) * 1000 / (SampleRate * 4) : 0;
 #endif
@@ -179,6 +186,11 @@ struct Engine::Impl {
     int16_t leftA = 0, rightA = 0, leftB = 0, rightB = 0;
     double phase = 0;
     bool havePair = false, reachedEnd = false;
+    PcmStream external;
+    std::atomic<uint32_t> externalGain{1000};
+    bool externalMode = false, externalPaused = false, resumeMusic = false;
+    NcmPlaybackStatus suspendedMusic{};
+    uint64_t externalFrames = 0;
     Json settings() const {
         try {
             const auto text = storage::read_file(config.directory+"/settings.json");
@@ -604,9 +616,67 @@ struct Engine::Impl {
         std::lock_guard<std::mutex> lock(mutex); snapshot.position_ms=target;
         return true;
     }
+    void endExternal() {
+        if (!externalMode) return;
+        sink.close(); externalMode = false; externalPaused = false;
+        std::lock_guard<std::mutex> lock(mutex);
+        const uint32_t volume = snapshot.volume_permille;
+        const uint32_t repeat = snapshot.repeat, shuffle = snapshot.shuffle;
+        snapshot = suspendedMusic;
+        snapshot.volume_permille = volume; snapshot.repeat = repeat; snapshot.shuffle = shuffle;
+        snapshot.state = queue.empty() ? NcmPlayback_Stopped : NcmPlayback_Paused;
+        snapshot.error_code = 0;
+        copyText(snapshot.message, "AirPlay ended; music paused");
+        resumeMusic = !queue.empty();
+    }
+    bool processExternal(NcmCommand cmd, uint32_t argument) {
+        if (cmd == ExternalBegin) {
+            if (!externalMode) suspendedMusic = getStatus();
+            closeTrack(); externalMode = true; externalPaused = false;
+            externalFrames = 0; resumeMusic = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                snapshot.track_id = 0; snapshot.position_ms = snapshot.duration_ms = 0;
+                copyText(snapshot.title, "AirPlay 1");
+                copyText(snapshot.artist, "CloudTune NX");
+            }
+            if (sink.open()) state(NcmPlayback_Playing, "AirPlay receiving");
+            else { external.close(); state(NcmPlayback_Error, "AirPlay audio output failed", 6); }
+            return true;
+        }
+        if (cmd == ExternalEnd) { endExternal(); return true; }
+        if (cmd == ExternalFlush) {
+            if (externalMode) {
+                sink.close(); externalFrames = 0;
+                if (!externalPaused && !sink.open())
+                    state(NcmPlayback_Error, "AirPlay audio output failed", 6);
+                std::lock_guard<std::mutex> lock(mutex);
+                snapshot.position_ms = 0;
+            }
+            return true;
+        }
+        if (!externalMode) return false;
+        if (cmd == NcmCommand_PlayPause || cmd == NcmCommand_Play || cmd == NcmCommand_Pause) {
+            externalPaused = cmd == NcmCommand_Pause ||
+                (cmd == NcmCommand_PlayPause && !externalPaused);
+            external.pause(externalPaused); sink.close();
+            if (externalPaused) state(NcmPlayback_Paused, "AirPlay locally paused");
+            else if (sink.open()) state(NcmPlayback_Playing, "AirPlay receiving");
+            else state(NcmPlayback_Error, "AirPlay audio output failed", 6);
+            return true;
+        }
+        if (cmd == NcmCommand_Seek) return true; // Live audio has no seekable file.
+        if (cmd == NcmCommand_LoadQueue || cmd == NcmCommand_Next ||
+            cmd == NcmCommand_Previous || cmd == NcmCommand_Stop) {
+            external.close(); endExternal();
+        }
+        (void)argument;
+        return false;
+    }
     void process(NcmCommand cmd, uint32_t argument) {
+        if (processExternal(cmd, argument)) return;
         switch (cmd) {
-        case NcmCommand_LoadQueue: loadQueue(argument); break;
+        case NcmCommand_LoadQueue: resumeMusic=false; loadQueue(argument); break;
         case NcmCommand_Next: failures=0; advance(true); break;
         case NcmCommand_Previous:
             if (getStatus().position_ms > 3000) beginTrack(getStatus().queue_index);
@@ -620,7 +690,16 @@ struct Engine::Impl {
                 if (cmd != NcmCommand_Pause) {
                     failures=0;
                     if (queue.empty()) loadQueue(0);
-                    else beginTrack(std::min<uint32_t>(getStatus().queue_index,queue.size()-1));
+                    else {
+                        const auto previous = getStatus();
+                        const bool restore = resumeMusic;
+                        resumeMusic = false;
+                        if (beginTrack(std::min<uint32_t>(previous.queue_index,queue.size()-1)) &&
+                            restore && previous.position_ms && !seekDecoder(previous.position_ms)) {
+                            closeTrack();
+                            state(NcmPlayback_Error, "Cannot restore music position", 6);
+                        }
+                    }
                 }
                 break;
             }
@@ -672,6 +751,39 @@ struct Engine::Impl {
             }
             if (hasCommand) { process(next.first,next.second); stalledSince={}; continue; }
             if (interrupt) { std::this_thread::sleep_for(2ms); continue; }
+            if (externalMode) {
+                if (!externalPaused && external.active() && !sink.canWrite()) {
+                    const auto now = std::chrono::steady_clock::now();
+                    if (stalledSince == std::chrono::steady_clock::time_point{}) stalledSince = now;
+                    if (sink.error() || now - stalledSince > 5s) {
+                        external.close(); sink.close();
+                        state(NcmPlayback_Error, "AirPlay audio output disconnected", 6);
+                    }
+                    std::this_thread::sleep_for(4ms);
+                    continue;
+                }
+                if (!externalPaused && external.active()) {
+                    stalledSince = {};
+                    const auto volume = getStatus().volume_permille;
+                    const size_t frames = external.render(pcm.data(), FramesPerBuffer,
+                        static_cast<float>(volume) * externalGain.load() / 1000000.f);
+                    if (frames) {
+                        if (!sink.write(pcm.data(), frames)) {
+                            external.close(); state(NcmPlayback_Error, "AirPlay audio failed", 6);
+                        } else {
+                            if (!externalFrames) diagnostic("airplay-first-pcm", pcm.data(), frames);
+                            externalFrames += frames;
+                            const uint64_t elapsed = externalFrames * 1000 / SampleRate;
+                            std::lock_guard<std::mutex> lock(mutex);
+                            snapshot.position_ms = static_cast<uint32_t>(
+                                elapsed > sink.queuedMs() ? elapsed - sink.queuedMs() : 0);
+                        }
+                        continue;
+                    }
+                }
+                std::this_thread::sleep_for(4ms);
+                continue;
+            }
             if (decoderOpen && !paused) {
                 if (!sink.canWrite()) {
                     diagnostic("waiting-output");
@@ -747,6 +859,8 @@ bool Engine::start() {
 void Engine::stop() {
     impl_->running=false; impl_->interrupt=true; impl_->downloadCancel=true; impl_->cv.notify_all();
     if (impl_->worker.joinable()) impl_->worker.join();
+    impl_->external.close();
+    impl_->externalMode = false;
 }
 bool Engine::command(NcmCommand cmd,uint32_t argument) {
     if (!impl_->running || cmd < NcmCommand_LoadQueue || cmd > NcmCommand_Stop ||
@@ -764,4 +878,43 @@ bool Engine::command(NcmCommand cmd,uint32_t argument) {
     impl_->cv.notify_one(); return true;
 }
 NcmPlaybackStatus Engine::status() const { return impl_->getStatus(); }
+bool Engine::begin_external(uint32_t rate) {
+    if (!impl_->running || (rate != 44100 && rate != 48000)) return false;
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (impl_->commands.size() >= 32) return false;
+    if (!impl_->external.open(rate)) return false;
+    impl_->externalGain = 1000;
+    // A new sender takes the audio source. Supersede pending music transport
+    // commands, retaining volume/mode changes and earlier lifecycle barriers.
+    impl_->commands.erase(std::remove_if(impl_->commands.begin(), impl_->commands.end(),
+        [](const auto& command) {
+            const auto kind = command.first;
+            return kind >= NcmCommand_LoadQueue && kind <= NcmCommand_Stop &&
+                kind != NcmCommand_Volume && kind != NcmCommand_Repeat &&
+                kind != NcmCommand_Shuffle;
+        }), impl_->commands.end());
+    impl_->commands.emplace_back(ExternalBegin, rate);
+    impl_->interrupt = true;
+    impl_->cv.notify_one();
+    return true;
+}
+bool Engine::write_external(const int16_t* stereo, size_t frames) {
+    return impl_->running && impl_->external.push(stereo, frames);
+}
+void Engine::end_external() {
+    impl_->external.close();
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    // Lifecycle messages must not be dropped if the control queue is busy.
+    impl_->commands.emplace_back(ExternalEnd, 0);
+    impl_->interrupt = true;
+    impl_->cv.notify_one();
+}
+void Engine::flush_external() {
+    impl_->external.flush();
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (impl_->commands.size() < 32) impl_->commands.emplace_back(ExternalFlush, 0);
+    impl_->cv.notify_one();
+}
+void Engine::external_volume(uint32_t permille) { impl_->externalGain = std::min(permille, 1000u); }
+bool Engine::external_active() const { return impl_->external.active(); }
 }

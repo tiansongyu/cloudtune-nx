@@ -3,6 +3,7 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 [[ -f .deps/mbedtls/include/mbedtls/aes.h ]] || ./scripts/setup-host-deps.sh
+./scripts/setup-airplay-codec.sh host
 cmake -S . -B build/desktop -G Ninja -DPLATFORM_DESKTOP=ON -DCMAKE_BUILD_TYPE=Debug
 cmake --build build/desktop --parallel "${BUILD_JOBS:-8}"
 ctest --test-dir build/desktop --output-on-failure

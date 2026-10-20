@@ -23,6 +23,7 @@ export CLOUDTUNE_BUILD_STARTED_COMMIT
 CLOUDTUNE_BUILD_STARTED_COMMIT="$(git rev-parse HEAD)"
 export CLOUDTUNE_BUILD_STARTED_DIRTY=false
 [[ -z "$(git status --porcelain)" ]] || CLOUDTUNE_BUILD_STARTED_DIRTY=true
+./scripts/setup-airplay-codec.sh switch
 cmake -S . -B build/switch -G Ninja -DPLATFORM_SWITCH=ON \
     -DCMAKE_BUILD_TYPE=Release "$@"
 cmake --build build/switch --target CloudTune.nro cloudtune-background-package \

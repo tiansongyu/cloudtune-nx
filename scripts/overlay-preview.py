@@ -58,6 +58,7 @@ def rpc(directory, command=1, argument=0):
 
 
 def build():
+    subprocess.run([str(ROOT / "scripts/setup-airplay-codec.sh"), "host"], check=True)
     subprocess.run(
         ["cmake", "-S", str(ROOT), "-B", str(BUILD), "-G", "Ninja",
          "-DPLATFORM_DESKTOP=ON", "-DCLOUDTUNE_BUILD_OVERLAY_PREVIEW=ON",

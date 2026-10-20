@@ -3,20 +3,19 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <cstdio>
 #include <thread>
 #ifdef __SWITCH__
 #include "netease/playback_client.h"
 #endif
 namespace netease {
-Player::Player(std::string directory) : directory_(std::move(directory)) {
-#ifdef __SWITCH__
-    background_ = R_SUCCEEDED(ncmPlaybackInitialize());
-#endif
-}
+Player::Player(std::string directory) : directory_(std::move(directory)) {}
 Player::~Player() {
     shutdown();
 }
 void Player::shutdown() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stopped_ = true;
     if (local_) {
         local_->stop();
         local_.reset();
@@ -24,26 +23,51 @@ void Player::shutdown() {
 #ifdef __SWITCH__
     ncmPlaybackExit();
 #endif
+    background_ = false;
 }
-bool Player::ensure_engine() {
+bool Player::background() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return background_;
+}
+std::string Player::error() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return error_;
+}
+bool Player::start_tools() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return ensure_runtime();
+}
+bool Player::ensure_runtime() {
+    if (stopped_) {
+        error_ = "播放器正在退出";
+        return false;
+    }
     if (background_ || local_)
         return true;
 #ifdef __SWITCH__
     if (R_SUCCEEDED(ncmPlaybackInitialize())) {
-        background_ = true;
+        background_ = remote_seen_ = true;
         return true;
     }
     // A service that is already starting can report "already launched".
     // Always give that process a short bounded chance to register its IPC.
     if (hosversionIsAtmosphere()) {
-        ncmPlaybackLaunchBackground();
+        const Result launch = ncmPlaybackLaunchBackground();
+        if (R_SUCCEEDED(launch))
+            remote_seen_ = true;
         for (int i = 0; i < 15; ++i) {
             if (R_SUCCEEDED(ncmPlaybackInitialize())) {
-                background_ = true;
+                background_ = remote_seen_ = true;
                 return true;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+    }
+    if (remote_seen_) {
+        // A known background process can still be starting or recovering.
+        // Never create another listener while its ownership is unresolved.
+        error_ = "后台服务尚未就绪，请稍后重试";
+        return false;
     }
 #endif
     playback::EngineConfig c;
@@ -51,15 +75,24 @@ bool Player::ensure_engine() {
 #ifdef __SWITCH__
     c.ca_bundle = "romfs:/certs/cacert.pem";
 #endif
-    local_ = std::make_unique<playback::Engine>(c);
-    if (!local_->start()) {
-        error_ = "无法初始化音频输出";
-        local_.reset();
-        return false;
+    try {
+        local_ = std::make_unique<playback::Runtime>(c);
+        if (local_->start())
+            return true;
+        error_ = "无法初始化播放与工具服务";
+    } catch (const std::exception &) {
+        error_ = "无法初始化播放与工具服务";
     }
-    return true;
+    if (local_) {
+        local_->stop();
+        local_.reset();
+    }
+    return false;
 }
 bool Player::play(const std::vector<Media> &tracks, size_t index) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopped_)
+        return false;
     if (index >= tracks.size())
         return false;
     // Limit the binary handoff rather than overflowing its fixed format.
@@ -83,11 +116,17 @@ bool Player::play(const std::vector<Media> &tracks, size_t index) {
         error_ = "无法保存播放队列，请检查 SD 卡空间";
         return false;
     }
-    if (!ensure_engine())
+    if (!ensure_runtime())
         return false;
-    return command(NcmCommand_LoadQueue, static_cast<uint32_t>(index - begin));
+    return command_locked(NcmCommand_LoadQueue, static_cast<uint32_t>(index - begin));
 }
 bool Player::command(NcmCommand cmd, uint32_t arg) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopped_)
+        return false;
+    return command_locked(cmd, arg);
+}
+bool Player::command_locked(NcmCommand cmd, uint32_t arg) {
 #ifdef __SWITCH__
     if (background_) {
         Result rc = 0;
@@ -140,6 +179,7 @@ bool Player::command(NcmCommand cmd, uint32_t arg) {
     return local_ && local_->command(cmd, arg);
 }
 NcmPlaybackStatus Player::status() {
+    std::lock_guard<std::mutex> lock(mutex_);
     NcmPlaybackStatus s{};
     s.volume_permille = 700;
 #ifdef __SWITCH__
@@ -154,5 +194,94 @@ NcmPlaybackStatus Player::status() {
     }
 #endif
     return local_ ? local_->status() : s;
+}
+NcmAirplayStatus Player::airplay_status() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return airplay_status_locked();
+}
+NcmAirplayStatus Player::airplay_status_locked() {
+    NcmAirplayStatus result{};
+    result.version = NCM_AIRPLAY_VERSION;
+    result.state = NcmAirplay_Error;
+#ifdef __SWITCH__
+    if (background_) {
+        const Result rc = ncmAirplayGetStatus(&result);
+        if (R_SUCCEEDED(rc))
+            return result;
+        // An old playback service can still play music correctly. A rejected
+        // tool command must not discard it or create a second LAN listener.
+        NcmPlaybackStatus music{};
+        if (R_SUCCEEDED(ncmPlaybackGetStatus(&music))) {
+            result = {};
+            result.state = NcmAirplay_Error;
+            result.error_code = rc;
+            std::snprintf(result.message, sizeof(result.message), "Update background service");
+            error_ = "当前后台服务不支持 AirPlay，请更新后台服务";
+        } else {
+            ncmPlaybackExit();
+            background_ = false;
+            result = {};
+            result.version = NCM_AIRPLAY_VERSION;
+            result.state = NcmAirplay_Error;
+            result.error_code = rc;
+            std::snprintf(result.message, sizeof(result.message), "Background disconnected");
+            error_ = "后台服务连接中断，请稍后重试";
+        }
+        return result;
+    }
+#endif
+    if (local_)
+        return local_->airplay_status();
+    std::snprintf(result.message, sizeof(result.message),
+                  stopped_ ? "Application stopped" : "Playback service unavailable");
+    return result;
+}
+bool Player::set_airplay_enabled(bool enabled) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!ensure_runtime())
+        return false;
+#ifdef __SWITCH__
+    if (background_) {
+        if (airplay_status_locked().version != NCM_AIRPLAY_VERSION || !background_)
+            return false;
+        if (R_SUCCEEDED(ncmAirplaySetEnabled(enabled)))
+            return true;
+        error_ = "AirPlay 操作未完成，请查看接收状态并检查网络与存储";
+        return false;
+    }
+#endif
+    try {
+        if (local_ && local_->set_airplay_enabled(enabled))
+            return true;
+    } catch (const std::exception &) {
+    }
+    error_ = "AirPlay 操作未完成，请查看接收状态并检查网络与存储";
+    return false;
+}
+bool Player::disconnect_airplay() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopped_)
+        return false;
+#ifdef __SWITCH__
+    if (background_) {
+        if (airplay_status_locked().version != NCM_AIRPLAY_VERSION || !background_)
+            return false;
+        if (R_SUCCEEDED(ncmAirplayDisconnect()))
+            return true;
+        error_ = "无法断开 AirPlay 会话";
+        return false;
+    }
+#endif
+    if (!local_) {
+        error_ = "AirPlay 服务尚未启动";
+        return false;
+    }
+    try {
+        if (local_->disconnect_airplay())
+            return true;
+    } catch (const std::exception &) {
+    }
+    error_ = "AirPlay 会话未在限定时间内断开，请重试";
+    return false;
 }
 } // namespace netease
