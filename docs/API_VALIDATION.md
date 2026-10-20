@@ -9,6 +9,9 @@
 - XEAPI 随机封包使用 RFC 7748 固定测试公钥，由独立 Python cryptography 实现解密验证：X25519、HKDF 兼容派生、AES-GCM、两层 AES-ECB、随机掩码/旋转、HMAC-SHA256 均通过。
 - 参数测试覆盖空 ID、非法音质、缺失必选参数、负分页、完整 64 位精品歌单时间戳、搜索别名以及歌曲详情 JSON 编码。
 - `src/api.cpp` 和 `src/crypto.cpp` 均已使用 devkitA64 在 Docker 中实际交叉编译通过。加密使用 Switch `randomGet` 和 portlibs mbedTLS。
+- Eden 实际运行发现 Horizon 不支持 rename 覆盖，已停止使用 libcurl COOKIEJAR 磁盘写入。应用改为导出 cookie，
+  完成新文件后备份旧文件再替换，失败回滚；同一方案用于设置和下载。`ncm-storage-tests` 强制主机采用
+  Horizon 的禁止覆盖语义，并注入替换及回滚失败，验证旧数据恢复、重复保存、会话重启、后台只读和退出持久化。
 - 以下 **21 个不同方法** 实际通过 HTTPS 调用服务成功；未使用模拟返回。
 
 | 实际方法 | 结果 |

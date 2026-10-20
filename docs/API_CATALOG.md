@@ -75,7 +75,7 @@
 - EAPI：API 路径和请求体的 MD5 摘要、AES-128-ECB/PKCS#7；播放 URL 支持账户 cookie。
 - XEAPI：动态公钥握手、HMAC-SHA256、X25519、HKDF 兼容派生、AES-GCM 与 AES-ECB；用于新版喜欢接口。
 - 底层使用 libcurl、mbedTLS 2.28 和 zlib。TLS 验证保持启用；Switch 的 CA 文件由 ApiConfig.ca_bundle 指定。
-- 会话使用 `cookies.txt` 保存。扫码授权返回的 Set-Cookie 由 libcurl 保存，后续请求自动携带；退出清除会话。cookie 是账户凭据，不应提交到仓库或上传日志。
+- 会话使用 `cookies.txt` 保存。扫码授权返回的 Set-Cookie 由 libcurl cookie engine 接收，后续请求自动携带；应用自行导出 Netscape 格式并保存，退出清除会话。Horizon 不支持覆盖已有文件的 rename，因此采用先完成新文件、备份旧文件、安装新文件、失败回滚的事务式替换；异常中断后可读取 `.bak` 恢复。cookie 是账户凭据，不应提交到仓库或上传日志。
 - 扫码状态 800（失效）、801（等待）、802（已扫描）、803（授权完成）作为正常状态返回；HTTP/服务失败抛出带 code 的 ApiError。
 
 ## 与参考实现的明确差异
@@ -88,7 +88,7 @@
 - 有损音质默认请求 MP3 方便后台解码，其他音质请求 FLAC；可传 encodeType 覆盖。音质 level 为 standard / higher / exhigh / lossless / hires / jyeffect / sky / jymaster。能否取得 URL 取决于会员、地区、版权与曲目权限，不绕过这些条件。
 - 应用便捷方法 `song_urls()` 对 standard / higher / exhigh 使用旧版 songs_url 的 128/192/320 kbps 请求，以匹配当前后台 MP3 解码器。完整 songs_url_v1 仍可通过 call 使用。播放器必须检查服务实际返回的 type、URL 和 freeTrialInfo。
 - 后台客户端 `persist_cookies=false`，每次请求重载 GUI 持有的 cookies.txt，且不会覆写登录/退出状态。
-- download_img/download_song 流式写入 `.part` 文件并原子重命名；只接受 HTTP(S)，保留 TLS 校验。
+- download_img/download_song 流式写入 `.part` 文件，关闭并同步后使用同样的备份/回滚替换；只接受 HTTP(S)，保留 TLS 校验。
 - Rust 的解析模型转换替换为原始 JSON，由应用模型统一处理空值、旧新字段和不可播放原因。
 
 ## 功能逻辑映射

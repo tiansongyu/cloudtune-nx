@@ -3,6 +3,7 @@
 // Copyright (C) 2019-2026 gmg137. See THIRD_PARTY_NOTICES.md.
 #include "netease/api.hpp"
 #include "netease/crypto.hpp"
+#include "netease/storage.hpp"
 #include <curl/curl.h>
 #include <algorithm>
 #include <chrono>
@@ -10,9 +11,6 @@
 #include <filesystem>
 #include <mutex>
 #include <sstream>
-#ifndef __SWITCH__
-#include <sys/stat.h>
-#endif
 
 namespace netease {
 namespace {
@@ -229,6 +227,7 @@ struct ApiClient::Impl {
     std::mutex mutex;
     Json xeapi_key;
     std::string device_id;
+    std::string saved_cookies;
 
     explicit Impl(ApiConfig c) : config(std::move(c)) {
         static std::once_flag initialized;
@@ -241,24 +240,47 @@ struct ApiClient::Impl {
             auto parent = std::filesystem::path(config.cookie_file).parent_path();
             if (!parent.empty()) std::filesystem::create_directories(parent);
         }
-        curl_easy_setopt(curl, CURLOPT_COOKIEFILE, config.cookie_file.c_str());
-        if (!config.cookie_file.empty() && config.persist_cookies)
-            curl_easy_setopt(curl, CURLOPT_COOKIEJAR, config.cookie_file.c_str());
-        curl_easy_setopt(curl, CURLOPT_COOKIELIST, "RELOAD");
+        // Enable the cookie engine, but own persistence: libcurl COOKIEJAR uses
+        // rename-over-existing, which fails on Horizon and loses updated sessions.
+        curl_easy_setopt(curl, CURLOPT_COOKIEFILE, "");
+        reload_cookies();
         device_id = crypto::hex(crypto::random_bytes(16));
     }
     ~Impl() {
         if (curl) {
-            flush();
+            try {flush();} catch(...) {} // A destructor must never terminate the app.
             curl_easy_cleanup(curl);
         }
     }
     void flush() {
-        if (!config.persist_cookies) return;
-        curl_easy_setopt(curl, CURLOPT_COOKIELIST, "FLUSH");
-#ifndef __SWITCH__
-        if (!config.cookie_file.empty()) chmod(config.cookie_file.c_str(), 0600);
-#endif
+        if (!config.persist_cookies || config.cookie_file.empty()) return;
+        curl_slist* raw = nullptr;
+        if(curl_easy_getinfo(curl,CURLINFO_COOKIELIST,&raw)!=CURLE_OK)
+            throw ApiError("Cannot export the login session");
+        std::unique_ptr<curl_slist,decltype(&curl_slist_free_all)> list(raw,curl_slist_free_all);
+        std::string serialized="# Netscape HTTP Cookie File\n# Netease Switch session. Keep private.\n\n";
+        for(auto* node=list.get();node;node=node->next)serialized+=std::string(node->data)+"\n";
+        // Avoid unnecessary SD writes for unchanged cookies and cover downloads.
+        if(serialized==saved_cookies&&std::filesystem::exists(config.cookie_file))return;
+        storage::write_file(config.cookie_file,serialized);
+        saved_cookies=std::move(serialized);
+    }
+    void reload_cookies() {
+        if(config.cookie_file.empty())return;
+        auto serialized=storage::read_file(config.cookie_file);
+        // The GUI's two-step Horizon replacement can briefly leave neither
+        // pathname visible to another process. A real logout writes a nonempty
+        // header-only jar, so retaining the last snapshot here cannot undo it.
+        if(serialized.empty()&&!saved_cookies.empty())return;
+        curl_easy_setopt(curl,CURLOPT_COOKIELIST,"ALL");
+        std::istringstream input(serialized);
+        std::string line;
+        while(std::getline(input,line)) {
+            if(!line.empty()&&line.back()=='\r')line.pop_back();
+            if(line.empty()||(line[0]=='#'&&line.rfind("#HttpOnly_",0)!=0))continue;
+            curl_easy_setopt(curl,CURLOPT_COOKIELIST,line.c_str());
+        }
+        saved_cookies=std::move(serialized);
     }
     std::string cookie(const std::string& name) {
         curl_slist* list = nullptr;
@@ -416,9 +438,10 @@ struct ApiClient::Impl {
         if (!file) throw ApiError("Cannot open download destination");
         try {
             http(url, nullptr, {}, file.get());
-            if (std::fflush(file.get()) != 0 || std::ferror(file.get())) throw ApiError("Download write failed");
-            file.reset();
-            std::filesystem::rename(temp, path);
+            storage::sync_file(file.get());
+            auto* completed=file.release();
+            if(std::fclose(completed)!=0)throw ApiError("Download close failed");
+            storage::install_file(temp,path);
         } catch (...) {
             file.reset();
             std::remove(temp.c_str());
@@ -433,8 +456,7 @@ Json ApiClient::call(const std::string& method, Json arguments) {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     try {
         if (!impl_->config.persist_cookies && !impl_->config.cookie_file.empty()) {
-            curl_easy_setopt(impl_->curl, CURLOPT_COOKIELIST, "ALL");
-            curl_easy_setopt(impl_->curl, CURLOPT_COOKIELIST, "RELOAD");
+            impl_->reload_cookies();
         }
         if (method == "fetch_xeapi_public_key") {
             impl_->fetch_key();
