@@ -5,20 +5,23 @@ CloudTune NX has three independently loaded Horizon programs:
 | Program | Purpose | Lifetime |
 |---|---|---|
 | `CloudTune.nro` | Login, discovery, library, playlist management, lyrics and full player | Until the user exits the application |
-| `cloudtune-background.nsp` | HTTPS transfer, SD cache, MP3 decoding, audio output, queue | Atmosphère system module; survives application exit |
+| `cloudtune-background.nsp` | HTTPS transfer, SD cache, MP3/AAC/FLAC decoding, AirPlay reception, audio output, queue | Atmosphère system module; survives application exit |
 | `CloudTune.ovl` | Small Tesla player and controls over a running game | While opened through the overlay loader |
 
 The background service uses program ID `42000000004E434D` and service name
 `ncm:bg`. Its program ID must not be shared with another installed system module.
 These identifiers and `config/netease-switch/` deliberately remain stable
 across the CloudTune NX rename to preserve installed services and sessions.
-It allocates a fixed 12 MiB heap, opens two BSD sessions, and opens `audout:u`
+It allocates a fixed 16 MiB heap, opens three BSD sessions, and opens `audout:u`
 only when there is a playable track. Audio is 48 kHz, signed 16-bit stereo;
-44.1 kHz and mono MP3 input is linearly resampled and expanded to stereo.
+other source rates are linearly resampled, mono is expanded and multichannel
+input is mixed to stereo. High-resolution source support does not imply
+bit-perfect output; see [audio formats](../AUDIO_FORMATS.md).
 
 The application first attempts the background IPC connection. When the service
-is unavailable it can run the same `netease::playback::Engine` in its own
+is unavailable it can run the same `netease::playback::Runtime` in its own
 process. This foreground fallback stops when the application exits.
+The runtime owns both the music engine and the independent AirPlay receiver.
 Connection probing first checks libnx's Atmosphère flag, then uses
 Atmosphère's nonblocking TIPC `HasService` command (65100). It never requests a
 missing custom service from SM, because that request can wait indefinitely.
@@ -29,8 +32,10 @@ Stock/emulated Horizon receives no Atmosphère extension commands.
 `include/netease/playback_protocol.h` is the shared versioned C ABI. Status is
 exactly 216 bytes and fits a CMIF inline reply. It includes track ID, state,
 position, duration, volume, queue position, repeat/shuffle, error code and UTF-8
-track text. The IPC request handler only queues bounded control messages; it
-does not download music or decode audio on the service thread.
+track text. The IPC request handler queues bounded control messages; it does
+not download music or decode audio on the service thread. Account changes use
+the acknowledged `ClearQueue` command: its bounded wait ensures old music and
+pending loads are cleared before publishing a different account session.
 
 `ncmWriteQueueFile()` publishes `queue.nsq` using a temporary file, flush, sync
 and rename. POSIX replacement is atomic. Horizon rejects an existing rename
@@ -62,21 +67,25 @@ interrupt the transfer and decoder wait.
 
 The downloader requires HTTPS, verifies the CA chain and hostname, restricts
 redirects to HTTPS, limits redirects, enforces connection/stall/overall
-timeouts, and caps each response at 128 MiB. A `.complete` marker is written
+timeouts, and caps each response at 512 MiB. A `.complete` marker is written
 only after a successful complete response. Incomplete downloads are never
 mistaken for an offline cache hit. Before a new transfer, oldest cache files
-are evicted to reserve room within an approximately 512 MiB cache budget.
+are evicted to retain at most 512 MiB of other tracks, plus at most 512 MiB
+for the current download (approximately 1 GiB total).
 Cache filenames include the song ID and a digest of the active login session
-and MP3 quality. Logging in or changing quality therefore cannot silently reuse
+and requested quality. Logging in or changing quality therefore cannot silently reuse
 an anonymous preview or a lower-quality download. Session tokens never appear
 in cache filenames. Saved settings and cookies recover their `.bak` snapshot
 if read during a Horizon replacement operation.
 
-The current decoder supports MP3. Standard, higher and exhigh qualities use
-the API's legacy MP3 endpoint; FLAC/AAC/lossless playback is not implemented.
-Service-provided format information is checked when resolving a URL.
-`settings.json` supplies `proxy` and MP3-compatible `quality`. The certificate
-bundle is `config/netease-switch/cacert.pem`.
+The shared decoder selects MP3, FLAC or AAC from actual content, independently
+of URL suffix and service format labels. AAC supports ADTS and M4A; FLAC also
+supports Ogg and ID3-prefixed streams. Standard, higher and exhigh qualities
+use the legacy endpoint; higher source levels use `songs_url_v1`.
+`settings.json` supplies `proxy` and the requested `quality`; account rights
+and the track determine the returned source. New caches use `.audio`, while
+complete legacy `.mp3` caches remain readable. The certificate bundle is
+`config/netease-switch/cacert.pem`.
 
 Each track owns a fresh audio output session. Seek discards the old session and
 opens a new one, so queued DMA buffer tags cannot cross a seek or track change.

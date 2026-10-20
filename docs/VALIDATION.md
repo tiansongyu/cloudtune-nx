@@ -321,3 +321,32 @@ slowly. Tail-moov M4A waits for its trailing index. Real multi-account server
 sessions, entitlements and concurrent Atmosphere/game playback still require
 user/device validation. See [audio details](AUDIO_FORMATS.md) and
 [account behavior](ACCOUNTS.md).
+
+## Code review regression pass — 2026-10-20
+
+The [code review](CODE_REVIEW.md) records the scope, findings and remaining
+limits. Implementation commit `a15817c` was validated with synthetic account
+data and generated audio, independently of the user's emulator profile.
+
+| Check | Observed result |
+| --- | --- |
+| Complete host script | 18/18 CTest checks passed, followed by independent XEAPI verification and local/HTTPS MP3 integration |
+| API transport | A loopback TLS proxy verified authenticated redirect rejection, cookie-domain selection, private parse-error handling, strict status codes and CDN redirects after authentication on the same curl handle |
+| Account recovery | Malformed and empty primary/backup archives are rejected without replacing the archive/mirror; GUI navigation and playback stay guarded |
+| Saved playback | Six combinations of damaged/empty archive and cold Play/PlayPause/LoadQueue refused the disk queue; repair allowed playback, and later archive damage did not interrupt already-loaded music |
+| FLAC/cache | Unknown-length FLAC seeks matched PCM; orphan completion markers recovered; progressive controls, cancellation and mixed-format queues passed |
+| IPC | Actual parser/client code passed host guard-page/layout/status tests and strict devkitA64 compilation; parser/client sanitizer runs also passed |
+| Instrumentation | Targeted audio ASan/UBSan/leak checks and UBSan metadata arithmetic checks passed; these are not whole-program sanitizer coverage |
+| Virtual desktop | The previously missed top edge of the settings account row opened the Chinese account menu; normal UI exit returned 0 and an invalid data directory returned 1 with a diagnostic |
+| Switch/package inputs | Docker rebuilt NRO, background ExeFS and OVL; package checks verified versions, corresponding AArch64 ELFs and third-party sources/licenses |
+| Script checks | ShellCheck, Python compilation and Git whitespace checks passed; shell/Python checks are now included in CI |
+
+Local evidence is retained in `build/validation/review-host-tests.log`,
+`build/validation/review-switch-build.log`, `build/validation/review-ui/`,
+`build/validation/audio-review/`, `build/validation/airplay-review/` and
+`build/validation/backend-audit/`. Cppcheck output and its limitations are
+described in the review; it was not a zero-warning run. The Switch toolchain
+also emits existing dependency warnings.
+
+This pass did not repeat the real iPhone session or establish physical-console
+background playback. The current user profile was not used as a fixture.

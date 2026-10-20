@@ -337,3 +337,28 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
   was muted, so this adds emulator execution evidence rather than a listening
   result. Shader translator diagnostics and physical-console limits are
   recorded in `VALIDATION.md`; the user profile was not used for these checks.
+
+## Cross-module code review (2026-10-20)
+
+- Reviewed application, API/model/accounts, shared audio, AirPlay, background
+  IPC, overlay, build scripts and CI. Dependency review covered integration,
+  source/license packaging and static-analysis findings.
+- Fixed authenticated API redirects, cookie-domain selection, private JSON
+  diagnostics and integer parsing. Added a local TLS transport fixture that
+  also verifies public CDN downloads after a signed-in request.
+- Made damaged and empty account archives visible and non-destructive.
+  Shared read-only validation protects cold background/overlay queue loading;
+  existing loaded music and AirPlay are not revoked by a GUI recovery error.
+- Corrected unknown-length FLAC seeking, orphan cache-marker recovery and
+  decoder offset arithmetic. Added exact PCM and progressive engine regressions.
+- Hardened CMIF request bounds, argument sizes and transferred-handle cleanup;
+  validated status versions and bounded strings in the Switch client.
+- Corrected the settings account-row hit region, UTF-8 queue truncation and
+  exceptional teardown ordering. Kept curl cleanup after worker/handle teardown.
+- The final host run passed 18/18 CTest checks, independent XEAPI verification
+  and generated local/HTTPS playback. Rebuilt all three Switch components and
+  verified package inputs. Targeted sanitizer results and isolated virtual
+  desktop checks are recorded in `VALIDATION.md`.
+- Added shell/Python checks to GitHub Actions and corrected outdated background
+  architecture notes. No real session files or private runtime evidence were
+  added to source control. Findings and remaining limits are in `CODE_REVIEW.md`.

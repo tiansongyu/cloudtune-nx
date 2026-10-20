@@ -294,7 +294,8 @@ docs/                   API、架构、开发日志与验证记录
 ```
 
 架构细节见 [后台播放设计](docs/background/ARCHITECTURE.md)，开发里程碑见
-[开发日志](docs/DEVELOPMENT_LOG.md)。
+[开发日志](docs/DEVELOPMENT_LOG.md)，本轮修复和审查范围见
+[代码审查记录](docs/CODE_REVIEW.md)。
 
 ## 贡献与许可证
 
