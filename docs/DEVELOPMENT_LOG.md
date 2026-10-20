@@ -112,3 +112,17 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - Source changes are committed at toolchain, API, audio, persistence, GUI
   and validation milestones. Generated packages retain matching ELF build
   IDs, source commit metadata and SHA-256 manifests.
+
+## 2026-10-20 · User-assisted sign-in and authenticated reads
+
+- Opened the final NRO through Eden's Qt interface on the user's current
+  desktop, using the existing isolated emulator profile.
+- Explained the missing-decryption-keys prompt: the self-built NRO runs
+  without those keys. Also disclosed Eden 0.2.1's SSL-verification limitation.
+- The user authorized sign-in; the NRO displayed an authenticated account.
+- Used the existing C++ API implementation and read-only cookie loading for
+  eight authenticated host HTTPS checks. Login status, liked IDs, playlists,
+  subscribed albums/radio, cloud files, recommendations and personal FM all
+  returned success. No account mutation or public identity data was recorded.
+- Kept the user's emulator session running; physical-console BGM and overlay
+  acceptance remain separate from these account/API results.

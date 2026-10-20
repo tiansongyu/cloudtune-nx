@@ -60,6 +60,18 @@ To run the application:
   > build/validation/eden-app.log 2>&1
 ```
 
+To use the currently visible desktop instead of the isolated display:
+
+```sh
+EDEN_DISPLAY="$DISPLAY" ./scripts/eden-virtual-desktop.sh \
+  -g "$PWD/build/switch/NeteaseSwitch.nro"
+```
+
+This opens the Qt interface with the same isolated emulator data. If the
+“Derivation Components Missing” dialog asks to install decryption keys,
+choose **No** for this self-built NRO. No console keys are needed for this
+application. Review the SSL limitation below before authorizing an account.
+
 The separate display `:120` is reserved for native desktop Borealis testing
 on the development machine. Emulator and desktop processes can run side by
 side without stealing focus from the user's main desktop.

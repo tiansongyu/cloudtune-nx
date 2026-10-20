@@ -49,7 +49,7 @@ exercise the ARM64 application, not the native desktop executable.
 | Touch navigation | Passed in handheld and docked emulation after coordinate fix | `eden-account-handheld.png`, `eden-regression-docked-account.png` |
 | Touch scrolling | Passed; dragging a song list moved from row 1 to row 5 without playing the touched row | `eden-touch-scroll.png` |
 | Login QR generation | Passed; real NetEase QR key rendered and waiting-for-scan status appeared | `eden-account-qr.png` (private, ephemeral login key; do not publish) |
-| Account authorization | Not executed; no user scanned/authorized the QR | No account/library claim is made |
+| Account authorization | User subsequently authorized sign-in in the current-desktop NRO; authenticated host API readback passed | See the dated authenticated section in `API_VALIDATION.md`; no private screen is published |
 | Initial online track playback | First track reached 30-second preview end and advanced to the next track | `eden-playing-01.png`, `eden-playing-03.png` |
 | Animated vinyl record | Passed; successive playback frames showed different record/cover angles | `eden-playing-01.png` through `eden-playing-04.png` |
 | Track metadata and lyrics | Passed; bilingual lines render separately and follow the current lyric | `eden-regression-vinyl-first.png`, `eden-regression-second-advancing.png` |
