@@ -27,3 +27,51 @@ Dates use Asia/Shanghai.
   The API cryptography implementation therefore uses mbedTLS.
 
 Further checkpoints are appended after their corresponding build or test.
+
+## 2026-10-20 · API and playback checkpoints
+
+- Implemented all 49 reference API/download methods and the four session helpers.
+  Added the parameter catalog and machine-readable mapping.
+- Verified WEAPI/EAPI known vectors and independently decrypted XEAPI output
+  with Python cryptography. Both API translation units cross-compiled for
+  AArch64. Twenty-one live read-only API operations succeeded; no real
+  user's account authorization or collection writes were claimed.
+- Built the independent Atmosphère ExeFS NSP and Tesla overlay.
+- Audio integration tests decoded generated MP3 locally and over throttled
+  HTTPS, checking pause, seek, volume, repeat/shuffle, next/previous, automatic
+  advance and final-queue stop. SDL's dummy sink verifies data flow, not
+  subjective audible quality.
+- The actual NetEase song `347230` was resolved and streamed through the
+  engine; the anonymous 45-second preview advanced normally.
+- Corrected the absent-service connection path: first detect Atmosphère and
+  query service availability without blocking. Eden cannot provide the
+  custom `ncm:bg` service.
+- Corrected queue replacement for Horizon's non-overwriting rename semantics.
+  Fault-injection tests cover `EEXIST`, failed promotion and failed rollback;
+  the old queue remains recoverable.
+- Initialized time services explicitly in the system module so TLS
+  certificate dates and request timestamps use the system clock.
+
+## 2026-10-20 · Native GUI integration and emulator iteration
+
+- Added the controller/touch canvas, discovery, charts, search, collection
+  views, account flows, settings, mini-player, queue and full vinyl player.
+- The vinyl record advances only in `Playing` state at 33⅓ RPM, with a
+  rotating cover and a separate tonearm. Synced bilingual LRC is rendered
+  from the actual playback position.
+- Both desktop and Switch builds completed. Desktop virtual display `:120`
+  loaded real playlists and covers, opened a 97-song playlist and played its
+  authorized preview through the shared engine.
+- Eden iteration 1 exposed unimplemented wireless-priority IPC 80. Removed
+  that optional optimization. Iteration 2 exposed blocking `smGetService`
+  for a missing custom service. Applied the nonblocking client fix.
+- Eden iteration 3 rendered the actual NRO with Chinese text and live
+  playlists/covers, then generated a real QR waiting for authorization.
+- Fixed canvas-wide focus effects and ellipsized long text after inspecting
+  real virtual-desktop screenshots. Fixed bilingual newline glyphs.
+- Replaced inherited reference font files with redistributable DejaVu Sans
+  and generated controller hint glyphs. The main canvas uses OFL Noto CJK.
+- Added deterministic model tests for task ordering, busy state and stale
+  navigation. Corrected nullable subscription values and paginated libraries.
+
+Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
