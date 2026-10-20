@@ -59,6 +59,18 @@ jobs:
             cloudtune-overlay-preview cloudtune-preview-service
           ctest --test-dir build/desktop --output-on-failure \
             -R '^overlay-preview-service$' 2>&1 | tee build/validation/ci-overlay-preview.log
+      - name: Build and test with UndefinedBehaviorSanitizer
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          cmake -S . -B build/ubsan -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DPLATFORM_DESKTOP=ON \
+            -DCLOUDTUNE_BUILD_OVERLAY_PREVIEW=ON \
+            -DCMAKE_C_FLAGS="-fsanitize=undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
+          cmake --build build/ubsan --parallel 2
+          ctest --test-dir build/ubsan --output-on-failure \
+            2>&1 | tee build/validation/ci-ubsan.log
       - name: Retain host test log
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -68,6 +80,7 @@ jobs:
           path: |
             build/validation/ci-host.log
             build/validation/ci-overlay-preview.log
+            build/validation/ci-ubsan.log
           if-no-files-found: ignore
           retention-days: 7
           include-hidden-files: false
