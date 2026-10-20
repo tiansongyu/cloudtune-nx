@@ -15,6 +15,7 @@
 #include <string.h>
 
 #define NCM_IPC_TLS_BUFFER_SIZE 0x100u
+#define NCM_IPC_TRACE_MAX_BYTES (64u * 1024u)
 #define NCM_IPC_TRACE_PATH \
   "sdmc:/config/netease-switch/ipc.log"
 
@@ -27,25 +28,47 @@ typedef struct NcmIpcRawHeader {
 } NcmIpcRawHeader;
 
 static FILE* g_trace_file;
-
-static void traceOpen(void) {
-  g_trace_file = fopen(NCM_IPC_TRACE_PATH, "w");
-  if (g_trace_file) {
-    fputs("start\n", g_trace_file);
-    fflush(g_trace_file);
-  }
-}
-
-static void traceResult(const char* stage, Result result) {
-  if (!g_trace_file) return;
-  fprintf(g_trace_file, "%s 0x%08X\n", stage, result);
-  fflush(g_trace_file);
-}
+static size_t g_trace_bytes;
+static Result g_trace_last_result;
+static char g_trace_last_stage[24];
 
 static void traceClose(void) {
   if (!g_trace_file) return;
   fclose(g_trace_file);
   g_trace_file = NULL;
+}
+
+static void traceWrite(const char* line, size_t size) {
+  if (!g_trace_file || size > NCM_IPC_TRACE_MAX_BYTES - g_trace_bytes)
+    return;
+  const size_t written = fwrite(line, 1, size, g_trace_file);
+  g_trace_bytes += written;
+  if (written != size || fflush(g_trace_file) != 0) traceClose();
+}
+
+static void traceOpen(void) {
+  traceClose();
+  g_trace_bytes = 0;
+  g_trace_last_result = 0;
+  g_trace_last_stage[0] = 0;
+  g_trace_file = fopen(NCM_IPC_TRACE_PATH, "w");
+  traceWrite("start\n", 6);
+}
+
+static void traceResult(const char* stage, Result result) {
+  if (!g_trace_file) return;
+  /* Status polling runs for the service's entire lifetime. Successful replies
+   * must not turn it into a continuous SD writer. Keep lifecycle entries and
+   * changed errors, then stop writing at the per-start diagnostic limit. */
+  if (R_SUCCEEDED(result) && strcmp(stage, "reply") == 0) return;
+  if (R_FAILED(result) && result == g_trace_last_result &&
+      strcmp(stage, g_trace_last_stage) == 0) return;
+  char line[64];
+  const int size = snprintf(line, sizeof(line), "%s 0x%08X\n", stage, result);
+  if (size < 0 || (size_t)size >= sizeof(line)) return;
+  traceWrite(line, (size_t)size);
+  g_trace_last_result = result;
+  snprintf(g_trace_last_stage, sizeof(g_trace_last_stage), "%s", stage);
 }
 
 static void clearMessageBuffer(void) {

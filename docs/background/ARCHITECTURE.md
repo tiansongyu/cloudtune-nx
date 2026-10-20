@@ -123,6 +123,12 @@ the engine. `audio.log` records sample rate, produced frames, queued duration,
 position and output result codes, with a 256 KiB rotation limit. It excludes
 URLs and authentication values. Remove the setting after collecting a report.
 
+The system module's `ipc.log` records service lifecycle events and changed IPC
+errors. Successful polling replies are omitted, repeated identical errors are
+suppressed, and writes stop at 64 KiB until the service restarts. Each start
+replaces that diagnostic file. Logging failures disable the log without changing
+request handling or session cleanup.
+
 ## Installation layout
 
 ```text

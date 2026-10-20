@@ -762,8 +762,13 @@ namespace tsl {
                     float currFontSize;
                     int bounds[4];
                     int xAdvance;
-                    u8 *glyphBmp;
+                    u8 *glyphBmp = nullptr;
                     int width, height;
+
+                    Glyph() = default;
+                    Glyph(const Glyph&) = delete;
+                    Glyph& operator=(const Glyph&) = delete;
+                    ~Glyph() { stbtt_FreeBitmap(this->glyphBmp, nullptr); }
                 };
 
                 static std::unordered_map<u64, Glyph> s_glyphCache;
@@ -795,15 +800,15 @@ namespace tsl {
 
                     auto it = s_glyphCache.find(key);
                     if (it == s_glyphCache.end()) {
+                        // Metadata changes indefinitely while the overlay stays
+                        // resident. Bound retained raster data and release it
+                        // before obtaining a pointer to the next cache entry.
+                        if (s_glyphCache.size() >= 1024)
+                            s_glyphCache.clear();
                         /* Cache glyph */
-                        glyph = &s_glyphCache.emplace(key, Glyph()).first->second;
+                        glyph = &s_glyphCache.try_emplace(key).first->second;
 
-                        if (stbtt_FindGlyphIndex(&this->m_extFont, currCharacter))
-                            glyph->currFont = &this->m_extFont;
-                        else if(this->m_hasLocalFont && stbtt_FindGlyphIndex(&this->m_stdFont, currCharacter)==0)
-                            glyph->currFont = &this->m_localFont;
-                        else
-                            glyph->currFont = &this->m_stdFont;
+                        glyph->currFont = this->fontForCodepoint(currCharacter);
 
                         glyph->currFontSize = stbtt_ScaleForPixelHeight(glyph->currFont, fontSize);
 
@@ -870,14 +875,7 @@ namespace tsl {
 
                     strPos += codepointWidth;
 
-                    stbtt_fontinfo *currFont = nullptr;
-
-                    if (stbtt_FindGlyphIndex(&this->m_extFont, currCharacter))
-                        currFont = &this->m_extFont;
-                    else if(this->m_hasLocalFont && stbtt_FindGlyphIndex(&this->m_stdFont, currCharacter)==0)
-                        currFont = &this->m_localFont;
-                    else
-                        currFont = &this->m_stdFont;
+                    stbtt_fontinfo *currFont = this->fontForCodepoint(currCharacter);
 
                     float currFontSize = stbtt_ScaleForPixelHeight(currFont, fontSize);
 
@@ -930,8 +928,21 @@ namespace tsl {
 
             std::stack<ScissoringConfig> m_scissoringStack;
 
-            stbtt_fontinfo m_stdFont, m_localFont, m_extFont;
+            stbtt_fontinfo m_stdFont, m_localFont, m_extFont, m_chineseFont;
             bool m_hasLocalFont = false;
+            bool m_hasChineseFont = false;
+
+            stbtt_fontinfo* fontForCodepoint(u32 character) {
+                if (stbtt_FindGlyphIndex(&this->m_extFont, character))
+                    return &this->m_extFont;
+                if (stbtt_FindGlyphIndex(&this->m_stdFont, character))
+                    return &this->m_stdFont;
+                if (this->m_hasLocalFont && stbtt_FindGlyphIndex(&this->m_localFont, character))
+                    return &this->m_localFont;
+                if (this->m_hasChineseFont && stbtt_FindGlyphIndex(&this->m_chineseFont, character))
+                    return &this->m_chineseFont;
+                return &this->m_stdFont;
+            }
 
             static inline float s_opacity = 1.0F;
 
@@ -1093,13 +1104,23 @@ namespace tsl {
              * @return Result
              */
             Result initFonts() {
-                static PlFontData stdFontData, localFontData, extFontData;
+                static PlFontData stdFontData, localFontData, extFontData, chineseFontData;
 
                 // Nintendo's default font
                 TSL_R_TRY(plGetSharedFontByType(&stdFontData, PlSharedFontType_Standard));
 
                 u8 *fontBuffer = reinterpret_cast<u8*>(stdFontData.address);
                 stbtt_InitFont(&this->m_stdFont, fontBuffer, stbtt_GetFontOffsetForIndex(fontBuffer, 0));
+
+                // CloudTune's UI and track metadata can contain Chinese even
+                // when Horizon uses English/Japanese/Korean. Shared fonts do
+                // not consume the overlay's heap; keep this fallback optional.
+                this->m_hasChineseFont = false;
+                if (R_SUCCEEDED(plGetSharedFontByType(&chineseFontData, PlSharedFontType_ChineseSimplified))) {
+                    fontBuffer = reinterpret_cast<u8*>(chineseFontData.address);
+                    this->m_hasChineseFont = stbtt_InitFont(&this->m_chineseFont, fontBuffer,
+                        stbtt_GetFontOffsetForIndex(fontBuffer, 0)) != 0;
+                }
 
                 u64 languageCode;
                 if (R_SUCCEEDED(setGetSystemLanguage(&languageCode))) {
@@ -2014,8 +2035,9 @@ namespace tsl {
                     } else if (direction == FocusDirection::Up) {
                         if (this->m_focusedIndex > 0) {
 
-                            for (u16 i = this->m_focusedIndex - 1; i >= 0; i--) {
-                                if (i > this->m_items.size() || this->m_items[i] == nullptr)
+                            for (size_t i = this->m_focusedIndex; i > 0;) {
+                                --i;
+                                if (i >= this->m_items.size() || this->m_items[i] == nullptr)
                                     return oldFocus;
                                 else
                                     newFocus = this->m_items[i]->requestFocus(oldFocus, direction);
@@ -2161,7 +2183,7 @@ namespace tsl {
                         renderer->drawString(this->m_scrollText.c_str(), false, this->getX() + 20 - this->m_scrollOffset, this->getY() + 45, 23, tsl::style::color::ColorText);
                         renderer->disableScissoring();
                         if (this->m_scrollAnimationCounter == 90) {
-                            if (this->m_scrollOffset == this->m_textWidth) {
+                            if (this->m_scrollOffset >= this->m_textWidth) {
                                 this->m_scrollOffset = 0;
                                 this->m_scrollAnimationCounter = 0;
                             } else {
@@ -2231,10 +2253,14 @@ namespace tsl {
              * @param text Text
              */
             inline void setText(const std::string& text) {
+                if (this->m_text == text)
+                    return;
                 this->m_text = text;
                 this->m_scrollText = "";
                 this->m_ellipsisText = "";
                 this->m_maxWidth = 0;
+                this->m_scrollOffset = 0;
+                this->m_scrollAnimationCounter = 0;
             }
 
             /**

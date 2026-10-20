@@ -27,12 +27,14 @@ class PlayerGui : public tsl::Gui {
         }
         refresh = {};
     }
-    void button(tsl::elm::List *list, const char *label, std::function<Result()> action) {
+    void button(tsl::elm::List *list, const char *label, std::function<Result()> action,
+                bool needsConnection = true) {
         auto *item = new tsl::elm::ListItem(label);
-        item->setClickListener([this, action](u64 keys) {
+        item->setClickListener([this, action, needsConnection](u64 keys) {
             if (!(keys & HidNpadButton_A))
                 return false;
-            control(action());
+            if (connected || !needsConnection)
+                control(action());
             return true;
         });
         list->addItem(item);
@@ -65,7 +67,8 @@ class PlayerGui : public tsl::Gui {
         play->setClickListener([this](u64 keys) {
             if (!(keys & HidNpadButton_A))
                 return false;
-            control(ncmPlaybackPlayPause());
+            if (connected)
+                control(ncmPlaybackPlayPause());
             return true;
         });
         list->addItem(play);
@@ -75,10 +78,16 @@ class PlayerGui : public tsl::Gui {
             return ncmPlaybackSeek(status.position_ms > 15000 ? status.position_ms - 15000 : 0);
         });
         button(list, "前进 15 秒", [] {
-            return ncmPlaybackSeek(std::min(status.position_ms + 15000, status.duration_ms));
+            uint64_t target = static_cast<uint64_t>(status.position_ms) + 15000;
+            target = std::min(target, static_cast<uint64_t>(UINT32_MAX));
+            if (status.duration_ms)
+                target = std::min(target, static_cast<uint64_t>(status.duration_ms));
+            return ncmPlaybackSeek(static_cast<uint32_t>(target));
         });
         volume = new tsl::elm::ListItem("音量", "70%");
         volume->setClickListener([this](u64 keys) {
+            if (!connected)
+                return (keys & (HidNpadButton_A | HidNpadButton_Left | HidNpadButton_Right)) != 0;
             if (keys & HidNpadButton_Left) {
                 control(ncmPlaybackSetVolume(
                     status.volume_permille > 50 ? status.volume_permille - 50 : 0));
@@ -95,7 +104,8 @@ class PlayerGui : public tsl::Gui {
         mode->setClickListener([this](u64 keys) {
             if (!(keys & HidNpadButton_A))
                 return false;
-            control(ncmPlaybackSetRepeat(static_cast<NcmRepeatMode>((status.repeat + 1) % 3)));
+            if (connected)
+                control(ncmPlaybackSetRepeat(static_cast<NcmRepeatMode>((status.repeat + 1) % 3)));
             return true;
         });
         list->addItem(mode);
@@ -104,7 +114,7 @@ class PlayerGui : public tsl::Gui {
         button(list, "启动 / 重连后台服务", [] {
             ncmPlaybackLaunchBackground();
             return ncmPlaybackInitialize();
-        });
+        }, false);
         information = new tsl::elm::ListItem("正在连接…");
         list->addItem(information);
         frame->setContent(list);
@@ -126,6 +136,13 @@ class PlayerGui : public tsl::Gui {
             connected = false;
         }
         if (!connected) {
+            status = {};
+            title->setText("后台服务未连接");
+            artist->setText("");
+            time->setText("--:-- / --:--");
+            play->setText("播放 / 暂停");
+            volume->setValue("--");
+            mode->setValue("--");
             information->setText("请安装或启动后台服务");
             return;
         }
@@ -141,6 +158,8 @@ class PlayerGui : public tsl::Gui {
     }
     bool handleInput(u64 keys, u64, const HidTouchState &, HidAnalogStickState,
                      HidAnalogStickState) override {
+        if (!connected)
+            return false;
         if (keys & HidNpadButton_L) {
             control(ncmPlaybackPrevious());
             return true;

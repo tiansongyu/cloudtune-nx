@@ -5,7 +5,7 @@ if(NOT PLATFORM_SWITCH AND NOT PLATFORM_DESKTOP)
   set(PLATFORM_DESKTOP ON CACHE BOOL "" FORCE)
 endif()
 include(${BOREALIS_LIBRARY}/cmake/toolchain.cmake)
-project(CloudTuneNX VERSION 0.2.0 LANGUAGES C CXX)
+project(CloudTuneNX VERSION 0.2.1 LANGUAGES C CXX)
 option(CLOUDTUNE_BUILD_OVERLAY_PREVIEW "Build the Linux desktop overlay preview" OFF)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -92,6 +92,17 @@ else()
   target_link_libraries(ncm-storage-tests PRIVATE netease_api)
   add_test(NAME storage COMMAND ncm-storage-tests)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_executable(ncm-overlay-ui-tests tests/overlay_ui_tests.cpp)
+  target_include_directories(ncm-overlay-ui-tests PRIVATE
+    tests/overlay_ui_stubs overlay/preview include)
+  target_compile_definitions(ncm-overlay-ui-tests PRIVATE CLOUDTUNE_VERSION="test")
+  target_compile_options(ncm-overlay-ui-tests PRIVATE -UNDEBUG)
+  add_test(NAME overlay-ui COMMAND ncm-overlay-ui-tests)
+  add_test(NAME tesla-native
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/tesla_native_tests.py"
+      --cxx "${CMAKE_CXX_COMPILER}" --source "${CMAKE_SOURCE_DIR}"
+      "--cxx-flags=${CMAKE_CXX_FLAGS}")
+  set_tests_properties(overlay-ui tesla-native PROPERTIES TIMEOUT 60)
   add_test(NAME api-transport
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/api_transport_tests.py"
       $<TARGET_FILE:ncm-api-tests>)

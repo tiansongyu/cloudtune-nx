@@ -18,10 +18,15 @@
   AirPlay ALAC receiver. The limited codec and demuxer build, complete
   corresponding source and license packaging are described in
   [the project notices](../THIRD_PARTY_NOTICES.md).
-- `overlay/vendor/libtesla/tesla.hpp` is the original WerWolv libtesla,
+- `overlay/vendor/libtesla/tesla.hpp` is based on WerWolv libtesla,
   <https://github.com/WerWolv/libtesla>, retrieved 2026-10-20. Its GPL-2.0
-  license is included as `overlay/vendor/libtesla/LICENSE`. SHA-256:
+  license is included as `overlay/vendor/libtesla/LICENSE`. Original imported SHA-256:
   `132f0ba423392dd6f8fe0eac7a110a560e05e2bcf3c0e47058e27447c95b8661`.
+  CloudTune NX adds an optional Chinese shared-font fallback for non-Chinese
+  system languages, bounds the glyph cache to 1,024 entries and frees its
+  bitmaps, resets scrolling when a song title changes, and uses bounded
+  reverse focus traversal. Font selection is shared by rendering and text
+  measurement; system locale fonts retain priority over the Chinese fallback.
 - `overlay/vendor/libtesla/stb_truetype.h` is the stb TrueType renderer,
   retained from the Switify dependency tree with its embedded MIT /
   public-domain license. SHA-256:

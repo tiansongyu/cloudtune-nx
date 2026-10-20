@@ -1,0 +1,214 @@
+/* SPDX-License-Identifier: GPL-2.0-only
+ * @...@ methods/classes are inserted verbatim from native tesla.hpp. */
+#include <switch.h>
+#include <algorithm>
+#include <bit>
+#include <cassert>
+#include <cmath>
+#include <cstddef>
+#include <cstdlib>
+#include <cwctype>
+#include <fstream>
+#include <iostream>
+#include <iterator>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+static size_t allocated = 0, peakAllocated = 0;
+struct alignas(std::max_align_t) Allocation { size_t bytes; };
+static void* trackedAllocate(size_t bytes) {
+    auto* allocation = static_cast<Allocation*>(std::malloc(sizeof(Allocation) + bytes));
+    if (!allocation) return nullptr;
+    allocation->bytes = bytes;
+    allocated += bytes;
+    peakAllocated = std::max(peakAllocated, allocated);
+    return allocation + 1;
+}
+static void trackedFree(void* pointer) {
+    if (!pointer) return;
+    auto* allocation = static_cast<Allocation*>(pointer) - 1;
+    allocated -= allocation->bytes;
+    std::free(allocation);
+}
+#define STBTT_malloc(size, userdata) trackedAllocate(size)
+#define STBTT_free(pointer, userdata) trackedFree(pointer)
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "overlay/vendor/libtesla/stb_truetype.h"
+
+enum FontType {
+    PlSharedFontType_Standard, PlSharedFontType_ChineseSimplified,
+    PlSharedFontType_ChineseTraditional, PlSharedFontType_KO, PlSharedFontType_NintendoExt
+};
+enum SetLanguage {
+    SetLanguage_ENUS, SetLanguage_JA, SetLanguage_ZHCN, SetLanguage_ZHHANS,
+    SetLanguage_KO, SetLanguage_ZHTW, SetLanguage_ZHHANT
+};
+struct PlFontData { void* address; };
+static SetLanguage language = SetLanguage_ENUS;
+static bool chineseAvailable = true;
+static unsigned chineseRequests = 0;
+static std::vector<u8> standardBytes, chineseBytes, iconBytes;
+static Result plGetSharedFontByType(PlFontData* font, FontType type) {
+    if (type == PlSharedFontType_ChineseSimplified) {
+        ++chineseRequests;
+        if (!chineseAvailable) return 1;
+    }
+    font->address = type == PlSharedFontType_Standard ? standardBytes.data() :
+                    type == PlSharedFontType_NintendoExt ? iconBytes.data() : chineseBytes.data();
+    return 0;
+}
+static Result setGetSystemLanguage(u64* output) { *output = language; return 0; }
+static Result setMakeLanguage(u64 value, SetLanguage* output) {
+    *output = static_cast<SetLanguage>(value); return 0;
+}
+#define TSL_R_TRY(expression) do { Result result = (expression); if (result) return result; } while (false)
+static ssize_t decode_utf8(u32* output, const u8* input) {
+    if (*input < 0x80) { *output = *input; return *input ? 1 : 0; }
+    unsigned count = *input < 0xE0 ? 2 : *input < 0xF0 ? 3 : 4;
+    u32 value = *input & (count == 2 ? 31 : count == 3 ? 15 : 7);
+    for (unsigned i = 1; i < count; ++i) {
+        if ((input[i] & 0xC0) != 0x80) return -1;
+        value = (value << 6) | (input[i] & 63);
+    }
+    *output = value; return count;
+}
+namespace tsl {
+struct Color { u8 a; };
+namespace style {
+constexpr int ListItemDefaultHeight = 70;
+namespace color {
+constexpr Color ColorTransparent{0}, ColorText{15}, ColorClickAnimation{15},
+    ColorFrame{15}, ColorDescription{15}, ColorHighlight{15};
+}
+}
+enum class FocusDirection { None, Up, Down };
+enum class TouchEvent { Touch, Release };
+enum class InputMode { Controller, Touch };
+namespace gfx {
+struct Renderer {
+    stbtt_fontinfo m_stdFont{}, m_localFont{}, m_extFont{}, m_chineseFont{};
+    bool m_hasLocalFont = false, m_hasChineseFont = false;
+    void setPixel(int, int, Color) {}
+    void setPixelBlendDst(int, int, Color) {}
+    void drawRect(int, int, int, int, Color) {}
+    void enableScissoring(int, int, int, int) {}
+    void disableScissoring() {}
+    @SELECT@
+    @FONTS@
+    @RENDER@
+    @LIMIT@
+};
+}
+namespace elm {
+struct Element {
+    bool m_focused = false;
+    int m_clickAnimationProgress = 0;
+    virtual ~Element() = default;
+    virtual void draw(gfx::Renderer*) {}
+    virtual void layout(u16, u16, u16, u16) {}
+    virtual bool onClick(u64) { return false; }
+    virtual bool onTouch(TouchEvent, s32, s32, s32, s32, s32, s32) { return false; }
+    virtual void setFocused(bool state) { m_focused = state; }
+    virtual Element* requestFocus(Element*, FocusDirection) { return nullptr; }
+    void setBoundaries(int, int, int, int) {}
+    int getX() const { return 0; }
+    int getY() const { return 0; }
+    int getWidth() const { return 363; }
+    int getHeight() const { return 70; }
+    int getTopBound() const { return 0; }
+    bool inBounds(s32, s32) { return true; }
+    void triggerClickAnimation() {}
+    static InputMode getInputMode() { return InputMode::Controller; }
+    Color a(Color value) { return value; }
+};
+#define ELEMENT_BOUNDS(element) 0, 0, 363, 70
+@ITEM@
+struct List : Element {
+    bool m_clearList = false;
+    std::vector<Element*> m_items, m_itemsToAdd;
+    u32 m_focusedIndex = 0;
+    float m_offset = 0;
+    void updateScrollOffset() {}
+    @FOCUS@
+};
+struct ItemProbe : ListItem {
+    using ListItem::ListItem;
+    unsigned offset() const { return m_scrollOffset; }
+    void scrolling(unsigned offset) { m_scrollOffset = offset; m_scrollAnimationCounter = 90; }
+};
+}
+}
+
+static unsigned failures = 0;
+static void check(bool result, const char* description) {
+    if (!result) { std::cerr << "FAIL " << description << '\n'; ++failures; }
+}
+static std::vector<u8> readFile(const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    std::vector<u8> bytes{std::istreambuf_iterator<char>(input), {}};
+    if (bytes.empty()) { std::cerr << "Missing font fixture: " << path << '\n'; std::exit(1); }
+    return bytes;
+}
+int main(int argc, char** argv) {
+    if (argc != 2) return 2;
+    const std::string root = argv[1];
+    standardBytes = readFile(root + "/resources/font/switch_font.ttf");
+    chineseBytes = readFile(root + "/resources/font/chinese_fallback.ttf");
+    iconBytes = readFile(root + "/resources/font/switch_icons.ttf");
+    tsl::gfx::Renderer renderer;
+    check(renderer.initFonts() == 0, "English system initializes fonts");
+    check(chineseRequests == 1, "English system requests Chinese fallback");
+    check(stbtt_FindGlyphIndex(&renderer.m_stdFont, U'乐') == 0, "standard fixture lacks Chinese");
+    check(renderer.fontForCodepoint(U'乐') == &renderer.m_chineseFont,
+          "English system resolves Chinese missing glyph");
+    language = SetLanguage_JA;
+    check(renderer.initFonts() == 0 && renderer.fontForCodepoint(U'乐') == &renderer.m_chineseFont,
+          "Japanese system resolves Chinese missing glyph");
+    language = SetLanguage_KO;
+    check(renderer.initFonts() == 0 && renderer.fontForCodepoint(U'乐') == &renderer.m_localFont,
+          "system locale font remains preferred when it contains glyph");
+    language = SetLanguage_ENUS;
+    chineseAvailable = false;
+    check(renderer.initFonts() == 0 && !renderer.m_hasChineseFont,
+          "missing optional Chinese shared font does not stop overlay");
+    chineseAvailable = true;
+    check(renderer.initFonts() == 0, "restore Chinese font");
+
+    tsl::elm::Element drawer;
+    tsl::elm::ItemProbe first(std::string(70, 'W')), second("Second");
+    tsl::elm::List list;
+    list.m_items = {&drawer, &first, &second};
+    list.m_focusedIndex = 1;
+    for (int i = 0; i < 1000; ++i)
+        check(list.requestFocus(&first, tsl::FocusDirection::Up) == &first,
+              "up skips nonfocusable vinyl and retains first title");
+    check(list.requestFocus(&first, tsl::FocusDirection::Down) == &second,
+          "down advances to next row");
+    check(list.requestFocus(&second, tsl::FocusDirection::Up) == &first,
+          "up restores previous row");
+
+    first.setFocused(true);
+    first.draw(&renderer);
+    first.scrolling(900);
+    first.setText(std::string(30, 'W'));
+    check(first.offset() == 0, "new track title resets old marquee offset");
+    first.draw(&renderer);
+    first.scrolling(100);
+    first.setText(std::string(30, 'W'));
+    check(first.offset() == 100, "same periodic metadata refresh preserves marquee progress");
+    first.scrolling(60000);
+    first.draw(&renderer);
+    check(first.offset() == 0, "marquee resets any offset beyond current title width");
+    for (u32 character = 0x4E00; character < 0x4E00 + 8192; ++character) {
+        char encoded[] = {static_cast<char>(0xE0 | (character >> 12)),
+                          static_cast<char>(0x80 | ((character >> 6) & 63)),
+                          static_cast<char>(0x80 | (character & 63)), 0};
+        renderer.drawString(encoded, false, 0, 0, 23, {0});
+    }
+    check(peakAllocated < 1024 * 1024, "8192 unique glyphs keep bounded raster memory");
+    std::cout << (failures ? "FAIL" : "PASS")
+              << " native Tesla: fonts, focus, marquee, 8192 glyphs; peak STB bytes="
+              << peakAllocated << " retained=" << allocated << '\n';
+    return failures ? 1 : 0;
+}

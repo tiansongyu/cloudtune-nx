@@ -8,11 +8,29 @@
 static unsigned char* tls;
 static Handle closed[32];
 static unsigned closed_count;
+static unsigned char incoming[256], outgoing[256];
+static Result receive_result;
+static unsigned reply_count, handler_count;
+static bool clean_receive_template = true;
 void* armGetTls(void) { return tls; }
 Result svcCloseHandle(Handle handle) { closed[closed_count++] = handle; return 0; }
 Result svcAcceptSession(Handle* out, Handle in) { (void)out; (void)in; return 1; }
 Result svcReplyAndReceive(s32* a, const Handle* b, s32 c, Handle d, u64 e) {
-    (void)a; (void)b; (void)c; (void)d; (void)e; return 1;
+    (void)b; (void)e;
+    if (c == 1 && d == 0) {
+        for (unsigned i = 0; i < 256; ++i)
+            if (tls[i]) clean_receive_template = false;
+        if (R_FAILED(receive_result)) return receive_result;
+        memcpy(tls, incoming, sizeof(incoming));
+        *a = 0;
+        return 0;
+    }
+    if (c == 0 && d != 0) {
+        memcpy(outgoing, tls, sizeof(outgoing));
+        ++reply_count;
+        return KERNELRESULT(TimedOut);
+    }
+    return 1;
 }
 Result svcWaitSynchronization(s32* a, const Handle* b, s32 c, u64 d) {
     (void)a; (void)b; (void)c; (void)d; return 1;
@@ -34,6 +52,66 @@ static void message(unsigned words) {
     memcpy(tls, &header, sizeof(header));
     const NcmIpcRawHeader cmif = {CMIF_IN_HEADER_MAGIC, {.command_id=16}};
     memcpy(tls + 16, &cmif, sizeof(cmif));
+}
+static Result poll_handler(void* context, const NcmIpcServerRequest* request,
+                           uint8_t* output, size_t* size) {
+    (void)context;
+    check(request->command_id == 16 && request->data_size == 0,
+          "Synthetic polling request was parsed incorrectly");
+    const uint32_t value = 42;
+    memcpy(output, &value, sizeof(value));
+    *size = sizeof(value);
+    ++handler_count;
+    return 0;
+}
+static void diagnostic_tests(void) {
+    NcmIpcServer server = {.handles={80, 81}, .max_handles=2, .handle_count=2};
+    message(8);
+    memcpy(incoming, tls, sizeof(incoming));
+    closed_count = 0;
+    g_trace_file = tmpfile(); // Anonymous host file; never open a real SD path.
+    check(g_trace_file != NULL, "Cannot create diagnostic fixture");
+    for (unsigned i = 0; i < 4096; ++i)
+        check(processSession(&server, poll_handler, NULL, 1) == 0,
+              "Normal polling failed");
+    uint32_t response = 0;
+    memcpy(&response, outgoing + 32, sizeof(response));
+    check(reply_count == 4096 && handler_count == 4096 && response == 42 &&
+          clean_receive_template && closed_count == 0 && server.handle_count == 2,
+          "Polling changed IPC replies, receive templates or session lifetime");
+    check(ftell(g_trace_file) == 0, "Successful IPC polling grew the diagnostic log");
+
+    traceResult("sm-register", 0);
+    const long lifecycle_size = ftell(g_trace_file);
+    check(lifecycle_size > 0, "Lifecycle diagnostic was lost");
+    receive_result = 0x1234;
+    check(R_FAILED(processSession(&server, poll_handler, NULL, 1)) &&
+          server.handle_count == 1 && closed_count == 1 && closed[0] == 81,
+          "Failed receive did not release its session");
+    const long first_failure_size = ftell(g_trace_file);
+    check(first_failure_size > lifecycle_size, "First receive failure was not recorded");
+    for (unsigned i = 0; i < 4096; ++i) {
+        server.handle_count = 2;
+        closed_count = 0;
+        check(R_FAILED(processSession(&server, poll_handler, NULL, 1)),
+              "Repeated receive failure was accepted");
+    }
+    check(ftell(g_trace_file) == first_failure_size,
+          "Repeated identical failures grew the diagnostic log");
+    for (unsigned i = 0; i < 8192; ++i) {
+        server.handle_count = 2;
+        closed_count = 0;
+        receive_result = 1 + (i % 2);
+        check(R_FAILED(processSession(&server, poll_handler, NULL, 1)) &&
+              server.handle_count == 1 && closed_count == 1 && closed[0] == 81,
+              "Diagnostic limit changed failed-session cleanup");
+    }
+    const long final_size = ftell(g_trace_file);
+    check(final_size > 60 * 1024 && final_size <= 64 * 1024,
+          "IPC diagnostics exceeded their persistent size limit");
+    check(handler_count == 4096 && reply_count == 4096,
+          "Failed receives reached the handler or reply path");
+    traceClose();
 }
 int main(void) {
     const size_t page = (size_t)sysconf(_SC_PAGESIZE);
@@ -119,7 +197,8 @@ int main(void) {
     check(((NcmIpcRawHeader*)(tls + 16))->magic == CMIF_OUT_HEADER_MAGIC &&
           memcmp(tls + 32, response, sizeof(response)) == 0,
           "maximum inline response failed its TLS bounds");
+    diagnostic_tests();
     munmap(allocation, page * 2);
-    puts("PASS: CMIF payload size, 1024 TLS lengths, 512 handle layouts, descriptors and response bounds");
+    puts("PASS: CMIF bounds, 1024 TLS lengths, 512 handle layouts, 4096 polls and bounded failure logging");
     return 0;
 }
