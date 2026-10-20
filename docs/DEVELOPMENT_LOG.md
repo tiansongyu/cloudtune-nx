@@ -423,3 +423,19 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
   README icon and linked background notices at their canonical paths.
 - Full validation and physical-console limits are recorded in `VALIDATION.md`.
   Release publication uses the new tag's tested, verified artifacts.
+
+## Manual Release action (2026-10-20)
+
+- Added a `workflow_dispatch` entry to Release with an explicit version tag.
+  It builds the selected ref's event commit through the same reusable CI.
+- A read-only preflight validates version notes and remote state. After all
+  tests and package checks pass, only the publication job may create a missing
+  tag at the tested commit; existing tags, drafts and releases are preserved.
+- Manual and push-triggered releases share a per-tag concurrency group.
+  The uploaded artifacts are downloaded and compared before publication, and
+  the remote tag is checked again immediately before making the draft public.
+- Added isolated release-target tests to CI and documented the browser steps
+  and the actual installable assets in `RELEASING.md`.
+- All 24 target/transport tests, Python syntax, ShellCheck and actionlint
+  v1.7.12 passed locally. Tests include missing/annotated/conflicting tags,
+  existing drafts, HTTP failures and concurrent creation without force updates.

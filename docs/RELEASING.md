@@ -16,10 +16,11 @@
 | Pull request | 验证变更的宿主测试、Switch 三组件构建与打包 | 不创建 Release |
 | 推送 `main` | 对主分支执行同一 CI，保留可检查的产物和日志 | 不创建 Release |
 | 手工运行 CI | 在 Actions 的 CI 页面选择 ref 后运行 | 不创建 Release |
+| 手工运行 Release | 填写 `vX.Y.Z`；测试成功后创建缺失标签并上传五个实际附件 | 仅发布任务需要写权限 |
 | 推送 `vX.Y.Z` 标签 | 校验版本，调用同一 CI；全部成功后发布同次运行的附件 | 仅发布任务需要写权限 |
 
 `.github/workflows/ci.yml` 同时提供 `workflow_call` 入口。Release 工作流
-先验证标签与 `CMakeLists.txt` 中 `project(CloudTuneNX VERSION X.Y.Z ...)`
+先验证请求版本与 `CMakeLists.txt` 中 `project(CloudTuneNX VERSION X.Y.Z ...)`
 完全匹配，再调用该入口，等待宿主和 Switch 任务全部成功。
 CI 输出确切的 artifact ID，发布任务按该 ID 下载**本次运行**生成的包，
 不另取主分支的新二进制，也不从另一轮
@@ -85,9 +86,34 @@ Release 模式的固定文件名便于用户按版本下载，不表示不同构
 
 ## 发布一个版本
 
+### 在 GitHub 网页手动发布
+
+1. 在准备发布的分支上更新 `CMakeLists.txt` 版本、README 下载入口及
+   `docs/releases/vX.Y.Z.md`，提交并推送。版本标签输入不会自动修改应用版本。
+2. 打开 [Actions → Release](https://github.com/tiansongyu/cloudtune-nx/actions/workflows/release.yml)，
+   点击 **Run workflow**，选择准备好的分支（通常为 `main`）。
+3. 在 `tag` 中填写新标签，例如下一版 `v0.2.2`，再点击 **Run workflow**。
+   输入必须与所选分支的 CMake 版本及发布说明一致；`v0.2.1` 已发布，不可重复使用。
+4. 等待版本校验、完整宿主 / UBSan 测试、Switch 编译和包校验通过。
+   缺失的标签会在发布任务中创建到**本次运行所测试的提交**；
+   已有标签必须指向同一提交，不会被移动。
+5. 工作流上传并回读校验五个附件后公开 Release；运行 Summary 提供安装 ZIP 链接。
+
+下载产物是 `CloudTuneNX-X.Y.Z-sd.zip`，包含 `CloudTune.nro`、
+`exefs.nsp` 和 `CloudTune.ovl`，另有 symbols、docs、manifest 和 `SHA256SUMS`。
+不需要手工上传二进制，也不需要额外配置个人访问令牌。
+默认 `0.x.y` 仍为开发预览；输入已发布版本或已有草稿会停止操作，不覆盖原附件。
+
+手动运行以点击时所选 ref 的提交为准，运行期间分支后续更新不会改变构建来源；
+本地可复用 CI 使用同一提交。相关机制见 GitHub 的
+[手动事件说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
+和[工作流复用说明](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)。
+
+### 推送标签自动发布
+
 1. 在待发布提交中更新 `CMakeLists.txt` 的版本和
    `docs/releases/vX.Y.Z.md` 发布说明。标签必须是无前导零的 `vX.Y.Z`；
-   例如版本 `0.2.1` 对应标签 `v0.2.1`。工作流同时检查覆盖层版本来源，
+   例如版本 `0.2.2` 对应标签 `v0.2.2`。工作流同时检查覆盖层版本来源，
    并在编译后验证应用和覆盖层的 NACP 版本。
 2. 确认主分支 CI 成功，检查对应提交、自动测试日志和包清单。
    GUI 或音频行为变化还需要相应的模拟器与实机记录，不能由 CI 代替。
@@ -96,8 +122,8 @@ Release 模式的固定文件名便于用户按版本下载，不表示不同构
    ```sh
    git switch main
    git pull --ff-only
-   git tag -a v0.2.1 -m "CloudTune NX v0.2.1 development preview"
-   git push origin v0.2.1
+   git tag -a v0.2.2 -m "CloudTune NX v0.2.2 development preview"
+   git push origin v0.2.2
    ```
 
 4. 查看 Release 工作流：版本检查 → 可复用 CI → 新建 Release 草稿并上传 →
@@ -117,7 +143,8 @@ Release 模式的固定文件名便于用户按版本下载，不表示不同构
 ## 权限与凭据
 
 - CI 的构建和测试只授予所需的读取权限；上传构建产物不需要仓库内容写权限。
-- `contents: write` 仅用于受信任标签的发布任务。不要把它扩展到 PR 的编译任务。
+- `contents: write` 仅用于标签发布或维护者手动发布的最终任务，包括创建缺失标签。
+  不要把它扩展到 PR 的编译任务。
 - 不用 `pull_request_target` 执行未审查的 PR 代码，不向 PR 提供发布凭据或
   用户账号秘密。工作流中明确声明 `GITHUB_TOKEN` 的最小权限。
 - 上传范围限定为发布附件和经过筛选的验证日志；不上传整个工作目录、
