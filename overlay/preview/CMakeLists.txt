@@ -6,6 +6,7 @@ target_include_directories(cloudtune-overlay-preview PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/include"
   "${PROJECT_SOURCE_DIR}/overlay/vendor/libtesla")
 target_compile_definitions(cloudtune-overlay-preview PRIVATE
+  CLOUDTUNE_VERSION="${PROJECT_VERSION}"
   CLOUDTUNE_PREVIEW_FONT="${PROJECT_SOURCE_DIR}/resources/font/chinese_fallback.ttf")
 target_link_libraries(cloudtune-overlay-preview PRIVATE SDL2::SDL2)
 

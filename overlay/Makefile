@@ -28,7 +28,7 @@ CFLAGS      := -Os -g -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-
                -flto -fuse-linker-plugin -fomit-frame-pointer \
                -fno-strict-aliasing $(ARCH) $(DEFINES)
 CFLAGS      += $(INCLUDE) -DNDEBUG=1
-CXXFLAGS    := $(CFLAGS) -std=gnu++20 -fno-exceptions
+CXXFLAGS    := $(CFLAGS) -std=gnu++20 -fno-exceptions -DCLOUDTUNE_VERSION=\"$(APP_VERSION)\"
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) \
                -Wl,--gc-sections,-Map,$(OUTPUT_DIR)/$(TARGET).map
@@ -79,6 +79,8 @@ $(OUTPUT).ovl: $(OUTPUT).elf $(OUTPUT).nacp
 	@echo built ... $(notdir $@)
 
 $(OUTPUT).elf: $(OFILES)
+
+$(OFILES): $(OVERLAY_ROOT)/../CMakeLists.txt $(OVERLAY_ROOT)/Makefile
 
 $(OUTPUT).nacp: $(OVERLAY_ROOT)/../CMakeLists.txt
 
