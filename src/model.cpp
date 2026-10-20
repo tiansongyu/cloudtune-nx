@@ -95,7 +95,8 @@ Model::Model(std::string directory) : directory_(std::move(directory)) {
         accounts_ = std::make_unique<AccountStore>(directory_);
         sync_accounts();
     } catch (const std::exception& error) {
-        state_.error = error.what();
+        accounts_error_ = error.what();
+        state_.error = accounts_error_;
     }
     try {
         const auto saved = storage::read_file(directory_ + "/settings.json");
@@ -107,7 +108,12 @@ Model::Model(std::string directory) : directory_(std::move(directory)) {
     } catch (...) {
     }
     ApiConfig c;
-    c.cookie_file = directory_ + "/cookies.txt";
+    // An unreadable canonical registry must not silently activate its mirror
+    // or overwrite it while the user is recovering the account archive.
+    if (accounts_)
+        c.cookie_file = directory_ + "/cookies.txt";
+    else
+        c.persist_cookies = false;
     c.proxy = state_.proxy;
     c.timeout_seconds = 15;
 #ifdef __SWITCH__
@@ -124,7 +130,10 @@ Model::~Model() {
 }
 Snapshot Model::snapshot() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return state_;
+    auto result = state_;
+    if (!accounts_error_.empty())
+        result.error = accounts_error_;
+    return result;
 }
 void Model::stop() {
     if (stopping_.exchange(true))
@@ -235,6 +244,8 @@ void Model::start() {
         false);
 }
 void Model::restore_queue() {
+    if (!accounts_)
+        return;
     std::vector<Media> queue;
     const auto path = directory_ + "/queue.nsq";
     // A previous GUI may have exited during Horizon's two-rename publication.
@@ -276,6 +287,8 @@ bool Model::apply_track_metadata(uint64_t generation, const Media &song) {
     return updated;
 }
 void Model::account() {
+    if (!accounts_)
+        return;
     auto j = api_->login_status();
     if (!current_view())
         return;
@@ -826,6 +839,12 @@ void Model::cancel_qr() {
 }
 void Model::login_qr() {
     cancel_qr();
+    if (!accounts_) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        state_.qr_message = accounts_error_;
+        ++state_.revision;
+        return;
+    }
     std::lock_guard<std::mutex> qr_lock(qr_mutex_);
     const auto generation = qr_generation_.load();
     {
@@ -1074,6 +1093,10 @@ void Model::set_play_callback(std::function<void(const std::vector<Media> &, siz
     on_play_ = std::move(cb);
 }
 void Model::play(size_t index) {
+    if (!accounts_) {
+        report("账号存档不可用，请先恢复 accounts.json 再播放");
+        return;
+    }
     auto list = snapshot().items;
     if (index >= list.size() || list[index].kind != MediaKind::Song)
         return;
@@ -1090,6 +1113,10 @@ void Model::play(size_t index) {
         on_play_(list, index);
 }
 void Model::play_queue(size_t index) {
+    if (!accounts_) {
+        report("账号存档不可用，请先恢复 accounts.json 再播放");
+        return;
+    }
     auto s = snapshot();
     if (index < s.queue.size() && on_play_)
         on_play_(s.queue, index);

@@ -640,7 +640,9 @@ void MusicView::tap(float x, float y) {
     auto s = model_.snapshot();
     if (s.busy)
         return;
-    if (x > 250 && y > 121 && y < 169) {
+    if (x > 250 && y > 121 && y < 169 &&
+        (s.collection || s.page == Page::Discover || s.page == Page::Library ||
+         s.page == Page::Search)) {
         if (s.collection) {
             if (x < 436)
                 action_x();
@@ -975,9 +977,10 @@ void MusicView::paint_player(NVGcontext *v, const Snapshot &s, bool full) {
     rect(v, 1111, 675, 130 * playback_.volume_permille / 1000.f, 3, muted, 1);
     if (playback_.state == NcmPlayback_Buffering)
         text(v, 620, 715, 10, red, "正在缓冲…", 350);
+    const auto message = status_text(playback_.message);
     if (playback_.state == NcmPlayback_Error)
-        text(v, 495, 715, 10, red, playback_.message, 740);
-    if (playback_.state == NcmPlayback_Playing && std::strstr(playback_.message, "preview"))
+        text(v, 495, 715, 10, red, message, 740);
+    if (playback_.state == NcmPlayback_Playing && message.find("preview") != std::string::npos)
         text(v, 494, 715, 10, muted, "试听 · 完整播放取决于当前账号和曲目权益", 490);
 }
 void MusicView::paint_account(NVGcontext *v, const Snapshot &s) {

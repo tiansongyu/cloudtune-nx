@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "netease/library.hpp"
 #include <iomanip>
+#include <limits>
 #include <regex>
 #include <sstream>
 
@@ -18,12 +19,22 @@ uint64_t json_id(const nlohmann::json &j, const char *key) {
     if (i->is_number_integer())
         return std::max<int64_t>(0, i->get<int64_t>());
     if (i->is_string()) {
-        try {
-            return std::stoull(i->get<std::string>());
-        } catch (...) {
+        const auto &text = i->get_ref<const std::string &>();
+        uint64_t value = 0;
+        if (text.empty())
+            return 0;
+        for (const auto c : text) {
+            if (c < '0' || c > '9' ||
+                value > (std::numeric_limits<uint64_t>::max() - (c - '0')) / 10)
+                return 0;
+            value = value * 10 + (c - '0');
         }
+        return value;
     }
     return 0;
+}
+static uint32_t bounded_count(uint64_t value) {
+    return static_cast<uint32_t>(std::min<uint64_t>(value, std::numeric_limits<uint32_t>::max()));
 }
 static std::string artists(const nlohmann::json &j) {
     std::string s;
@@ -48,9 +59,9 @@ Media parse_song(const nlohmann::json &source) {
     if (!m.id)
         m.id = json_id(source, "songId");
     m.title = json_text(s, "name", json_text(source, "songName", "未知歌曲"));
-    m.duration_ms = json_id(s, "dt");
+    m.duration_ms = bounded_count(json_id(s, "dt"));
     if (!m.duration_ms)
-        m.duration_ms = json_id(s, "duration");
+        m.duration_ms = bounded_count(json_id(s, "duration"));
     if (s.contains("ar"))
         m.artist = artists(s["ar"]);
     else if (s.contains("artists"))
@@ -74,9 +85,9 @@ Media parse_collection(const nlohmann::json &j, MediaKind kind) {
     m.id = json_id(j, "id");
     m.title = json_text(j, "name", "未命名");
     m.cover = json_text(j, "coverImgUrl", json_text(j, "picUrl"));
-    m.count = json_id(j, "trackCount");
+    m.count = bounded_count(json_id(j, "trackCount"));
     if (!m.count)
-        m.count = json_id(j, "size");
+        m.count = bounded_count(json_id(j, "size"));
     if (j.contains("creator"))
         m.artist = json_text(j["creator"], "nickname");
     if (j.contains("artist"))
@@ -133,8 +144,17 @@ std::vector<LyricLine> parse_lrc(const std::string &source) {
                 auto frac = (*i)[3].str();
                 while (frac.size() < 3)
                     frac += '0';
-                times.push_back(std::stoll((*i)[1]) * 60000 + std::stoll((*i)[2]) * 1000 +
-                                std::stoll(frac) + offset);
+                const auto minutes = std::stoll((*i)[1]);
+                const auto remainder = std::stoll((*i)[2]) * 1000 + std::stoll(frac);
+                constexpr auto maximum = std::numeric_limits<int64_t>::max();
+                if (minutes > (maximum - remainder) / 60000)
+                    continue;
+                const auto milliseconds = minutes * 60000 + remainder;
+                if (offset > 0 && milliseconds > maximum - offset)
+                    continue;
+                // milliseconds is nonnegative, so a negative offset cannot
+                // underflow; values before the song begins are clamped below.
+                times.push_back(milliseconds + offset);
                 text_start = i->position() + i->length();
             } catch (...) {
             }

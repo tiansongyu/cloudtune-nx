@@ -29,7 +29,15 @@ bool ncmPlaybackIsActive(void) { return serviceIsActive(&g_service); }
 Result ncmPlaybackGetStatus(NcmPlaybackStatus* status) {
     if (!status) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     memset(status, 0, sizeof(*status));
-    return serviceDispatchOut(&g_service, NcmCommand_Status, *status);
+    Result result = serviceDispatchOut(&g_service, NcmCommand_Status, *status);
+    if (R_FAILED(result) || status->version != NCM_PROTOCOL_VERSION) {
+        memset(status, 0, sizeof(*status));
+        return R_FAILED(result) ? result : MAKERESULT(421, 1);
+    }
+    status->title[sizeof(status->title)-1] = 0;
+    status->artist[sizeof(status->artist)-1] = 0;
+    status->message[sizeof(status->message)-1] = 0;
+    return 0;
 }
 static Result simple(NcmCommand cmd) { return serviceDispatch(&g_service, cmd); }
 static Result value(NcmCommand cmd, uint32_t v) { return serviceDispatchIn(&g_service, cmd, v); }

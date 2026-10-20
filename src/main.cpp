@@ -3,14 +3,20 @@
 #include <borealis.hpp>
 #include <cstdlib>
 #include <curl/curl.h>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv) try {
     brls::Logger::setLogLevel(brls::LogLevel::LOG_INFO);
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
         return 1;
+    // Declared before the model/player so their handles and workers are gone
+    // before global curl resources are released, including early-return paths.
+    struct CurlCleanup {
+        ~CurlCleanup() { curl_global_cleanup(); }
+    } curl_cleanup;
     if (!brls::Application::init())
         return 1;
 #ifdef __SWITCH__
@@ -40,8 +46,10 @@ int main(int argc, char **argv) {
                                          "/.local/share/netease-switch";
 #endif
     std::filesystem::create_directories(directory);
-    netease::Model model(directory);
+    // Account jobs may call Player during teardown; stop/join Model first
+    // when an exception unwinds these objects.
     netease::Player player(directory);
+    netease::Model model(directory);
     // One bounded startup attempt runs before the UI loop. Runtime restores
     // its saved AirPlay preference; attaching to a background owner never
     // creates a second receiver in this process.
@@ -79,6 +87,8 @@ int main(int argc, char **argv) {
             brls::Application::quit();
     }
     shutdown();
-    curl_global_cleanup();
     return 0;
+} catch (const std::exception &error) {
+    std::cerr << "CloudTune NX cannot continue: " << error.what() << '\n';
+    return 1;
 }

@@ -6,6 +6,7 @@
 #include "netease/storage.hpp"
 #include <curl/curl.h>
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -66,11 +67,15 @@ std::string service_message(const Json& json) {
 }
 int service_code(const Json& json) {
     if (!json.is_object() || !json.contains("code")) return 200;
-    if (json["code"].is_number_integer()) return json["code"].get<int>();
-    if (json["code"].is_string()) {
-        try { return std::stoi(json["code"].get<std::string>()); } catch (...) {}
-    }
-    return 200;
+    const auto& code = json["code"];
+    if (!code.is_number_integer() && !code.is_string())
+        throw ApiError("Unexpected API status code");
+    const auto text = code.is_string() ? code.get<std::string>() : code.dump();
+    int result = 0;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), result);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
+        throw ApiError("Unexpected API status code");
+    return result;
 }
 void check_url(const std::string& url) {
     if (url.rfind("https://", 0) != 0 && url.rfind("http://", 0) != 0)
@@ -87,12 +92,16 @@ RequestSpec plan_request(const std::string& method, Json args) {
     auto paged = [&] {
         p["offset"] = opt(args, "offset", "0");
         p["limit"] = opt(args, "limit", "30");
-        try {
-            const auto offset = std::stoll(p["offset"].get<std::string>());
-            const auto limit = std::stoll(p["limit"].get<std::string>());
-            if (offset < 0 || limit < 1 || limit > 10000) throw ApiError("Invalid pagination");
-        } catch (const std::invalid_argument&) { throw ApiError("Pagination must be numeric"); }
-          catch (const std::out_of_range&) { throw ApiError("Pagination is too large"); }
+        const auto number = [](const Json& value) {
+            const auto& text = value.get_ref<const std::string&>();
+            int64_t result = 0;
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), result);
+            if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
+                throw ApiError("Pagination must be an integer");
+            return result;
+        };
+        const auto offset = number(p["offset"]), limit = number(p["limit"]);
+        if (offset < 0 || limit < 1 || limit > 10000) throw ApiError("Invalid pagination");
     };
     if (method == "login_qr_create") {
         r.path = "/weapi/login/qrcode/unikey"; p["type"] = "1";
@@ -217,6 +226,7 @@ struct ApiClient::Impl {
         });
         curl = curl_easy_init();
         if (!curl) throw ApiError("curl allocation failed");
+        std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> pending(curl, curl_easy_cleanup);
         if (!config.cookie_file.empty()) {
             auto parent = std::filesystem::path(config.cookie_file).parent_path();
             if (!parent.empty()) std::filesystem::create_directories(parent);
@@ -226,6 +236,7 @@ struct ApiClient::Impl {
         curl_easy_setopt(curl, CURLOPT_COOKIEFILE, "");
         reload_cookies();
         device_id = crypto::hex(crypto::random_bytes(16));
+        pending.release();
     }
     ~Impl() {
         if (curl) {
@@ -279,7 +290,14 @@ struct ApiClient::Impl {
             std::vector<std::string> parts;
             std::string part;
             while (std::getline(line, part, '\t')) parts.push_back(part);
-            if (parts.size() >= 7 && parts[5] == name) result = parts[6];
+            if (parts.size() >= 7 && parts[5] == name) {
+                auto domain = parts[0];
+                if (domain.rfind("#HttpOnly_", 0) == 0) domain.erase(0, 10);
+                // Downloads share this curl cookie engine. A CDN cookie with
+                // the same name must never replace the NetEase login header.
+                if (domain == "music.163.com" || domain == ".music.163.com")
+                    result = parts[6];
+            }
         }
         curl_slist_free_all(list);
         return result;
@@ -318,7 +336,10 @@ struct ApiClient::Impl {
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 32L);
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 20L);
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        // These POSTs target fixed API hosts and carry session metadata,
+        // including x-music-u which libcurl forwards across redirects.
+        // Only public artwork/music GETs may follow CDN redirects.
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, post ? 0L : 1L);
         curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
 #if LIBCURL_VERSION_NUM >= 0x075500
         curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
@@ -478,16 +499,18 @@ Json ApiClient::call(const std::string& method, Json arguments) {
             impl_->flush();
         }
         return response;
-    } catch (const Json::exception& error) {
-        throw ApiError(std::string("Unexpected API response: ") + error.what());
+    } catch (const Json::exception&) {
+        // nlohmann parse diagnostics can quote response bodies containing
+        // cookies, QR authorization data or other private account details.
+        throw ApiError("Unexpected API response");
     }
 }
 Json ApiClient::search(std::string keywords, int type, int offset, int limit) {
     return call("search", {{"keywords", std::move(keywords)}, {"types", type}, {"offset", offset}, {"limit", limit}});
 }
 Json ApiClient::song_urls(const std::vector<std::uint64_t>& ids, std::string level) {
-    // Background decoding currently supports MP3. Legacy bitrate requests avoid
-    // the service returning AAC despite a v1 encodeType hint.
+    // Preserve the requested lossy bitrate through the legacy endpoint.
+    // The player also detects and decodes AAC/FLAC responses automatically.
     if (level == "standard" || level == "higher" || level == "exhigh") {
         return call("songs_url", {{"ids", ids},
             {"br", level == "higher" ? 192000 : level == "exhigh" ? 320000 : 128000}});

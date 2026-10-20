@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "engine.hpp"
+#include "netease/crypto.hpp"
 #include <curl/curl.h>
 #include <chrono>
 #include <cstdio>
@@ -89,6 +90,11 @@ int main(int argc,char** argv) {
                 "truncated FLAC silently finished",7000);
         check(std::strstr(engine.status().message,"truncated")!=nullptr,"missing damaged FLAC error");
 
+        // A completed marker can survive an SD removal/file loss without its
+        // audio. It must be discarded so a fresh progressive download starts.
+        const auto orphan=directory+"/cache/700-"+
+            netease::crypto::md5("anonymous\nlossless")+".audio.complete";
+        std::ofstream(orphan).close();
         queue(directory,argv[4]);
         engine.command(NcmCommand_LoadQueue);
         waitFor(engine,[](auto s){return s.state==NcmPlayback_Playing && s.position_ms>100;},
@@ -116,6 +122,21 @@ int main(int argc,char** argv) {
         engine.command(NcmCommand_LoadQueue);
         waitFor(engine,[](auto s){return s.state==NcmPlayback_Playing && s.position_ms>100;},
                 "complete legacy cache required a network connection");
+        // Cancel a different, still downloading track. ClearQueue must wait
+        // for teardown and must never publish its partial response as complete.
+        queue(directory,argv[4],701);
+        engine.command(NcmCommand_LoadQueue);
+        waitFor(engine,[](auto s){return s.track_id==701 && s.state==NcmPlayback_Buffering;},
+                "cancellation fixture did not start buffering");
+        emptyQueue(directory);
+        const auto cancelStarted=std::chrono::steady_clock::now();
+        check(engine.command(NcmCommand_ClearQueue),"buffered download did not cancel");
+        check(std::chrono::steady_clock::now()-cancelStarted<2s,"download cancellation was not prompt");
+        check(engine.status().state==NcmPlayback_Stopped && engine.status().track_id==0,
+              "cancelled download retained playback");
+        for (const auto& entry:std::filesystem::directory_iterator(directory+"/cache"))
+            check(entry.path().filename().string().rfind("701-",0)!=0 ||
+                  entry.path().extension()!=".complete","cancelled partial download was marked complete");
         engine.stop();
         std::puts("PASS audio engine: progressive HTTPS, seek/pause, legacy cache, corruption, account clear barrier, AirPlay preservation");
     } catch (const std::exception& error) {

@@ -3,6 +3,7 @@
 #include "netease/api.hpp"
 #include "netease/storage.hpp"
 #include <algorithm>
+#include <filesystem>
 #include <set>
 #include <stdexcept>
 
@@ -15,33 +16,46 @@ uint64_t account_id(const Json& value) {
         throw std::runtime_error("invalid account id");
     return value.get<uint64_t>();
 }
-}
-AccountStore::AccountStore(std::string directory) : directory_(std::move(directory)) {
-    const auto data = storage::read_file(directory_ + "/accounts.json");
-    if (data.empty())
-        return; // Preserve legacy cookies until the server confirms their owner.
+Json read_registry(const std::string& directory) {
+    const auto path = directory + "/accounts.json";
+    const auto data = storage::read_file(path);
+    if (data.empty() && !std::filesystem::exists(path) && !std::filesystem::exists(path + ".bak"))
+        return Json(); // Legacy cookie jars have no canonical archive yet.
     try {
-        const auto registry = Json::parse(data);
+        auto registry = Json::parse(data);
         if (registry.at("version") != 1 || !registry.at("accounts").is_array() ||
             registry.at("accounts").size() > 32)
             throw std::runtime_error("invalid registry");
         std::set<uint64_t> ids;
-        active_ = account_id(registry.at("active_user_id"));
+        const auto active = account_id(registry.at("active_user_id"));
         for (const auto& item : registry.at("accounts")) {
-            Session session{{account_id(item.at("user_id")), item.at("nickname").get<std::string>()},
-                            item.at("cookies").get<std::string>()};
-            if (!session.account.user_id || !ids.insert(session.account.user_id).second ||
-                session.account.nickname.size() > 1024 || session.cookies.empty() ||
-                session.cookies.size() > 128 * 1024)
+            const auto id = account_id(item.at("user_id"));
+            const auto& nickname = item.at("nickname").get_ref<const std::string&>();
+            const auto& cookies = item.at("cookies").get_ref<const std::string&>();
+            if (!id || !ids.insert(id).second || nickname.size() > 1024 ||
+                cookies.empty() || cookies.size() > 128 * 1024)
                 throw std::runtime_error("invalid account");
-            sessions_.push_back(std::move(session));
         }
-        if (active_ && !ids.count(active_))
+        if (active && !ids.count(active))
             throw std::runtime_error("missing active account");
+        return registry;
     } catch (...) {
         // JSON errors may embed cookie values; replace them with a safe message.
         throw std::runtime_error("Saved account registry is damaged; restore accounts.json from a backup");
     }
+}
+}
+void AccountStore::validate_registry(const std::string& directory) {
+    (void)read_registry(directory);
+}
+AccountStore::AccountStore(std::string directory) : directory_(std::move(directory)) {
+    const auto registry = read_registry(directory_);
+    if (registry.is_null())
+        return; // Preserve legacy cookies until the server confirms their owner.
+    active_ = account_id(registry.at("active_user_id"));
+    for (const auto& item : registry.at("accounts"))
+        sessions_.push_back({{account_id(item.at("user_id")), item.at("nickname").get<std::string>()},
+                             item.at("cookies").get<std::string>()});
     registered_ = true;
     const auto committed = active_cookies();
     if (storage::read_file(directory_ + "/cookies.txt") != committed)

@@ -30,6 +30,9 @@ int main() {
         const auto registry = (directory / "accounts.json").string();
         const auto alice = jar("synthetic-alice"), bob = jar("synthetic-bob");
         storage::write_file(mirror, alice);
+        AccountStore::validate_registry(directory.string());
+        require(!std::filesystem::exists(registry),
+                "Read-only validation created a legacy registry");
         AccountStore store(directory.string());
         require(!store.registered() && store.list().empty() &&
                     storage::read_file(mirror) == alice,
@@ -52,6 +55,9 @@ int main() {
         std::filesystem::remove(registry + ".new");
         // Interrupted two-file publication: the committed registry repairs the mirror.
         storage::write_file(mirror, bob);
+        AccountStore::validate_registry(directory.string());
+        require(storage::read_file(mirror) == bob,
+                "Read-only validation repaired the mirror");
         AccountStore restarted(directory.string());
         require(restarted.active_user_id() == 11 && storage::read_file(mirror) == alice,
                 "Restart did not restore the committed account");
@@ -93,6 +99,18 @@ int main() {
             sanitized = std::string(e.what()).find("secret-fixture") == std::string::npos;
         }
         require(sanitized, "Damaged registry exposed private data in an error");
+        rejects([&] { AccountStore::validate_registry(directory.string()); });
+        const auto committed_mirror = storage::read_file(mirror);
+        storage::write_file(registry, "");
+        rejects([&] { AccountStore empty(directory.string()); });
+        rejects([&] { AccountStore::validate_registry(directory.string()); });
+        require(storage::read_file(mirror) == committed_mirror,
+                "Zero-byte registry activated or overwrote its mirror");
+        std::filesystem::rename(registry, registry + ".bak");
+        rejects([&] { AccountStore empty_backup(directory.string()); });
+        rejects([&] { AccountStore::validate_registry(directory.string()); });
+        require(storage::read_file(mirror) == committed_mirror,
+                "Zero-byte backup was treated as a legacy account");
         std::filesystem::remove_all(directory);
         std::cout << "Account migration, switch, removal, persistence, rollback, privacy tests passed\n";
         return 0;

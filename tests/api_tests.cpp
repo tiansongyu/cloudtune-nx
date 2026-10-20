@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "netease/api.hpp"
 #include "netease/crypto.hpp"
+#include <fstream>
 #include <iostream>
 #include <set>
 #include <stdexcept>
@@ -14,8 +15,63 @@ template<class F> void rejects(F f) {
     try { f(); } catch (const ApiError&) { threw = true; }
     require(threw, "Invalid input was accepted");
 }
-int main(int argc, char**) {
+static void transport_case(const std::string& test, const std::string& proxy,
+                           const std::string& ca, const std::string& output) {
+    ApiConfig config;
+    config.proxy = proxy;
+    config.ca_bundle = ca;
+    config.timeout_seconds = 5;
+    config.persist_cookies = false;
+    ApiClient api(config);
+    api.adopt_session("# Netscape HTTP Cookie File\n"
+        ".music.163.com\tTRUE\t/\tTRUE\t0\tMUSIC_U\tsynthetic-music-session\n"
+        "unrelated.invalid\tFALSE\t/\tFALSE\t0\tMUSIC_U\tsynthetic-unrelated-session\n");
+    if (test == "redirect") {
+        try { api.call("like_v1", {{"songid", 1}}); }
+        catch (const ApiError& error) {
+            require(error.code == 307, "Redirect did not report HTTP 307");
+            return;
+        }
+        throw std::runtime_error("Authenticated API request followed an external redirect");
+    }
+    if (test == "cookie-scope") {
+        api.call("like_v1", {{"songid", 1}});
+        return; // The fixture checks the received header without printing it.
+    }
+    if (test == "malformed") {
+        try { api.login_status(); }
+        catch (const ApiError& error) {
+            require(std::string(error.what()) == "Unexpected API response",
+                    "API parse error exposed response contents");
+            return;
+        }
+        throw std::runtime_error("Malformed API response was accepted");
+    }
+    if (test == "code-suffix" || test == "code-overflow") {
+        try { api.login_status(); }
+        catch (const ApiError& error) {
+            require(std::string(error.what()) == "Unexpected API status code",
+                    "Malformed API status was not rejected safely");
+            return;
+        }
+        throw std::runtime_error("Malformed API status was accepted as success");
+    }
+    if (test == "download") {
+        api.call("like_v1", {{"songid", 1}});
+        api.download("https://music.163.com/fixture-artwork", output);
+        std::ifstream file(output);
+        const std::string body((std::istreambuf_iterator<char>(file)), {});
+        require(body == "fixture-image", "CDN download redirect stopped working");
+        return;
+    }
+    throw std::runtime_error("Unknown transport fixture");
+}
+int main(int argc, char** argv) {
     try {
+        if (argc == 6 && std::string(argv[1]) == "--transport") {
+            transport_case(argv[2], argv[3], argv[4], argv[5]);
+            return 0;
+        }
         // Expected vectors independently produced with Python cryptography/OpenSSL.
         require(crypto::md5("abc") == "900150983cd24fb0d6963f7d28e17f72", "MD5 vector mismatch");
         require(crypto::base64("Switch") == "U3dpdGNo", "Base64 vector mismatch");
@@ -63,6 +119,8 @@ int main(int argc, char**) {
         rejects([] { plan_request("user_song_list"); });
         rejects([] { plan_request("songs_detail", {{"ids", Json::array()}}); });
         rejects([] { plan_request("search", {{"keywords", "test"}, {"offset", -1}}); });
+        rejects([] { plan_request("search", {{"keywords", "test"}, {"offset", "12tail"}}); });
+        rejects([] { plan_request("search", {{"keywords", "test"}, {"limit", " 20"}}); });
         rejects([] { plan_request("songs_url_v1", {{"ids", {1}}, {"level", "invalid"}}); });
 
         if (argc > 1) {
@@ -72,7 +130,7 @@ int main(int argc, char**) {
                 {"publicKey", crypto::base64(crypto::unhex("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"))}};
             std::cout << Json{{"xeapi", crypto::xeapi({{"trackId", "347230"}, {"like", "true"}}, key)},
                 {"signature", crypto::xeapi_signature("1700000000000", "1234567890123456")}}.dump() << '\n';
-        } else std::cout << "API planning and independent cryptographic vectors passed (49 methods)\n";
+        } else std::cout << "API planning and independent cryptographic vectors passed (46 methods)\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

@@ -102,6 +102,7 @@ class Model {
     std::unique_ptr<ApiClient> api_;
     std::unique_ptr<ApiClient> qr_api_; // Worker-thread only, never writes the active cookie file.
     std::unique_ptr<AccountStore> accounts_;
+    std::string accounts_error_; // Immutable after construction; persists across navigation.
     mutable std::mutex mutex_;
     Snapshot state_;
     std::set<std::string> artwork_pending_;

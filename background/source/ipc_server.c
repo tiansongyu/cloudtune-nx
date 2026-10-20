@@ -109,27 +109,59 @@ Result ncmIpcServerExit(NcmIpcServer* server) {
 
 static Result parseRequest(NcmIpcServerRequest* request) {
   void* tls = armGetTls();
-  request->hipc = hipcParseRequest(tls);
+  HipcHeader wire;
+  memcpy(&wire, tls, sizeof(wire));
+  memset(&request->hipc, 0, sizeof(request->hipc));
   request->command_id = 0;
   request->data = NULL;
   request->data_size = 0;
 
+  /*
+   * This service only accepts inline CMIF data. Validate the fixed TLS window
+   * before libnx turns untrusted descriptor counts into pointers. Handles have
+   * already been transferred into this process by the kernel, so rejecting a
+   * special header must release them instead of leaking the server handle table.
+   */
+  if (wire.has_special_header) {
+    HipcSpecialHeader special;
+    memcpy(&special, (const uint8_t*)tls + sizeof(wire), sizeof(special));
+    size_t offset = sizeof(wire) + sizeof(special) +
+                    (special.send_pid ? sizeof(uint64_t) : 0);
+    const uint32_t count = special.num_copy_handles + special.num_move_handles;
+    for (uint32_t i = 0; i < count &&
+         offset + sizeof(Handle) <= NCM_IPC_TLS_BUFFER_SIZE; ++i) {
+      Handle handle;
+      memcpy(&handle, (const uint8_t*)tls + offset, sizeof(handle));
+      svcCloseHandle(handle);
+      offset += sizeof(handle);
+    }
+    return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+  }
+  const size_t raw_size = wire.num_data_words * sizeof(uint32_t);
+  if (wire.num_send_statics || wire.num_send_buffers || wire.num_recv_buffers ||
+      wire.num_exch_buffers || wire.recv_static_mode ||
+      raw_size > NCM_IPC_TLS_BUFFER_SIZE - sizeof(wire))
+    return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+
+  request->hipc = hipcParseRequest(tls);
   if (request->hipc.meta.type != CmifCommandType_Request &&
       request->hipc.meta.type != CmifCommandType_Control)
     return 0;
 
-  const size_t raw_size = request->hipc.meta.num_data_words * sizeof(uint32_t);
+  /* libnx reserves 16 bytes of alignment padding in num_data_words. It is
+   * not argument data, even though only part of it precedes the CMIF header. */
+  if (raw_size < 0x10u + sizeof(NcmIpcRawHeader))
+    return MAKERESULT(Module_Libnx, LibnxError_BadInput);
   const NcmIpcRawHeader* header =
       (const NcmIpcRawHeader*)cmifGetAlignedDataStart(
           request->hipc.data.data_words, tls);
-  if (!header || raw_size < sizeof(*header) ||
-      (uint32_t)header->magic != CMIF_IN_HEADER_MAGIC)
+  if (header->magic != CMIF_IN_HEADER_MAGIC || header->command_id > UINT32_MAX)
     return MAKERESULT(Module_Libnx, LibnxError_BadInput);
 
   request->command_id = (uint32_t)header->command_id;
-  if (raw_size > sizeof(*header)) {
+  if (raw_size > 0x10u + sizeof(*header)) {
     request->data = header + 1;
-    request->data_size = raw_size - sizeof(*header);
+    request->data_size = raw_size - 0x10u - sizeof(*header);
   }
   return 0;
 }

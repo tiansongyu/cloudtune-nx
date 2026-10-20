@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 
 namespace netease::playback {
 struct AudioDecoder::Impl {
@@ -36,6 +37,9 @@ struct AudioDecoder::Impl {
     }
     static bool seek64(void* p, int64_t offset, AudioDecoder::Origin where) {
         auto& self = *static_cast<Impl*>(p);
+        if (where==AudioDecoder::Origin::Start &&
+            (offset<0 || offset>std::numeric_limits<int64_t>::max()-self.streamStart))
+            return false;
         return self.seek(self.context, offset +
             (where == AudioDecoder::Origin::Start ? self.streamStart : 0), where);
     }
@@ -164,6 +168,22 @@ size_t AudioDecoder::read(int16_t* interleaved, size_t frames) {
 }
 bool AudioDecoder::seek(uint64_t frame) {
     auto& s = *impl_;
+    if (s.flac && s.flac->totalPCMFrameCount && frame>s.flac->totalPCMFrameCount)
+        return false;
+    if (s.flac && !s.flac->totalPCMFrameCount && frame) {
+        // A zero STREAMINFO frame count means "unknown", not an empty stream.
+        // dr_flac clamps random seeks to that zero. Rewind and discard bounded
+        // decoded blocks instead, preserving exact PCM and cancellation via
+        // the normal stream callbacks.
+        if (!drflac_seek_to_pcm_frame(s.flac,0)) return false;
+        s.cursor=0; s.damaged=false;
+        std::array<int16_t,8192> scratch{};
+        while (s.cursor<frame) {
+            const size_t count=static_cast<size_t>(std::min<uint64_t>(frame-s.cursor,4096));
+            if (read(scratch.data(),count)!=count) return false;
+        }
+        return true;
+    }
     const bool ok = s.flac ? drflac_seek_to_pcm_frame(s.flac, frame) != 0 :
         s.mp3Open ? drmp3_seek_to_pcm_frame(&s.mp3, frame) != 0 :
         s.aacOpen && s.aac.seek(frame);

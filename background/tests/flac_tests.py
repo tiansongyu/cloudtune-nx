@@ -82,6 +82,13 @@ def main():
         for flac, raw, channels, rate in fixtures:
             run(decoder, flac, raw, channels, rate, "good")
         source, reference, channels, rate = fixtures[1]
+        unknown = root / "unknown-frame-count.flac"
+        unknown_content = bytearray(source.read_bytes())
+        # FLAC STREAMINFO's optional 36-bit total samples field may be zero.
+        properties = int.from_bytes(unknown_content[18:26], "big") & ~((1 << 36) - 1)
+        unknown_content[18:26] = properties.to_bytes(8, "big")
+        unknown.write_bytes(unknown_content)
+        run(decoder, unknown, reference, channels, rate, "unknown")
         renamed = root / "flac-in-a-mp3-filename.mp3"
         renamed.write_bytes(source.read_bytes())
         run(decoder, renamed, reference, channels, rate, "good")

@@ -106,7 +106,12 @@ bool Player::play(const std::vector<Media> &tracks, size_t index) {
         e.id = t.id;
         e.duration_ms = t.duration_ms;
         auto copy = [](char *d, size_t n, const std::string &s) {
-            std::memcpy(d, s.data(), std::min(n - 1, s.size()));
+            size_t length = std::min(n - 1, s.size());
+            while (length && length < s.size() &&
+                   (static_cast<unsigned char>(s[length]) & 0xc0) == 0x80)
+                --length;
+            std::memcpy(d, s.data(), length);
+            d[length] = '\0';
         };
         copy(e.title, sizeof(e.title), t.title);
         copy(e.artist, sizeof(e.artist), t.artist);

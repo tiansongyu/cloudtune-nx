@@ -389,12 +389,68 @@ static void account_model_tests(const std::filesystem::path& directory) {
             "Removing a server-expired active session retained stale account requests");
     model.stop();
 }
+static void damaged_accounts_tests(const std::filesystem::path& directory,
+                                  const std::string& damaged) {
+    std::filesystem::create_directories(directory);
+    const auto registry = directory / "accounts.json";
+    const auto mirror = directory / "cookies.txt";
+    const std::string cookies =
+        "# Netscape HTTP Cookie File\n.music.163.com\tTRUE\t/\tTRUE\t0\tMUSIC_U\tsynthetic-mirror\n";
+    write_bytes(registry, damaged);
+    write_bytes(mirror, cookies);
+    write_bytes(directory / "queue.nsq", queue_bytes());
+    {
+        Model model(directory.string());
+        const auto error = model.snapshot().error;
+        require(!error.empty() && error.find("synthetic-private") == std::string::npos,
+                "Corrupt account registry exposed response contents");
+        require(model.api().session_cookies().find("synthetic-mirror") == std::string::npos,
+                "Corrupt registry silently activated its cookie mirror");
+        Gate gate;
+        std::promise<void> entered;
+        auto future = entered.get_future();
+        ModelTestAccess::enqueue(model, [&entered, f = gate.future] {
+            entered.set_value();
+            f.wait();
+        }, false);
+        ready(future);
+        model.start();
+        require(model.snapshot().error == error && model.snapshot().queue.empty(),
+                "Startup hid the account recovery error or restored private queue data");
+        model.browse(Page::Settings);
+        model.browse(Page::Account);
+        model.login_qr();
+        require(model.snapshot().error == error && model.snapshot().qr_url.empty(),
+                "Navigation or QR creation discarded the account recovery error");
+        int plays = 0;
+        model.set_play_callback([&plays](const auto&, size_t) { ++plays; });
+        ModelTestAccess::private_state(model);
+        Media public_song;
+        public_song.id = 999;
+        ModelTestAccess::items(model, {public_song});
+        const auto queue_generation = ModelTestAccess::queue_generation(model);
+        model.play(0);
+        model.play_queue(0);
+        require(plays == 0 && model.snapshot().queue.front().id == 111 &&
+                    ModelTestAccess::queue_generation(model) == queue_generation,
+                "Corrupt registry allowed playback to activate the old cookie mirror");
+        ModelTestAccess::discard_queued(model);
+        gate.release();
+        model.stop();
+    }
+    require(storage::read_file(registry.string()) == damaged &&
+                storage::read_file(mirror.string()) == cookies,
+            "Corrupt registry recovery overwrote the original account archive or mirror");
+}
 int main() {
     try {
         const auto directory = std::filesystem::temp_directory_path() /
                                ("netease-model-test-" + std::to_string(getpid()));
         queue_recovery_tests(directory / "queue-recovery");
         account_model_tests(directory / "accounts");
+        damaged_accounts_tests(directory / "damaged-accounts",
+                               R"({"cookies":"synthetic-private-registry"!)");
+        damaged_accounts_tests(directory / "empty-accounts", "");
         {
             Model model(directory.string());
             // Gates are destroyed before model, so failures cannot strand the worker.

@@ -25,7 +25,7 @@ static bool tellFile(void* file, int64_t* cursor) {
 int main(int argc, char** argv) {
     FILE* file = nullptr;
     try {
-        check(argc == 6, "usage: decoder-tests AUDIO EXPECTED_S16LE CHANNELS RATE good|downmix|reject|truncated");
+        check(argc == 6, "usage: decoder-tests AUDIO EXPECTED_S16LE CHANNELS RATE good|unknown|downmix|reject|truncated");
         file = std::fopen(argv[1], "rb");
         check(file != nullptr, "cannot open generated fixture");
         AudioDecoder decoder;
@@ -60,8 +60,11 @@ int main(int argc, char** argv) {
                 check(decoded.size()==expected.size() &&
                       std::equal(decoded.begin(),decoded.end(),expected.begin(),equal),
                       "FLAC PCM differs from signed-16 reference");
-                check(decoded.size() / decoder.channels() == decoder.frames(), "duration differs from decoded PCM");
-                for (const auto frame : {decoder.frames() - 200, uint64_t(0), uint64_t(decoder.sample_rate())}) {
+                const uint64_t actualFrames=decoded.size()/decoder.channels();
+                const bool unknown=std::strcmp(argv[5],"unknown")==0;
+                check(unknown ? decoder.frames()==0 : actualFrames==decoder.frames(),
+                      "duration differs from decoded PCM");
+                for (const auto frame : {actualFrames - 200, uint64_t(0), uint64_t(decoder.sample_rate())}) {
                     check(decoder.seek(frame), "FLAC seek failed");
                     const auto count = decoder.read(pcm.data(), 100);
                     check(count == 100, "seek returned wrong frame count");
@@ -69,6 +72,12 @@ int main(int argc, char** argv) {
                                      expected.begin() + frame * decoder.channels(),equal),
                           "seek returned wrong PCM");
                 }
+                check(decoder.seek(actualFrames),"seek to EOF failed");
+                check(decoder.read(pcm.data(),1)==0 && !decoder.damaged(),"EOF seek produced audio or corruption");
+                check(!decoder.seek(actualFrames+1),"seek beyond EOF was accepted");
+                check(decoder.seek(0) && decoder.read(pcm.data(),100)==100 &&
+                      std::equal(pcm.begin(),pcm.begin()+100*decoder.channels(),expected.begin(),equal),
+                      "seek after EOF did not restore valid PCM");
             }
         }
         decoder.close();

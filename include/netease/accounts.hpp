@@ -15,6 +15,9 @@ struct SavedAccount {
 class AccountStore {
   public:
     explicit AccountStore(std::string directory);
+    // Read-only validation for playback services. Missing legacy archives are
+    // allowed; damaged/empty archives throw without repairing the cookie mirror.
+    static void validate_registry(const std::string& directory);
     std::vector<SavedAccount> list() const;
     uint64_t active_user_id() const { return active_; }
     std::string active_cookies() const;

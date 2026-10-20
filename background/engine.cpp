@@ -3,6 +3,7 @@
 #include "audio_decoder.hpp"
 #include "pcm_stream.hpp"
 #include "netease/api.hpp"
+#include "netease/accounts.hpp"
 #include "netease/crypto.hpp"
 #include "netease/storage.hpp"
 #include <curl/curl.h>
@@ -383,8 +384,11 @@ struct Engine::Impl {
         if (origin == AudioDecoder::Origin::End && !self->downloadDone) return false;
         int64_t base = origin == AudioDecoder::Origin::Start ? 0 : origin == AudioDecoder::Origin::Current ?
             static_cast<int64_t>(self->cursor) : static_cast<int64_t>(self->downloaded.load());
+        // Check untrusted container offsets before addition: base+offset can
+        // overflow int64 even though the resulting file position is rejected.
+        if (base<0 || static_cast<uint64_t>(base)>MaxDownloadBytes || offset< -base ||
+            offset>static_cast<int64_t>(MaxDownloadBytes)-base) return false;
         int64_t target = base + offset;
-        if (target < 0 || static_cast<uint64_t>(target) > MaxDownloadBytes) return false;
         while (self->running && !self->interrupt && !self->downloadDone &&
                self->downloaded < static_cast<uint64_t>(target)) std::this_thread::sleep_for(10ms);
         if (!self->running || self->interrupt || static_cast<uint64_t>(target) > self->downloaded)
@@ -471,7 +475,9 @@ struct Engine::Impl {
             state(NcmPlayback_Error, "Track unavailable or requires membership", 2); return false;
         }
         currentPath = local ? url : cachePath;
-        bool cached = local || std::filesystem::exists(currentPath + ".complete");
+        // cacheHit above requires both the marker and the data file. A marker
+        // alone may survive SD/file loss and must not prevent a new download.
+        const bool cached = local;
         downloadCancel = false; downloadError = 0; downloaded = 0; downloadDone = cached;
         if (cached) {
             std::error_code error;
@@ -573,6 +579,18 @@ struct Engine::Impl {
         return produced;
     }
     bool loadQueue(uint32_t index) {
+        try {
+            // Cold Play/PlayPause from the overlay also reaches this path.
+            // Never reactivate a saved queue through an unreadable registry's
+            // cookie mirror. Already-loaded music and AirPlay are unaffected
+            // until the user explicitly requests a new queue.
+            AccountStore::validate_registry(config.directory);
+        } catch (const std::exception&) {
+            closeTrack(); queue.clear();
+            { std::lock_guard<std::mutex> lock(mutex); snapshot.queue_count=0; }
+            state(NcmPlayback_Error,"Saved accounts unavailable; open app to recover",7);
+            return false;
+        }
         FILE* file = std::fopen((config.directory + "/queue.nsq").c_str(),"rb");
         if (!file && errno == ENOENT)
             file = std::fopen((config.directory + "/queue.nsq.bak").c_str(),"rb");
