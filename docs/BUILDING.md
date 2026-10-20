@@ -113,9 +113,14 @@ SHA256SUMS
 
 The manifest records the source revision and per-file SHA-256 hashes.
 
-To keep an emulator's currently loaded NRO untouched, an isolated build can use
-`SWITCH_BUILD_DIR=build/update-switch OVERLAY_BUILD_DIR=build/update-overlay
-./scripts/docker-build.sh`. Use the same variables for `./scripts/package.sh`.
+To keep an emulator's currently loaded NRO untouched, use isolated build directories:
+
+```sh
+SWITCH_BUILD_DIR=build/update-switch OVERLAY_BUILD_DIR=build/update-overlay \
+  ./scripts/docker-build.sh
+```
+
+Use the same variables for `./scripts/package.sh`.
 Use repository-relative paths with the Docker wrapper so they resolve inside
 its `/workspace` mount.
 The documentation archive also contains the exact FFmpeg source tarball,

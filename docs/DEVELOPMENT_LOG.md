@@ -328,3 +328,12 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - Tested settings and account interactions on an isolated Xvfb display using
   synthetic accounts; no live user profile or the visible iPhone receiver was
   interrupted. Switch builds use separate output directories for the same reason.
+- Built all three Switch components from clean implementation commit `bb7522e`
+  and verified their binary metadata, matching ELFs, source/license package and
+  CI results. Both GitHub Actions jobs passed in run `39399550532`.
+- Replayed generated 24-bit/96-kHz FLAC followed by M4A/AAC using that final NRO
+  in an isolated Eden profile. Automatic detection, natural track advance,
+  nonzero PCM, advancing clocks and rotating vinyl were observed. Host output
+  was muted, so this adds emulator execution evidence rather than a listening
+  result. Shader translator diagnostics and physical-console limits are
+  recorded in `VALIDATION.md`; the user profile was not used for these checks.

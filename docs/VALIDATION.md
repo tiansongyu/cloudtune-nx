@@ -278,11 +278,41 @@ above retain their original scope. No real account credentials are test fixtures
 | UI | Isolated Xvfb with synthetic accounts: switching persisted the selected UID, both accounts remained saved, the queue tombstone was written; all eight quality options were reachable and the selected level persisted |
 | Icon | SVG rendered to 512px PNG / 256px baseline JPEG; embedded NRO bytes matched the committed JPEG exactly |
 | AAC instrumentation | ASan/UBSan/leak checks and strict devkitA64 compilation passed |
+| Switch build | Clean Docker build produced the NRO, background ExeFS and overlay; versions, matching AArch64 ELFs, corresponding sources and licenses passed package verification |
+| GitHub Actions | Both jobs passed for implementation commit `bb7522e`: native tests, overlay preview, Switch compilation and release-package verification |
 
 Local evidence is retained under `build/validation/update-host-tests.log`,
 `build/validation/flac/`, `build/validation/aac/` and
 `build/validation/account-ui/`. These directories are ignored and are not
 included in public source or release packages.
+The corresponding public CI run is
+[39399550532](https://github.com/tiansongyu/cloudtune-nx/actions/runs/39399550532).
+
+### Final NRO playback in Eden
+
+The clean implementation build was also tested in an independent Eden profile
+on virtual display `:192`, using generated local audio. AirPlay was disabled,
+NetEase requests were blocked with a loopback proxy and host output was muted.
+No real account credentials were copied into the test profile.
+
+The final tested NRO has SHA-256:
+
+```text
+dad47a11144b79e3908acbaf192c16bf2b6dd0f9520acf8a3841cc35e59771e5
+```
+
+It automatically identified a stereo 24-bit / 96-kHz FLAC file, played it,
+and advanced naturally to stereo 44.1-kHz AAC-LC in M4A. Both formats produced
+nonzero PCM and advancing playback clocks. Screenshots at 0:05 and 0:09 show
+the rotating vinyl for both tracks; Chinese text and the vector-derived icon
+rendered correctly. Evidence is under `build/validation/update-eden/final/`.
+The earlier exploratory run is retained separately and used a different NRO.
+
+This is actual NRO decoding and output-clock evidence, not a human listening
+confirmation. Eden emitted initial shader translator `Invalid insn` diagnostics
+while continuing to render; this is not a zero-warning emulator log.
+The test does not establish Atmosphère service / overlay behavior or music
+playing alongside a game on a physical console.
 
 High-quality source decoding is not bit-perfect hardware output: the current
 shared player outputs stereo S16 at 48 kHz with its existing linear resampler.
