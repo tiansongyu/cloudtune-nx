@@ -1,0 +1,855 @@
+{
+  "schema_version": 1,
+  "reference": {
+    "gtk": "netease-cloud-music-gtk 2.5.4",
+    "api_url": "https://github.com/gmg137/netease-cloud-music-api",
+    "tag": "2.2.0",
+    "commit": "73ab46e5351fd3c31b67709ee1b4b918205b9e3e",
+    "license": "GPL-3.0"
+  },
+  "count": 49,
+  "session_helpers": {
+    "new": "ApiClient(ApiConfig)",
+    "from_cookie_jar": "ApiConfig.cookie_file（libcurl Netscape Cookie 格式）",
+    "cookie_jar": "内部 libcurl cookie engine；flush_cookies()/clear_session()",
+    "set_proxy": "ApiClient::set_proxy() / ApiConfig.proxy"
+  },
+  "apis": [
+    {
+      "method": "fetch_xeapi_public_key",
+      "description": "取得并缓存 XEAPI 动态公钥",
+      "cpp_arguments": "无",
+      "reference_paths": [
+        "https://interface.music.163.com/api/gorilla/anti/crawler/security/key/get"
+      ],
+      "protocol": "FORM+AES-256",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": false,
+      "reference_signature": "pub async fn fetch_xeapi_public_key(&self) -> Result<()>",
+      "reference_line": 156,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "login",
+      "description": "密码登录（邮箱或手机号）",
+      "cpp_arguments": "username, password 或 password_md5",
+      "reference_paths": [
+        "/weapi/login/cellphone",
+        "/weapi/login"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": true,
+      "used_by_gtk": false,
+      "reference_signature": "pub async fn login(&self, username: String, password: String) -> Result<LoginInfo>",
+      "reference_line": 402,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "login_cellphone",
+      "description": "手机短信验证码登录",
+      "cpp_arguments": "phone, captcha, ctcode=86",
+      "reference_paths": [
+        "/weapi/w/login/cellphone"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": true,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn login_cellphone(\n        &self,\n        ctcode: String,\n        phone: String,\n        captcha: String,\n    ) -> Result<LoginInfo>",
+      "reference_line": 430,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "captcha",
+      "description": "发送登录短信验证码",
+      "cpp_arguments": "phone, ctcode=86",
+      "reference_paths": [
+        "/weapi/sms/captcha/sent"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": true,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn captcha(&self, ctcode: String, phone: String) -> Result<()>",
+      "reference_line": 454,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "login_qr_create",
+      "description": "取得登录二维码 key 与扫码 URL",
+      "cpp_arguments": "无",
+      "reference_paths": [
+        "/weapi/login/qrcode/unikey"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": true,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn login_qr_create(&self) -> Result<(String, String)>",
+      "reference_line": 469,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "login_qr_check",
+      "description": "轮询扫码登录状态",
+      "cpp_arguments": "key",
+      "reference_paths": [
+        "/weapi/login/qrcode/client/login"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": true,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn login_qr_check(&self, key: String) -> Result<Msg>",
+      "reference_line": 486,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "login_status",
+      "description": "当前账户、个人资料与登录状态",
+      "cpp_arguments": "无",
+      "reference_paths": [
+        "/api/nuser/account/get"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn login_status(&self) -> Result<LoginInfo>",
+      "reference_line": 499,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "logout",
+      "description": "退出登录并清除本机会话",
+      "cpp_arguments": "无",
+      "reference_paths": [
+        "https://music.163.com/weapi/logout"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": true,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn logout(&self)",
+      "reference_line": 516,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "daily_task",
+      "description": "每日签到",
+      "cpp_arguments": "无",
+      "reference_paths": [
+        "/weapi/point/dailyTask"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": true,
+      "used_by_gtk": false,
+      "reference_signature": "pub async fn daily_task(&self) -> Result<Msg>",
+      "reference_line": 531,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "user_song_id_list",
+      "description": "用户喜欢歌曲的 ID 列表",
+      "cpp_arguments": "uid",
+      "reference_paths": [
+        "/weapi/song/like/get"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn user_song_id_list(&self, uid: u64) -> Result<Vec<u64>>",
+      "reference_line": 544,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "user_song_list",
+      "description": "用户创建及收藏的歌单",
+      "cpp_arguments": "uid, offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/user/playlist"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn user_song_list(&self, uid: u64, offset: u16, limit: u16) -> Result<Vec<SongList>>",
+      "reference_line": 560,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "album_sublist",
+      "description": "用户收藏专辑",
+      "cpp_arguments": "offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/album/sublist"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn album_sublist(&self, offset: u16, limit: u16) -> Result<Vec<SongList>>",
+      "reference_line": 579,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "user_cloud_disk",
+      "description": "用户音乐云盘",
+      "cpp_arguments": "offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/v1/cloud/get"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn user_cloud_disk(&self) -> Result<Vec<SongInfo>>",
+      "reference_line": 596,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "song_list_detail",
+      "description": "歌单详情、tracks 与完整 trackIds",
+      "cpp_arguments": "songlist_id (别名 id), offset=0, limit=1000, n=1000",
+      "reference_paths": [
+        "/weapi/v6/playlist/detail"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn song_list_detail(&self, songlist_id: u64) -> Result<PlayListDetail>",
+      "reference_line": 610,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "songs_detail",
+      "description": "批量歌曲详情与权限信息",
+      "cpp_arguments": "ids:正整数数组，1–1000项",
+      "reference_paths": [
+        "/weapi/v3/song/detail"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn songs_detail(&self, ids: &[u64]) -> Result<Vec<SongInfo>>",
+      "reference_line": 631,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "songs_url",
+      "description": "按码率取得播放 URL",
+      "cpp_arguments": "ids, br=320000",
+      "reference_paths": [
+        "/api/song/enhance/player/url"
+      ],
+      "protocol": "EAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn songs_url(&self, ids: &[u64], br: &str) -> Result<Vec<SongUrl>>",
+      "reference_line": 656,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "songs_url_v1",
+      "description": "按音质取得播放 URL、时效、格式与权限",
+      "cpp_arguments": "ids, level=standard, encodeType=mp3/flac",
+      "reference_paths": [
+        "/api/song/enhance/player/url/v1"
+      ],
+      "protocol": "EAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn songs_url_v1(&self, ids: &[u64], level: SongQuality) -> Result<Vec<SongUrl>>",
+      "reference_line": 672,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "recommend_resource",
+      "description": "每日推荐歌单",
+      "cpp_arguments": "无",
+      "reference_paths": [
+        "/weapi/v1/discovery/recommend/resource"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn recommend_resource(&self) -> Result<Vec<SongList>>",
+      "reference_line": 699,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "recommend_songs",
+      "description": "每日推荐歌曲",
+      "cpp_arguments": "无",
+      "reference_paths": [
+        "/api/v3/discovery/recommend/songs"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn recommend_songs(&self) -> Result<Vec<SongInfo>>",
+      "reference_line": 716,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "personal_fm",
+      "description": "私人 FM",
+      "cpp_arguments": "无",
+      "reference_paths": [
+        "/weapi/v1/radio/get"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": false,
+      "reference_signature": "pub async fn personal_fm(&self) -> Result<Vec<SongInfo>>",
+      "reference_line": 728,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "like",
+      "description": "旧版歌曲喜欢/取消喜欢",
+      "cpp_arguments": "songid (别名 id), like=true",
+      "reference_paths": [
+        "/weapi/radio/like"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": true,
+      "used_by_gtk": false,
+      "reference_signature": "pub async fn like(&self, like: bool, songid: u64) -> bool",
+      "reference_line": 747,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "like_v1",
+      "description": "新版歌曲喜欢/取消喜欢",
+      "cpp_arguments": "songid (别名 id), like=true",
+      "reference_paths": [
+        "/api/v1/radio/like"
+      ],
+      "protocol": "XEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": true,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn like_v1(&self, like: bool, songid: u64) -> bool",
+      "reference_line": 775,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "fm_trash",
+      "description": "私人 FM 不喜欢",
+      "cpp_arguments": "songid (别名 id)",
+      "reference_paths": [
+        "/weapi/radio/trash/add"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": true,
+      "used_by_gtk": false,
+      "reference_signature": "pub async fn fm_trash(&self, songid: u64) -> bool",
+      "reference_line": 802,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "search",
+      "description": "综合类型搜索",
+      "cpp_arguments": "keywords (别名 s), types/type=1, offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/search/get"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": false,
+      "reference_signature": "pub async fn search(\n        &self,\n        keywords: String,\n        types: u32,\n        offset: u16,\n        limit: u16,\n    ) -> Result<String>",
+      "reference_line": 830,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "search_song",
+      "description": "搜索歌曲",
+      "cpp_arguments": "keywords, offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/search/get"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn search_song(\n        &self,\n        keywords: String,\n        offset: u16,\n        limit: u16,\n    ) -> Result<Vec<SongInfo>>",
+      "reference_line": 855,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "search_singer",
+      "description": "搜索歌手",
+      "cpp_arguments": "keywords, offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/search/get"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn search_singer(\n        &self,\n        keywords: String,\n        offset: u16,\n        limit: u16,\n    ) -> Result<Vec<SingerInfo>>",
+      "reference_line": 870,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "search_album",
+      "description": "搜索专辑",
+      "cpp_arguments": "keywords, offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/search/get"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn search_album(\n        &self,\n        keywords: String,\n        offset: u16,\n        limit: u16,\n    ) -> Result<Vec<SongList>>",
+      "reference_line": 885,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "search_songlist",
+      "description": "搜索歌单",
+      "cpp_arguments": "keywords, offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/search/get"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn search_songlist(\n        &self,\n        keywords: String,\n        offset: u16,\n        limit: u16,\n    ) -> Result<Vec<SongList>>",
+      "reference_line": 900,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "search_lyrics",
+      "description": "按歌词搜索歌曲",
+      "cpp_arguments": "keywords, offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/search/get"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn search_lyrics(\n        &self,\n        keywords: String,\n        offset: u16,\n        limit: u16,\n    ) -> Result<Vec<SongInfo>>",
+      "reference_line": 915,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "singer_songs",
+      "description": "歌手热门歌曲",
+      "cpp_arguments": "id",
+      "reference_paths": [
+        "/weapi/v1/artist/{}"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn singer_songs(&self, id: u64) -> Result<Vec<SongInfo>>",
+      "reference_line": 928,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "singer_all_songs",
+      "description": "歌手全部歌曲",
+      "cpp_arguments": "id, order=hot, offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/v1/artist/songs"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": false,
+      "reference_signature": "pub async fn singer_all_songs(\n        &self,\n        id: u64,\n        order: &str,\n        offset: u16,\n        limit: u16,\n    ) -> Result<Vec<SongInfo>>",
+      "reference_line": 945,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "new_albums",
+      "description": "分地区新碟",
+      "cpp_arguments": "area=ALL, offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/album/new"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn new_albums(&self, area: &str, offset: u16, limit: u16) -> Result<Vec<SongList>>",
+      "reference_line": 974,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "album",
+      "description": "专辑与曲目详情",
+      "cpp_arguments": "album_id (别名 id)",
+      "reference_paths": [
+        "/weapi/v1/album/{}"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn album(&self, album_id: u64) -> Result<AlbumDetail>",
+      "reference_line": 992,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "songlist_detail_dynamic",
+      "description": "歌单收藏与动态状态",
+      "cpp_arguments": "songlist_id (别名 id)",
+      "reference_paths": [
+        "/weapi/playlist/detail/dynamic"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn songlist_detail_dynamic(&self, songlist_id: u64) -> Result<PlayListDetailDynamic>",
+      "reference_line": 1010,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "album_detail_dynamic",
+      "description": "专辑收藏与动态状态",
+      "cpp_arguments": "album_id (别名 id)",
+      "reference_paths": [
+        "/weapi/album/detail/dynamic"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn album_detail_dynamic(&self, album_id: u64) -> Result<AlbumDetailDynamic>",
+      "reference_line": 1024,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "top_song_list",
+      "description": "分类热门/最新歌单",
+      "cpp_arguments": "cat=全部, order=hot, offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/playlist/list"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn top_song_list(\n        &self,\n        cat: &str,\n        order: &str,\n        offset: u16,\n        limit: u16,\n    ) -> Result<Vec<SongList>>",
+      "reference_line": 1043,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "top_song_list_highquality",
+      "description": "精品歌单与时间戳分页",
+      "cpp_arguments": "cat=全部, lasttime=0 (64位时间戳), limit=30",
+      "reference_paths": [
+        "/api/playlist/highquality/list"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": false,
+      "reference_signature": "pub async fn top_song_list_highquality(\n        &self,\n        cat: &str,\n        lasttime: u8,\n        limit: u8,\n    ) -> Result<Vec<SongList>>",
+      "reference_line": 1070,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "toplist",
+      "description": "全部排行榜",
+      "cpp_arguments": "无",
+      "reference_paths": [
+        "/api/toplist"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn toplist(&self) -> Result<Vec<TopList>>",
+      "reference_line": 1092,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "top_songs",
+      "description": "排行榜歌曲（歌单详情别名）",
+      "cpp_arguments": "list_id (别名 id), offset=0, limit=1000, n=1000",
+      "reference_paths": [
+        "/weapi/v6/playlist/detail"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": false,
+      "reference_signature": "pub async fn top_songs(&self, list_id: u64) -> Result<PlayListDetail>",
+      "reference_line": 1123,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "song_lyric",
+      "description": "原文、翻译及罗马音歌词",
+      "cpp_arguments": "music_id (别名 id)",
+      "reference_paths": [
+        "/weapi/song/lyric"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn song_lyric(&self, music_id: u64) -> Result<Lyrics>",
+      "reference_line": 1130,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "song_list_like",
+      "description": "收藏/取消收藏歌单",
+      "cpp_arguments": "id, like=true",
+      "reference_paths": [
+        "/weapi/playlist/subscribe",
+        "/weapi/playlist/unsubscribe"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": true,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn song_list_like(&self, like: bool, id: u64) -> bool",
+      "reference_line": 1150,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "album_like",
+      "description": "收藏/取消收藏专辑",
+      "cpp_arguments": "id, like=true",
+      "reference_paths": [
+        "/api/album/sub",
+        "/api/album/unsub"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": true,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn album_like(&self, like: bool, id: u64) -> bool",
+      "reference_line": 1178,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "homepage",
+      "description": "App 首页区块",
+      "cpp_arguments": "cursor=null",
+      "reference_paths": [
+        "/api/homepage/block/page"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": false,
+      "reference_signature": "pub async fn homepage(&self, client_type: ClientType) -> Result<String>",
+      "reference_line": 1205,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "banners",
+      "description": "首页轮播内容",
+      "cpp_arguments": "clientType=pc",
+      "reference_paths": [
+        "/weapi/v2/banner/get"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn banners(&self) -> Result<Vec<BannersInfo>>",
+      "reference_line": 1216,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "download_img",
+      "description": "下载 CDN 图片，可请求缩略尺寸",
+      "cpp_arguments": "url, path, width=300, high=300",
+      "reference_paths": [
+        "调用者提供的 HTTP(S) CDN URL"
+      ],
+      "protocol": "GET",
+      "http_method": "GET",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn download_img<I>(&self, url: I, path: PathBuf, width: u16, high: u16) -> Result<()>\n    where\n        I: Into<String>,",
+      "reference_line": 1232,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "download_song",
+      "description": "下载已授权 CDN 音频",
+      "cpp_arguments": "url, path",
+      "reference_paths": [
+        "调用者提供的 HTTP(S) CDN URL"
+      ],
+      "protocol": "GET",
+      "http_method": "GET",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": false,
+      "reference_signature": "pub async fn download_song<I>(&self, url: I, path: PathBuf) -> Result<()>\n    where\n        I: Into<String>,",
+      "reference_line": 1254,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "user_radio_sublist",
+      "description": "用户订阅电台",
+      "cpp_arguments": "offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/djradio/get/subed"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn user_radio_sublist(&self, offset: u16, limit: u16) -> Result<Vec<SongList>>",
+      "reference_line": 1273,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "radio_program",
+      "description": "电台节目列表",
+      "cpp_arguments": "rid (别名 id), offset=0, limit=30",
+      "reference_paths": [
+        "/weapi/dj/program/byradio"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": false,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn radio_program(&self, rid: u64, offset: u16, limit: u16) -> Result<Vec<SongInfo>>",
+      "reference_line": 1292,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    },
+    {
+      "method": "playmode_intelligence_list",
+      "description": "心动模式智能队列",
+      "cpp_arguments": "sid (别名 song_id), pid (别名 playlist_id), count=1",
+      "reference_paths": [
+        "/weapi/playmode/intelligence/list"
+      ],
+      "protocol": "WEAPI",
+      "http_method": "POST",
+      "requires_login": true,
+      "changes_account_or_session": false,
+      "used_by_gtk": true,
+      "reference_signature": "pub async fn playmode_intelligence_list(&self, sid: u64, pid: u64) -> Result<Vec<SongInfo>>",
+      "reference_line": 1312,
+      "implementation": "ApiClient::call",
+      "validation": "implemented; authenticated and hardware behavior require user/device testing"
+    }
+  ]
+}
