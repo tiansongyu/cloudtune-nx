@@ -126,3 +126,21 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
   returned success. No account mutation or public identity data was recorded.
 - Kept the user's emulator session running; physical-console BGM and overlay
   acceptance remain separate from these account/API results.
+
+## 2026-10-20 · Chinese text in native dialogs
+
+- A user screenshot exposed missing Chinese glyphs in the Switch account
+  confirmation dialog, while the music canvas still rendered Chinese.
+- Borealis widgets selected `zh-Hans` from the emulator's shared fonts; the
+  canvas separately loaded bundled Noto under a private font name.
+- The Switch application now selects bundled Noto before Borealis loads its
+  default font. The canvas reuses that same CJK handle, removing the duplicate
+  font allocation while retaining platform controller/icon fallbacks.
+- Docker NRO and desktop builds passed. Actual NRO verification on a fresh
+  isolated Eden profile at `:121` confirmed account-dialog and quality-menu
+  Chinese, A/B hints, checkmarks and system icons; the app exited normally.
+- Evidence: `build/validation/font-fix-account-dialog.png`,
+  `font-fix-quality-dialog.png` and `font-fix-tested-SHA256SUMS`.
+  The regression profile contained no account credentials.
+- At the user's request, further GUI regression runs stay on isolated virtual
+  desktops; the current desktop is reserved for the user's own interaction.

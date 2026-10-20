@@ -167,7 +167,7 @@ void MusicView::text(NVGcontext *v, float x, float y, float size, NVGcolor color
                      const std::string &s, float w) {
     nvgSave(v);
     nvgIntersectScissor(v, x, y - size, w, size * 1.7f);
-    nvgFontFace(v, "ncm");
+    nvgFontFaceId(v, brls::Application::getFont(brls::FONT_CHINESE_SIMPLIFIED));
     nvgFontSize(v, size);
     nvgTextAlign(v, NVG_ALIGN_LEFT | NVG_ALIGN_BASELINE);
     nvgFillColor(v, color);

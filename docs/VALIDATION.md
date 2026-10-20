@@ -44,6 +44,7 @@ exercise the ARM64 application, not the native desktop executable.
 | --- | --- | --- |
 | Full Borealis UI startup | Passed after compatibility fixes below | `eden-app-third.png` |
 | Chinese UI text | Passed; bundled CJK font rendered navigation, titles and status text | `eden-app-third.png` |
+| Chinese text in standard dialogs | Passed after selecting bundled Noto as Borealis's default CJK face before widget creation; account confirmation and quality options are readable and controller icons remain intact | `font-fix-account-dialog.png`, `font-fix-quality-dialog.png` |
 | Live discovery API | Passed; real public playlists and artwork appeared | `eden-app-third.png` |
 | Playlist details | Passed; opened a live playlist containing 97 songs | `eden-playlist.png` |
 | Touch navigation | Passed in handheld and docked emulation after coordinate fix | `eden-account-handheld.png`, `eden-regression-docked-account.png` |

@@ -14,6 +14,9 @@ error message. Do not mix GPL-3-only code into the GPL-2-only overlay.
 For GUI changes, run the desktop build and the actual NRO in the virtual
 desktop. Inspect Chinese text, focus, dialogs, loading and empty/error states
 at 1280×720. Include an actual screenshot when a layout changes.
+Keep these regression runs on an isolated display and profile; do not focus
+or operate the user's current desktop unless they explicitly ask. Font and
+layout checks should use a fresh profile without copying account cookies.
 
 Describe what changed, how it was checked and what still needs hardware
 verification. Keep commits focused and record meaningful checkpoints in

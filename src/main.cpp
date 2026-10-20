@@ -13,14 +13,18 @@ int main(int argc, char **argv) {
         return 1;
     if (!brls::Application::init())
         return 1;
+#ifdef __SWITCH__
+    // Borealis dialogs use zh-Hans, independently of the custom music canvas.
+    // Select our bundled CJK face before createWindow loads/caches that font.
+    brls::FontLoader::USER_FONT_PATH = BRLS_ASSET("font/chinese_fallback.ttf");
+#endif
     brls::Application::createWindow("Netease Switch");
     brls::Application::getPlatform()->setThemeVariant(brls::ThemeVariant::DARK);
     brls::Application::setGlobalQuit(false);
     brls::Application::setLimitedFPS(60);
-    // Bundle an OFL CJK font, including on emulator systems without shared fonts.
-    int font = nvgCreateFont(brls::Application::getNVGContext(), "ncm",
-                             BRLS_ASSET("font/chinese_fallback.ttf"));
-    if (font < 0) {
+    // The canvas and standard widgets share the platform-loaded CJK font.
+    // Avoid loading another 16 MB copy solely for a private NanoVG font name.
+    if (brls::Application::getFont(brls::FONT_CHINESE_SIMPLIFIED) == brls::FONT_INVALID) {
         std::cerr << "CJK font failed to load\n";
         return 1;
     }
