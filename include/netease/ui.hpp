@@ -8,6 +8,7 @@
 #include <borealis.hpp>
 #include <chrono>
 #include <map>
+#include <optional>
 
 namespace netease {
 class MusicView : public brls::View {
@@ -31,6 +32,8 @@ class MusicView : public brls::View {
     void reset_content();
     void activate_header(const Snapshot &);
     void activate_transport(int);
+    void play_pause();
+    void finish_play_first(const Snapshot &);
     std::vector<std::pair<ui::Rect, std::string>> headers(const Snapshot &) const;
     int item_count(const Snapshot &) const;
     int visible_rows(const Snapshot &) const;
@@ -53,6 +56,8 @@ class MusicView : public brls::View {
     void paint_settings(NVGcontext *, const Snapshot &);
     void cover(NVGcontext *, const Snapshot &, const std::string &, float, float, float,
                float radius = 12);
+    void begin_artwork_frame(NVGcontext *);
+    int cover_texture(NVGcontext *, const Snapshot &, const std::string &);
     void vinyl(NVGcontext *, const Snapshot &, float, float, float);
     void text(NVGcontext *, float, float, float, NVGcolor, const std::string &,
               float max_width = 1000);
@@ -62,7 +67,14 @@ class MusicView : public brls::View {
     NcmPlaybackStatus playback_{};
     NcmAirplayStatus airplay_{};
     Snapshot display_;
-    std::map<std::string, int> textures_;
+    struct ArtworkTexture {
+        int id = 0;
+        uint64_t last_frame = 0;
+        std::chrono::steady_clock::time_point retry_after{};
+    };
+    std::map<std::string, ArtworkTexture> textures_;
+    uint64_t artwork_frame_ = 0;
+    int current_artwork_texture_ = 0;
     int app_icon_ = -1;
     PersonalPhotos memories_;
     std::unique_ptr<qrcodegen::QrCode> qr_;
@@ -71,6 +83,12 @@ class MusicView : public brls::View {
     ui::Region region_ = ui::Region::Content;
     int header_ = 0, transport_ = 0;
     bool player_open_ = false, reduced_motion_ = false;
+    struct PlayFirstRequest {
+        Page page;
+        uint64_t user_id, collection_id;
+        MediaKind kind;
+    };
+    std::optional<PlayFirstRequest> play_first_;
     bool photo_background_ = true;
     float safe_scale_ = 1;
     struct Bookmark {

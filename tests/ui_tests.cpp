@@ -3,12 +3,16 @@
 #include "netease/ui.hpp"
 #include <curl/curl.h>
 #include <filesystem>
+#include <future>
 #include <iostream>
 #include <stdexcept>
 #include <unistd.h>
 
 namespace netease {
 struct ModelTestAccess {
+    static void enqueue(Model &m, std::function<void()> job) {
+        m.enqueue("", std::move(job), false);
+    }
     static void set(Model &m, const Snapshot &s) {
         std::lock_guard<std::mutex> lock(m.mutex_);
         m.state_ = s;
@@ -22,6 +26,19 @@ struct ModelTestAccess {
     }
 };
 struct MusicViewTestAccess {
+    static const Snapshot &display(const MusicView &v) {
+        return v.display_;
+    }
+    static int texture(const MusicView &v, const std::string &path) {
+        const auto found = v.textures_.find(path);
+        return found == v.textures_.end() ? 0 : found->second.id;
+    }
+    static void play(MusicView &v) {
+        v.play_pause();
+    }
+    static void finish_play(MusicView &v, const Snapshot &s) {
+        v.finish_play_first(s);
+    }
     static void freeze(MusicView &v, const Snapshot &s, bool full = false) {
         v.display_ = s;
         v.reconcile(s);
@@ -206,6 +223,179 @@ static Snapshot fixture(const std::string &scene, const std::string &assets) {
     }
     return s;
 }
+static void transition_checks(MusicView &v, Model &m, const std::string &assets) {
+    // Hold the real worker before open() so the loading frame is deterministic.
+    struct Gate {
+        Model &model;
+        std::promise<void> release;
+        ~Gate() {
+            model.back(); // Cancel queued network work, including on assertion failure.
+            release.set_value();
+        }
+    } gate{m, {}};
+    std::promise<void> entered;
+    auto ready = entered.get_future();
+    ModelTestAccess::enqueue(m, [&entered, released = gate.release.get_future().share()] {
+        entered.set_value();
+        released.wait();
+    });
+    require(ready.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
+            "UI transition worker barrier timed out");
+    auto charts = fixture("charts", assets);
+    MusicViewTestAccess::reset(v);
+    ModelTestAccess::set(m, charts);
+    MusicViewTestAccess::freeze(v, charts);
+    MusicViewTestAccess::set_focus(v, 2);
+    v.activate();
+    require(m.snapshot().busy && MusicViewTestAccess::selected(v) == 2 &&
+                !MusicViewTestAccess::display(v).collection,
+            "Opening the third chart must keep its focus on the loading chart page");
+    MusicViewTestAccess::freeze(v, m.snapshot());
+    require(MusicViewTestAccess::selected(v) == 2,
+            "Polling a busy collection must not move focus to the first chart");
+    auto detail = fixture("collection", assets);
+    detail.page = Page::Charts;
+    detail.collection_id = charts.items[2].id;
+    detail.title = charts.items[2].title;
+    ModelTestAccess::set(m, detail);
+    MusicViewTestAccess::freeze(v, detail);
+    require(MusicViewTestAccess::selected(v) == 0,
+            "The destination song page must initialize focus when it becomes visible");
+    MusicViewTestAccess::back(v);
+    require(MusicViewTestAccess::selected(v) == 2 && !MusicViewTestAccess::display(v).collection &&
+                MusicViewTestAccess::display(v).items[2].id == charts.items[2].id,
+            "Back must restore the parent frame and chart focus together, without a poll delay");
+}
+static void artwork_checks(MusicView &v, Model &m, const std::string &assets) {
+    const auto directory = std::filesystem::path(m.directory()) / "ui-artwork";
+    const auto source = std::filesystem::path(BRLS_RESOURCES) / "icon/icon.jpg";
+    std::filesystem::create_directories(directory);
+    auto s = fixture("daily", assets);
+    s.items.resize(2);
+    s.queue.clear();
+    s.items[0].cover = "fixture://first";
+    s.items[1].cover = "fixture://second";
+    auto *vg = brls::Application::getNVGContext();
+    const auto draw = [&] {
+        MusicViewTestAccess::freeze(v, s);
+        nvgBeginFrame(vg, 1280, 720, 1);
+        v.draw(vg, 0, 0, 1280, 720, brls::getStyle(), nullptr);
+    };
+    for (int i = 0; i < 49; ++i) {
+        const auto path = (directory / (std::to_string(100 + i) + ".png")).string();
+        std::filesystem::copy_file(source, path);
+        if (i < 48) {
+            s.images[s.items[0].cover] = path;
+            s.images[s.items[1].cover] = path;
+            draw();
+            nvgEndFrame(vg);
+        }
+    }
+    const auto first = (directory / "100.png").string();
+    const auto last = (directory / "148.png").string();
+    s.images[s.items[0].cover] = first;
+    s.images[s.items[1].cover] = last;
+    const auto first_texture = MusicViewTestAccess::texture(v, first);
+    draw();
+    int width = 0, height = 0;
+    nvgImageSize(vg, first_texture, &width, &height);
+    nvgEndFrame(vg);
+    require(width > 0 && height > 0,
+            "Loading a new cover must not delete an image already drawn in the same frame");
+    for (int i = 0; i < 8; ++i) {
+        draw();
+        nvgEndFrame(vg);
+        require(MusicViewTestAccess::texture(v, first) == first_texture,
+                "Visible artwork must stay resident across cache eviction and redraws");
+    }
+    const auto late = (directory / "late.png").string();
+    s.images[s.items[0].cover] = late;
+    draw();
+    nvgEndFrame(vg);
+    require(MusicViewTestAccess::texture(v, late) == 0, "Missing images must use the placeholder");
+    std::filesystem::copy_file(source, late);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    draw();
+    nvgEndFrame(vg);
+    require(MusicViewTestAccess::texture(v, late) > 0,
+            "A failed cover must refresh automatically when its file becomes available");
+}
+static void first_play_checks(MusicView &v, Model &m, const std::string &assets) {
+    struct Gate {
+        Model &model;
+        std::promise<void> release;
+        ~Gate() {
+            model.back();
+            release.set_value();
+        }
+    } gate{m, {}};
+    std::promise<void> entered;
+    auto ready = entered.get_future();
+    ModelTestAccess::enqueue(m, [&entered, released = gate.release.get_future().share()] {
+        entered.set_value();
+        released.wait();
+    });
+    require(ready.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
+            "First-play worker barrier timed out");
+    int plays = 0;
+    size_t selected = 99;
+    std::string title;
+    m.set_play_callback([&](const std::vector<Media> &items, size_t index) {
+        ++plays;
+        selected = index;
+        title = items[index].title;
+    });
+    auto songs = fixture("daily", assets);
+    ModelTestAccess::set(m, songs);
+    MusicViewTestAccess::set_focus(v, 4);
+    MusicViewTestAccess::play(v);
+    require(plays == 1 && selected == 0 && title == songs.items[0].title,
+            "Play with no active track must start the current recommendation at its first song");
+    auto queue = fixture("queue", assets);
+    queue.queue[0].title = "Canonical first queue song";
+    ModelTestAccess::set(m, queue);
+    MusicViewTestAccess::play(v);
+    require(plays == 2 && selected == 0 && title == queue.queue[0].title,
+            "First play on Queue must use its canonical queue");
+    auto empty = fixture("empty", assets);
+    ModelTestAccess::set(m, empty);
+    MusicViewTestAccess::play(v);
+    require(plays == 2, "An empty page must not start unrelated queue music");
+    auto cards = fixture("discover", assets);
+    const auto start_card = [&] {
+        MusicViewTestAccess::reset(v);
+        ModelTestAccess::set(m, cards);
+        // play_pause() reads the actual idle player, independently of the UI fixture.
+        MusicViewTestAccess::play(v);
+        MusicViewTestAccess::play(v);
+        require(m.snapshot().busy && ModelTestAccess::depth(m) == 1 && plays == 2,
+                "Initial card playback must open one collection and wait, even on repeated Play");
+    };
+    auto detail = fixture("collection", assets);
+    start_card();
+    MusicViewTestAccess::finish_play(v, m.snapshot());
+    require(plays == 2, "Loading recommendations must not play the previous page");
+    auto failed = cards;
+    failed.error = "Simulated collection failure";
+    ModelTestAccess::set(m, failed);
+    MusicViewTestAccess::finish_play(v, failed);
+    require(plays == 2, "A failed collection must not start another list");
+    m.back();
+    start_card();
+    ModelTestAccess::set(m, detail);
+    MusicViewTestAccess::finish_play(v, detail);
+    MusicViewTestAccess::finish_play(v, detail);
+    require(plays == 3 && selected == 0 && title == detail.items[0].title,
+            "The first recommended collection must play its first song exactly once when ready");
+    m.back();
+    plays = 2;
+    start_card();
+    MusicViewTestAccess::back(v);
+    ModelTestAccess::set(m, detail);
+    MusicViewTestAccess::finish_play(v, detail);
+    require(plays == 2, "Back must cancel pending first-song playback");
+    m.set_play_callback({});
+}
 static void controller_checks(MusicView &v, Model &m, const std::string &assets) {
     auto root = fixture("discover", assets);
     ModelTestAccess::set(m, root);
@@ -379,8 +569,12 @@ int main(int argc, char **argv) try {
         Model model(directory);
         auto *view = new MusicView(model, player);
         brls::Application::pushActivity(new brls::Activity(view));
-        if (check)
+        if (check) {
+            transition_checks(*view, model, assets);
+            artwork_checks(*view, model, assets);
+            first_play_checks(*view, model, assets);
             controller_checks(*view, model, assets);
+        }
         const auto s = fixture(scene, assets);
         ModelTestAccess::set(model, s);
         MusicViewTestAccess::freeze(*view, s,

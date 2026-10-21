@@ -596,3 +596,26 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
   at approximately 18 degrees/second; the paused disc remained pixel-identical
   over two seconds. Prepared v0.2.4 without changing audio, network,
   account or background-service implementation. Personal assets remain local.
+
+## Focus, artwork and first-play repair (2026-10-21)
+
+- Reproduced the reported third-chart focus jump before changing production
+  code. Deferred collection focus initialization until the destination arrives,
+  and committed the displayed snapshot together with restored focus on Back.
+- Reproduced deletion of an image still referenced by the current NanoVG frame
+  when the old cache reached 48 entries. Replaced filename-order eviction with
+  frame-boundary LRU trimming, retried failed visible textures and started the
+  artwork reveal when the texture actually becomes available.
+- Added the requested first-play behavior to the existing foreground controls:
+  current song list first, or the first recommended card's first song once its
+  exact collection loads. Repeated requests, errors, account changes and Back
+  do not start stale music. Audio, network and service implementations unchanged.
+- Desktop CTest passed 25/25, including the new production-view regressions.
+  Built all three Switch components. Inspected native 720p/1080p scenes and
+  used an isolated Eden profile for actual NRO validation: initial Y playback,
+  pause, Original chart entry/return and scrolling through all 64 chart cards.
+  A 240-frame transition recording showed no return to the first card after
+  Original became focused. Covers remained visible after exceeding the cache.
+- Prepared v0.2.5. Details and hardware limits are recorded in
+  `docs/design/cloudtune-nx/ui-refresh-v0.2.5.md`; personal photos and test captures
+  remain ignored local files, excluded from the public build.

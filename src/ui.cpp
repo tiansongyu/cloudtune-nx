@@ -285,7 +285,7 @@ MusicView::MusicView(Model &m, Player &p) : model_(m), player_(p) {
     bind(brls::BUTTON_A, [this] { activate(); });
     bind(brls::BUTTON_B, [this] { back(); });
     bind(brls::BUTTON_X, [this] { action_x(); });
-    bind(brls::BUTTON_Y, [this] { player_.command(NcmCommand_PlayPause); });
+    bind(brls::BUTTON_Y, [this] { play_pause(); });
     bind(brls::BUTTON_NAV_UP, [this] { navigate(-1); }, true);
     bind(brls::BUTTON_NAV_DOWN, [this] { navigate(1); }, true);
     bind(brls::BUTTON_NAV_LEFT, [this] { navigate(-2); }, true);
@@ -308,7 +308,7 @@ MusicView::MusicView(Model &m, Player &p) : model_(m), player_(p) {
     bind(brls::BUTTON_START, [this] { switch_page(Page::Player); });
     bind(brls::BUTTON_BACK, [this] { confirm_exit(); });
     registerAction(brls::BrlsKeyCombination(brls::BRLS_KBD_KEY_SPACE), [this](brls::View *) {
-        player_.command(NcmCommand_PlayPause);
+        play_pause();
         return true;
     });
     registerAction(brls::BrlsKeyCombination(brls::BRLS_KBD_KEY_X), [this](brls::View *) {
@@ -366,9 +366,9 @@ MusicView::~MusicView() {
     if (vg && app_icon_ > 0)
         nvgDeleteImage(vg, app_icon_);
     if (vg)
-        for (auto &[path, id] : textures_)
-            if (id > 0)
-                nvgDeleteImage(vg, id);
+        for (auto &[path, texture] : textures_)
+            if (texture.id > 0)
+                nvgDeleteImage(vg, texture.id);
 }
 void MusicView::text(NVGcontext *v, float x, float y, float size, NVGcolor color,
                      const std::string &s, float w) {
@@ -430,6 +430,7 @@ void MusicView::switch_page(Page p) {
         model_.cancel_qr();
     if (s.busy && !leaving_account)
         return;
+    play_first_.reset();
     remember(s);
     player_open_ = false;
     nav_ =
@@ -443,6 +444,7 @@ void MusicView::switch_page(Page p) {
     page_time_ = 0;
 }
 void MusicView::back() {
+    play_first_.reset();
     if (player_open_) {
         player_open_ = false;
         page_time_ = 0;
@@ -518,7 +520,7 @@ void MusicView::display_options() {
     });
 }
 void MusicView::open_memories() {
-    memories_.open(reduced_motion_, safe_scale_, [this] { player_.command(NcmCommand_PlayPause); });
+    memories_.open(reduced_motion_, safe_scale_, [this] { play_pause(); });
 }
 int MusicView::item_count(const Snapshot &s) const {
     if (s.page == Page::Settings)
@@ -563,6 +565,9 @@ void MusicView::remember(const Snapshot &s) {
     bookmarks_[view_key(s)] = std::move(b);
 }
 void MusicView::reconcile(const Snapshot &s) {
+    // Commit the frame and its focus together, including synchronous Back.
+    // Input can arrive between the periodic model polls.
+    display_ = s;
     if (account_id_ != s.user_id) {
         account_id_ = s.user_id;
         bookmarks_.clear();
@@ -749,7 +754,7 @@ void MusicView::account_actions(uint64_t user_id) {
 void MusicView::activate() {
     press_time_ = 0;
     if (player_open_) {
-        player_.command(NcmCommand_PlayPause);
+        play_pause();
         return;
     }
     if (region_ == ui::Region::Sidebar) {
@@ -837,7 +842,8 @@ void MusicView::activate() {
         remember(s);
         collection_cover_ = s.items[selection_].cover;
         model_.open(s.items[selection_]);
-        reset_content();
+        // Keep the selected card while open() is loading. reconcile() will
+        // initialize the destination focus when that page actually arrives.
     }
 }
 void MusicView::airplay_tools() {
@@ -1070,6 +1076,57 @@ void MusicView::activate_header(const Snapshot &s) {
     else
         model_.refresh();
 }
+void MusicView::play_pause() {
+    // Read the current source on input, rather than using the last 200 ms poll.
+    playback_ = player_.status();
+    if (playback_.track_id || airplay_source(playback_)) {
+        play_first_.reset();
+        player_.command(NcmCommand_PlayPause);
+        return;
+    }
+    if (play_first_)
+        return;
+    const auto s = model_.snapshot();
+    if (s.busy)
+        return;
+    if (s.items.empty()) {
+        model_.report("当前列表暂无可播放的歌曲");
+        return;
+    }
+    if (s.items.front().kind == MediaKind::Song) {
+        if (s.page == Page::Queue)
+            model_.play_queue(0);
+        else
+            model_.play(0);
+        return;
+    }
+    // On a card page, open its first recommendation and wait for that exact
+    // collection before starting. Never play stale items from the loading page.
+    remember(s);
+    const auto &first = s.items.front();
+    play_first_ = PlayFirstRequest{s.page, s.user_id, first.id, first.kind};
+    collection_cover_ = first.cover;
+    model_.open(first);
+}
+void MusicView::finish_play_first(const Snapshot &s) {
+    if (!play_first_)
+        return;
+    if (playback_.track_id || airplay_source(playback_) || s.user_id != play_first_->user_id) {
+        play_first_.reset();
+        return;
+    }
+    if (s.busy)
+        return;
+    const auto request = *play_first_;
+    play_first_.reset();
+    if (!s.error.empty() || !s.collection || s.page != request.page ||
+        s.collection_id != request.collection_id || s.collection_kind != request.kind)
+        return;
+    if (!s.items.empty() && s.items.front().kind == MediaKind::Song)
+        model_.play(0);
+    else
+        model_.report("当前歌单暂无可播放的歌曲");
+}
 void MusicView::activate_transport(int index) {
     press_time_ = 0;
     if (index == 0 && !player_open_) {
@@ -1079,7 +1136,7 @@ void MusicView::activate_transport(int index) {
     if (index == 1)
         player_.command(NcmCommand_Previous);
     if (index == 2)
-        player_.command(NcmCommand_PlayPause);
+        play_pause();
     if (index == 3)
         player_.command(NcmCommand_Next);
     if (index == 4) {
@@ -1173,24 +1230,40 @@ void MusicView::tap(float x, float y) {
         }
     }
 }
+void MusicView::begin_artwork_frame(NVGcontext *v) {
+    ++artwork_frame_;
+    // NanoVG submits image commands at EndFrame. Deleting a texture from
+    // cover() can invalidate an earlier row in the SAME frame (black covers).
+    // Trim only before drawing and retain the most recently displayed images.
+    // New images may exceed 48 for one frame, bounded by the visible controls.
+    while (textures_.size() > 48) {
+        const auto oldest =
+            std::min_element(textures_.begin(), textures_.end(), [](const auto &a, const auto &b) {
+                return a.second.last_frame < b.second.last_frame;
+            });
+        if (oldest->second.id > 0)
+            nvgDeleteImage(v, oldest->second.id);
+        textures_.erase(oldest);
+    }
+}
+int MusicView::cover_texture(NVGcontext *v, const Snapshot &s, const std::string &url) {
+    const auto entry = s.images.find(url);
+    if (entry == s.images.end())
+        return 0;
+    auto &texture = textures_[entry->second];
+    texture.last_frame = artwork_frame_;
+    const auto now = std::chrono::steady_clock::now();
+    if (texture.id <= 0 && now >= texture.retry_after) {
+        texture.id = nvgCreateImage(v, entry->second.c_str(), 0);
+        // A transient file/decode/GPU failure must not become a permanent
+        // placeholder. Retry at most once per second while it remains visible.
+        texture.retry_after = now + std::chrono::seconds(1);
+    }
+    return texture.id;
+}
 void MusicView::cover(NVGcontext *v, const Snapshot &s, const std::string &url, float x, float y,
                       float size, float radius) {
-    auto entry = s.images.find(url);
-    int texture = 0;
-    if (entry != s.images.end()) {
-        auto t = textures_.find(entry->second);
-        if (t == textures_.end()) {
-            if (textures_.size() >= 48) {
-                auto first = textures_.begin();
-                if (first->second > 0)
-                    nvgDeleteImage(v, first->second);
-                textures_.erase(first);
-            }
-            texture = nvgCreateImage(v, entry->second.c_str(), 0);
-            textures_[entry->second] = texture;
-        } else
-            texture = t->second;
-    }
+    const int texture = cover_texture(v, s, url);
     if (texture > 0) {
         nvgBeginPath(v);
         nvgRoundedRect(v, x, y, size, size, radius);
@@ -1747,6 +1820,7 @@ void MusicView::paint_hints(NVGcontext *v, const Snapshot &s) {
 }
 void MusicView::draw(NVGcontext *v, float x, float y, float w, float h, brls::Style,
                      brls::FrameContext *) {
+    begin_artwork_frame(v);
     const auto now = std::chrono::steady_clock::now();
     const float dt = std::clamp(std::chrono::duration<float>(now - last_frame_).count(), 0.f, .1f);
     last_frame_ = now;
@@ -1762,6 +1836,7 @@ void MusicView::draw(NVGcontext *v, float x, float y, float w, float h, brls::St
             model_.lyrics_for(playback_.track_id);
         display_ = model_.snapshot();
         reconcile(display_);
+        finish_play_first(display_);
         std::vector<Media> visible;
         const auto first = static_cast<size_t>(std::max(0, grid(display_) ? scroll_ * 4 : scroll_));
         const auto end = std::min(display_.items.size(), first + (grid(display_) ? 4 : 6));
@@ -1804,6 +1879,13 @@ void MusicView::draw(NVGcontext *v, float x, float y, float w, float h, brls::St
     if (artwork != current_artwork_) {
         previous_artwork_ = current_artwork_;
         current_artwork_ = artwork;
+        current_artwork_texture_ = 0;
+        cover_time_ = 0;
+    }
+    const int artwork_texture = cover_texture(v, s, artwork);
+    if (artwork_texture > 0 && artwork_texture != current_artwork_texture_) {
+        current_artwork_texture_ = artwork_texture;
+        // Start the reveal when the image is ready, even after a slow download.
         cover_time_ = 0;
     }
     const int lyric = airplay_source(playback_) ? -1 : lyric_index(s.lyrics, playback_.position_ms);
