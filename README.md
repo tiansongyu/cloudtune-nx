@@ -8,17 +8,17 @@
   <a href="https://github.com/tiansongyu/cloudtune-nx/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/tiansongyu/cloudtune-nx?label=release"></a>
 </p>
 
-**v0.2.8** · 修复实机音频缓存打开失败和并发读写问题，增加 SD 错误诊断及无效缓存恢复；保留后台按需启动和已确认的界面。支持扫码登录、多账号、黑胶播放器、AirPlay 1 和独立后台服务。
+**v0.2.10** · 后台自启等待 HOME 进程创建后再分配播放堆、初始化网络与工作线程，并记录共享资源配额。保留扫码登录、多账号、黑胶播放器、AirPlay 1 和独立后台服务。
 Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[验证记录](docs/VALIDATION.md)。
 
 ## 下载
 
-**[下载 v0.2.8 SD 卡安装包](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.8/CloudTuneNX-0.2.8-sd.zip)**
+**[下载 v0.2.10 SD 卡安装包](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.10/CloudTuneNX-0.2.10-sd.zip)**
 
-[发布说明与全部附件](https://github.com/tiansongyu/cloudtune-nx/releases/tag/v0.2.8) ·
-[SHA-256 校验文件](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.8/SHA256SUMS)
+[发布说明与全部附件](https://github.com/tiansongyu/cloudtune-nx/releases/tag/v0.2.10) ·
+[SHA-256 校验文件](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.10/SHA256SUMS)
 
-安装请选择 `CloudTuneNX-0.2.8-sd.zip`；GitHub 的 Source code 压缩包不含可运行程序。
+安装请选择 `CloudTuneNX-0.2.10-sd.zip`；GitHub 的 Source code 压缩包不含可运行程序。
 `-symbols.zip` 用于崩溃排查，`-docs.zip` 用于离线阅读，无需复制到 SD 卡。
 
 <p align="center">
@@ -61,7 +61,7 @@ Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[�
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-确认输出包含 `CloudTuneNX-0.2.9-sd.zip: OK`。其他系统可使用支持 SHA-256 的校验工具。
+确认输出包含 `CloudTuneNX-0.2.10-sd.zip: OK`。其他系统可使用支持 SHA-256 的校验工具。
 
 播放栏显示 **「BGM · 后台服务」** 后，才可退出 NRO 并打开游戏。
 通过覆盖层加载器打开 **CloudTune NX** 即可继续控制播放。
@@ -70,7 +70,7 @@ sha256sum --check --ignore-missing SHA256SUMS
 **更新时保留 `config/netease-switch/` 中的账号、设置和缓存。**
 **如果复制旧版完整包后无法开机**，先将上述 `boot2.flag` 改名为 `boot2.flag.disabled`，再尝试开机。覆盖新版 ZIP 不会自动删除旧标志文件。详见[开机崩溃恢复](docs/INSTALLING.md#recover-a-console-that-crashes-during-boot)。
 
-v0.2.9 针对已收到的 boot2 `0x10801`（资源配额不足）报告，移除了后台程序中固定预留的 16 MiB 堆，改为按需增长。静态加载占用约从 19.1 MiB 降到 3.4 MiB；启动堆为 2 MiB，上限仍为 16 MiB。开机自启可自行启用，具体主机还需复测；参见[本次修复与验证边界](docs/releases/v0.2.9.md)。
+v0.2.9 的实机复测仍出现 AM `2001-0132`（资源配额不足），即使 CloudTune 日志已到达 `ready`。v0.2.10 修正提前初始化的顺序：等待 HOME 创建记录期间不提交播放堆，之后按需增长；保留开机自启能力。具体主机仍需复测，详见[本次修复与验证边界](docs/releases/v0.2.10.md)。
 
 每次同步更新客户端 `CloudTune.nro`、后台服务 `exefs.nsp` 和覆盖层 `CloudTune.ovl`，然后重启。
 完整安装路径、启动方式与排错见[安装指南](docs/INSTALLING.md)。

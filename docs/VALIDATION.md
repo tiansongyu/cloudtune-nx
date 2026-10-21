@@ -8,6 +8,67 @@ retained as historical evidence; current filenames and commands are documented
 in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
 hardware or emulator validation.
 
+## AM resource-limit follow-up — v0.2.10, 2026-10-22
+
+The user confirmed replacing the v0.2.9 background NSP and supplied a new
+fatal photograph: `2001-0132 / 0x10801`, program `0100000000000023` (AM),
+HOS 20.4.0 / Atmosphere 1.9.4. Their startup log reaches `ready`; every stage
+succeeded and `heap-committed-bytes` is `0x00200000`. Thus v0.2.9 did not
+resolve this console's failure. This is not a new decoded binary report:
+the exact resource counter, other module inventory and AM instruction
+symbols are unavailable. Shared-resource pressure during boot is the working
+explanation; neither a successful module startup nor this screenshot alone
+proves a particular memory counter was exhausted.
+
+The new startup path reserves no physical playback heap before HOME's
+creation record is present. It logs through raw FS IPC before fsdev malloc,
+network initialization, C++ global constructors and playback workers. It
+queries Atmosphere pm:info 65001, with an approximately 120-second bound. Source review found
+that pm:shell GetBootFinishedEventHandle deliberately aborts outside recovery
+boot in Atmosphere 1.9.4, so that API is not used. No boot flag is removed and
+no system resource limit is modified.
+
+Executed checks:
+
+- Full host CTest: **30/30**, 130.24 seconds, plus independent XEAPI and
+  generated local/throttled HTTPS audio playback.
+- Startup tests: delayed/already-recorded HOME, unsupported/query failure,
+  timeout with no clock/network startup, individual service/log failures,
+  five-resource diagnostics, query failure and handle cleanup. Heap tests
+  still cover quota denial, recovery, bounds and concurrency. Focused
+  ASan/UBSan runs pass.
+- All three Switch components and two excluded native probes build. The
+  production NSP's runtime/startup code is used in the probes; only the
+  emulator's missing HOME record is simulated (and the heap probe additionally
+  injects kernel allocation failures).
+- Native heap probe: **8 assertions pass**, including zero committed heap at
+  every simulated HOME poll, first 2 MiB allocation after the gate, growth,
+  LimitReached -> ENOMEM, preserved data, retry, alignment and cap.
+- Unmodified production NSP in Eden: unsupported pm:info 65001 returns
+  `0x00005f59`; the module records `boot-gate` failure and exits without
+  clock/socket/runtime initialization. Eden logs ExitProcess, then continues
+  into libnx's unreachable UDF as in prior probes. This is not a physical
+  shutdown test.
+- Native runtime probe: reaches ready with 2 MiB committed, accepts 300
+  encrypted ALAC packets from the independent sender, and records nonzero
+  PCM (`-663..663`) with `audout=00000000`. OPTIONS, ANNOUNCE/SETUP, timing,
+  RECORD, volume, FLUSH and TEARDOWN pass. This verifies post-gate startup and
+  audio, not real Atmosphere launch ordering.
+
+Local evidence: `build/validation/boot-crash/am-followup/`. User photographs,
+logs, dumps and emulator profiles remain untracked. No real-console retest
+of v0.2.10 is available yet. HOME's loader record is a process-creation
+boundary, not a UI-ready event; this change cannot guarantee free headroom
+for every system-module combination. Collect the new per-stage resource
+counters and matching fatal report if hardware still fails.
+
+Primary references:
+
+- [Atmosphere 1.9.4 HOME launch record](https://github.com/Atmosphere-NX/Atmosphere/blob/1.9.4/stratosphere/loader/source/ldr_launch_record.cpp)
+- [pm:info read-only extension](https://github.com/Atmosphere-NX/Atmosphere/blob/1.9.4/libraries/libstratosphere/include/stratosphere/pm/impl/pm_information_interface.hpp)
+- [Recovery-only boot event restriction](https://github.com/Atmosphere-NX/Atmosphere/blob/1.9.4/stratosphere/pm/source/impl/pm_process_manager.cpp)
+- [Resource limit handle semantics](https://github.com/Atmosphere-NX/Atmosphere/blob/1.9.4/libraries/libmesosphere/source/svc/kern_svc_info.cpp)
+
 ## Physical boot2 resource-limit report — v0.2.9, 2026-10-21
 
 The supplied 0x450-byte AFE2 report identifies program `0100000000000008`

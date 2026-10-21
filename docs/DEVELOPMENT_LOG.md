@@ -722,3 +722,20 @@ Primary references checked:
 - Keep public autostart opt-in; provide the user a separate local repair ZIP
   containing the corrected service and requested boot2 flag. Hardware boot,
   installed-module coexistence and live Ultrahand must still be retested.
+
+## 2026-10-22 · AM failure after v0.2.9 startup
+
+- User confirmed the new NSP was installed. Follow-up shows AM (0023) with
+  kernel LimitReached while CloudTune's log already reports ready / 2 MiB.
+  Record v0.2.9 as insufficient on that console; do not claim an identified
+  memory counter or successful physical repair.
+- Defer physical heap commitment, fsdev/time/network and worker startup until
+  Atmosphere's persistent HOME creation record. Use a read-only pm:info query,
+  not the recovery-only boot event or a fixed sleep followed by eager startup.
+- Native FS diagnostics now precede heap use, with flushed stage snapshots of
+  all five shared quota types. Boot query errors/timeouts stop initialization.
+- Host 30/30, local/HTTPS generated audio, focused sanitizer checks, all Switch
+  components, native allocator and post-gate runtime probes passed. Production
+  NSP rejects Eden's unsupported query; excluded test programs simulate that
+  boundary explicitly. Real HOME timing and Ultrahand/game coexistence remain
+  for hardware validation. Details and primary sources are in VALIDATION.md.

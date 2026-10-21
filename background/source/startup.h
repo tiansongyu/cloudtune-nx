@@ -6,6 +6,8 @@ extern "C" {
 #endif
 Result ncmStartupResult(void);
 void ncmStartupRecord(const char *stage, Result result);
+void ncmStartupWrite(const char *line);
+void ncmStartupRecordResources(const char *stage);
 #ifdef __cplusplus
 }
 #endif

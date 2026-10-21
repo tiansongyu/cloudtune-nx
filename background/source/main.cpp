@@ -83,12 +83,14 @@ struct CurlLifetime {
 };
 int run() {
     if (R_FAILED(ncmStartupResult())) return 1;
+    ncmStartupRecordResources("before-runtime");
     CurlLifetime curl;
     ncmStartupRecord("curl", static_cast<Result>(curl.result));
     if (curl.result != CURLE_OK) return 1;
     auto engine = std::make_unique<netease::playback::Runtime>(
         netease::playback::EngineConfig{NCM_CONFIG_DIRECTORY, NCM_CONFIG_DIRECTORY "/cacert.pem"});
     const bool started = engine->start();
+    ncmStartupRecordResources("after-runtime");
     ncmStartupRecord("heap-last-result", ncmHeapLastResult());
     ncmStartupRecord("heap-committed-bytes", static_cast<Result>(ncmHeapCommittedSize()));
     ncmStartupRecord("runtime", started ? 0 : MAKERESULT(Module_Libnx, LibnxError_IoError));
@@ -97,6 +99,7 @@ int run() {
     Result result = ncmIpcServerInitialize(&server, NCM_SERVICE_NAME, 8);
     ncmStartupRecord("ipc-register", result);
     if (R_FAILED(result)) return 1;
+    ncmStartupRecordResources("ready-resources");
     FILE* ready = std::fopen(NCM_CONFIG_DIRECTORY "/background-ready.log", "w");
     if (ready) { std::fputs("CloudTune NX background ready; protocol 1\n", ready); std::fclose(ready); }
     ncmStartupRecord("ready", 0);
@@ -109,6 +112,7 @@ int run() {
 int main(int, char**) {
     try { return run(); }
     catch (const std::bad_alloc&) {
+        ncmStartupRecordResources("allocation-failure");
         ncmStartupRecord("heap-last-result", ncmHeapLastResult());
         ncmStartupRecord("runtime-allocation", MAKERESULT(Module_Libnx, LibnxError_OutOfMemory));
     } catch (...) {

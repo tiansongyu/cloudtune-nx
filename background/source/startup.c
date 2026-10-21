@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "startup.h"
+#include "boot.h"
 #include "heap.h"
 #include "netease/playback_protocol.h"
 #include <stdio.h>
 #include <string.h>
-#include <sys/stat.h>
 
 u32 __nx_applet_type = AppletType_None;
 u32 __nx_fs_num_sessions = 2;
@@ -23,26 +23,66 @@ static const SocketInitConfig sockets = {
 };
 static Result startup_result;
 static bool sm_ready, fs_ready, sd_ready, time_ready, sockets_ready;
-/* __appInit runs before C++ constructors. Keep this path allocation-free except
- * for libnx/stdio, and retain early diagnostics until SD becomes available. */
+static bool log_fs_ready, log_ready;
+static FsFileSystem log_fs;
+static FsFile log_file;
+static s64 log_offset;
+/* Raw FS IPC avoids fsdev's malloc and stdio buffers before HOME is launched.
+ * Flush each line so a system fatal leaves usable evidence on the SD card. */
+#define LOG_DIRECTORY "/config/netease-switch"
+#define LOG_PATH LOG_DIRECTORY "/background-startup.log"
+#ifndef CLOUDTUNE_VERSION
+#define CLOUDTUNE_VERSION "development"
+#endif
 static char early_log[1024];
 static size_t early_size;
 
-void ncmStartupRecord(const char *stage, Result result) {
-    char line[160];
-    snprintf(line, sizeof(line), "%s: 0x%08lx\n", stage, (unsigned long)result);
+void ncmStartupWrite(const char *line) {
     const size_t size = strlen(line);
     svcOutputDebugString(line, size);
-    if (sd_ready) {
-        FILE *file = fopen(NCM_CONFIG_DIRECTORY "/background-startup.log", "a");
-        if (file) {
-            fputs(line, file);
-            fclose(file);
+    if (log_ready) {
+        Result result = fsFileWrite(&log_file, log_offset, line, size, FsWriteOption_Flush);
+        if (R_SUCCEEDED(result)) {
+            log_offset += (s64)size;
+            fsFileFlush(&log_file);
         }
     } else if (size < sizeof(early_log) - early_size) {
         memcpy(early_log + early_size, line, size + 1);
         early_size += size;
     }
+}
+
+void ncmStartupRecord(const char *stage, Result result) {
+    char line[160];
+    snprintf(line, sizeof(line), "%s: 0x%08lx\n", stage, (unsigned long)result);
+    ncmStartupWrite(line);
+}
+
+static void open_log(void) {
+    Result result = fsOpenSdCardFileSystem(&log_fs);
+    ncmStartupRecord("log-sd-open", result);
+    if (R_FAILED(result))
+        return;
+    log_fs_ready = true;
+    fsFsCreateDirectory(&log_fs, "/config");
+    fsFsCreateDirectory(&log_fs, LOG_DIRECTORY);
+    fsFsDeleteFile(&log_fs, LOG_DIRECTORY "/background-ready.log");
+    /* Create if absent, then truncate an existing file after opening it. */
+    fsFsCreateFile(&log_fs, LOG_PATH, 0, 0);
+    result = fsFsOpenFile(&log_fs, LOG_PATH, FsOpenMode_Write | FsOpenMode_Append, &log_file);
+    ncmStartupRecord("log-open", result);
+    if (R_FAILED(result))
+        return;
+    result = fsFileSetSize(&log_file, 0);
+    if (R_FAILED(result)) {
+        fsFileClose(&log_file);
+        ncmStartupRecord("log-truncate", result);
+        return;
+    }
+    log_ready = true;
+    ncmStartupWrite("CloudTune NX " CLOUDTUNE_VERSION " startup\n");
+    ncmStartupWrite(early_log);
+    early_size = 0;
 }
 
 static bool initialized(const char *stage, Result result, bool *ready) {
@@ -75,24 +115,21 @@ void __appInit(void) {
     }
     if (!initialized("fs", fsInitialize(), &fs_ready))
         return;
-    if (!initialized("sd-mount", fsdevMountSdmc(), &sd_ready))
+    open_log();
+    if (!initialized("heap-address", ncmHeapStartupResult(), NULL))
         return;
-    mkdir("sdmc:/config", 0755);
-    mkdir(NCM_CONFIG_DIRECTORY, 0755);
-    FILE *log = fopen(NCM_CONFIG_DIRECTORY "/background-startup.log", "w");
-    if (log) {
-        fputs("CloudTune NX startup\n", log);
-        fputs(early_log, log);
-        fclose(log);
-    }
-    /* A ready marker belongs to this process, never to an older successful run. */
-    remove(NCM_CONFIG_DIRECTORY "/background-ready.log");
-    if (!initialized("heap-initial", ncmHeapStartupResult(), NULL))
+    ncmStartupRecordResources("before-home");
+    if (!initialized("boot-gate", ncmWaitForHomeMenu(), NULL))
+        return;
+    ncmStartupRecordResources("after-home");
+    if (!initialized("sd-mount", fsdevMountSdmc(), &sd_ready))
         return;
     if (!initialized("time", timeInitialize(), &time_ready))
         return;
     __libnx_init_time();
+    ncmStartupRecordResources("before-sockets");
     initialized("sockets", socketInitialize(&sockets), &sockets_ready);
+    ncmStartupRecordResources("after-sockets");
 }
 
 void __appExit(void) {
@@ -109,6 +146,14 @@ void __appExit(void) {
     if (sd_ready) {
         sd_ready = false;
         fsdevUnmountDevice("sdmc");
+    }
+    if (log_ready) {
+        log_ready = false;
+        fsFileClose(&log_file);
+    }
+    if (log_fs_ready) {
+        log_fs_ready = false;
+        fsFsClose(&log_fs);
     }
     if (fs_ready) {
         fs_ready = false;

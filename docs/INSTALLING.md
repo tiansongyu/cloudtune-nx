@@ -93,14 +93,19 @@ Keep it installed even though the NRO also embeds its own bundle.
 
 ## Recover a console that crashes during boot
 
-The supplied physical-console fatal report identified Atmosphere boot2
-(`0100000000000008`) aborting after the CloudTune launch request returned
-kernel `0x10801` (`LimitReached`). v0.2.9 removes the 16 MiB static playback
-heap from the loadable image. The image now needs about 3.4 MiB to load; its
-kernel heap starts at 2 MiB and grows on demand up to the previous 16 MiB cap.
-This addresses the large load-time memory reservation. The report does not
-identify which resource was exhausted or enumerate other installed modules;
-it is not a guarantee that every module combination will fit.
+The first physical report identified boot2 (`0100000000000008`) aborting on
+kernel `0x10801` (`LimitReached`). v0.2.9 removed the 16 MiB static heap, but
+the follow-up still showed AM (`0100000000000023`) with `2001-0132`, while
+CloudTune's log reached `ready` with a 2 MiB heap. A successful service start
+therefore did not establish that the system had enough resources to finish
+booting. The exact exhausted resource remains unconfirmed.
+
+v0.2.10 waits for Atmosphere to record HOME's creation before committing the
+playback heap or starting networking/workers. The waiting path writes SD
+logs without malloc. It preserves automatic startup through `boot2.flag`,
+with no manual application launch required. Query failures or an approximately 120-second
+timeout stop startup safely. The static module still needs about 3.4 MiB;
+this is not a guarantee that every module combination will fit.
 
 Update `exefs.nsp`, not just the NRO, before retesting autostart. Once the
 new module is installed, an empty
@@ -124,19 +129,22 @@ Copying a new ZIP over an old installation does **not** delete the old
 of v0.2.7 does not enable boot startup. AirPlay/background control becomes
 available after the NRO first starts the service in each boot session.
 
-The service writes `sd:/config/netease-switch/background-startup.log` with stage
-names and hexadecimal results, replacing it for each attempt that mounts SD.
-Failures before SD mounting are emitted to debug output only; absence of this
-file does not prove that launch was never attempted. `background-ready.log` is
-removed after SD mount and recreated only after IPC registration succeeds.
-Report the **error code and Program ID**, firmware/Atmosphère versions and
-matching `atmosphere/fatal_errors/` or `atmosphere/crash_reports/` report if present.
-Do not share the entire config directory (it contains login state).
+The service replaces `sd:/config/netease-switch/background-startup.log` on
+each attempt that can open the log through native FS IPC. v0.2.10 writes its
+version, `before-home` / `waiting-home` / `after-home` snapshots and the
+`boot-home-menu` result. Every snapshot lists shared resource **used / limit /
+free** values for memory (bytes), threads, events, transfer memories and
+sessions (counts). `heap-committed-bytes` is hexadecimal bytes, not an error
+code; it should be zero while waiting and normally `0x00200000` at ready.
+Failures before FS access are emitted to debug output only.
 
-v0.2.9 also records `heap-initial`, `heap-last-result`, and
-`heap-committed-bytes` (hexadecimal bytes, not an error code). Initial heap
-denial is logged and prevents runtime creation. A ready marker should still
-be checked against a live connection; it can remain after an abnormal exit.
+The old ready marker is removed when diagnostic SD access opens and recreated
+only after IPC registration. A marker can survive an abnormal exit; verify a
+live overlay/NRO connection. If another module crashes after CloudTune is
+ready, provide the startup log rather than assuming that `ready` proves the
+whole console is healthy. Also provide the error code, Program ID,
+firmware/Atmosphere versions and the matching fatal/crash report when present.
+Do not share the entire config directory: it contains login state.
 
 ## Recover foreground audio cache errors
 

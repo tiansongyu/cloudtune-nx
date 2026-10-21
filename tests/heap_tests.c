@@ -10,6 +10,7 @@
 static unsigned char kernel_heap[16u * 1024u * 1024u];
 static size_t kernel_size, kernel_limit = sizeof(kernel_heap);
 static unsigned kernel_calls;
+static bool fail_address;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 char *fake_heap_start, *fake_heap_end;
 static void check(bool ok, const char *message) {
@@ -28,9 +29,9 @@ void mutexUnlock(Mutex *mutex) {
 }
 Result svcSetHeapSize(void **address, size_t size) {
     ++kernel_calls;
-    check(size && size % (2u * 1024u * 1024u) == 0, "Kernel heap alignment");
+    check(size % (2u * 1024u * 1024u) == 0, "Kernel heap alignment");
     check(size >= kernel_size, "Must not unmap borrowed worker/transfer pages");
-    if (size > kernel_limit)
+    if (size > kernel_limit || fail_address)
         return 0x10801; // The physical report's LimitReached.
     kernel_size = size;
     *address = kernel_heap;
@@ -55,7 +56,7 @@ static int compare(const void *a, const void *b) {
 static void scenario(unsigned which) {
     struct _reent reent = {0};
     if (which == 1)
-        kernel_limit = 0;
+        fail_address = true;
     __libnx_initheap();
     check(kernel_calls == 1, "Boot reserves more than one initial chunk");
     if (which == 1) {
@@ -67,9 +68,9 @@ static void scenario(unsigned which) {
         check(kernel_calls == 1, "Emergency heap tried further allocation");
         return;
     }
-    check(ncmHeapStartupResult() == 0 && ncmHeapCommittedSize() == HEAP_STEP,
-          "Boot eagerly reserves the full playback heap");
-    check(fake_heap_end - fake_heap_start == HEAP_STEP, "Initial heap bounds");
+    check(ncmHeapStartupResult() == 0 && ncmHeapCommittedSize() == 0 && kernel_size == 0,
+          "Boot must not commit a playback heap before HOME");
+    check(fake_heap_end == fake_heap_start, "Initial heap bounds");
     if (which == 2) {
         pthread_t workers[8];
         void *slots[8 * 256];

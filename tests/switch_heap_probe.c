@@ -10,6 +10,15 @@
 #include <string.h>
 
 static size_t quota = 16u * 1024u * 1024u;
+static unsigned home_queries;
+static bool zero_heap_at_boot = true;
+/* A standalone emulator has no HOME process or Atmosphere launch record.
+ * Only this excluded probe simulates that boundary; the shipped NSP uses PM. */
+Result __wrap_ncmBootHasHomeMenu(bool *launched) {
+    zero_heap_at_boot = zero_heap_at_boot && ncmHeapCommittedSize() == 0;
+    *launched = ++home_queries > 3;
+    return 0;
+}
 Result __real_svcSetHeapSize(void **address, size_t size);
 Result __wrap_svcSetHeapSize(void **address, size_t size) {
     return size > quota ? MAKERESULT(Module_Kernel, 132) : __real_svcSetHeapSize(address, size);
@@ -31,7 +40,9 @@ int main(void) {
         if (!ok)                                                                                   \
             goto done;                                                                             \
     } while (0)
-    CHECK(ncmHeapCommittedSize() == 2u * 1024u * 1024u, "small initial reservation");
+    CHECK(zero_heap_at_boot && home_queries == 4,
+          "zero committed heap while waiting for simulated HOME");
+    CHECK(ncmHeapCommittedSize() == 2u * 1024u * 1024u, "first reservation after HOME");
     a = malloc(3u * 1024u * 1024u);
     CHECK(a != NULL, "newlib malloc grows across a kernel heap boundary");
     memset(a, 0x5a, 3u * 1024u * 1024u);

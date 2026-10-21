@@ -12,16 +12,30 @@ The background service uses program ID `42000000004E434D` and service name
 `ncm:bg`. Its program ID must not be shared with another installed system module.
 These identifiers and `config/netease-switch/` deliberately remain stable
 across the CloudTune NX rename to preserve installed services and sessions.
-Since v0.2.9 it commits 2 MiB of kernel heap initially, growing in 2 MiB steps
-as newlib requests memory, with the existing 16 MiB maximum. The heap is no
-longer embedded in BSS: loading the module reserves about 3.4 MiB instead of
-19.1 MiB. This matters because Atmosphere boot2 aborts on process-launch
-resource-limit failures before application startup can handle them. Kernel
-heap-growth failures instead return `ENOMEM` without changing live allocations.
-Logical heap shrink retains committed pages that libnx may have mapped as
-worker stacks or transfer buffers. A 256 KiB emergency heap permits startup
-diagnostics and ordinary exit if the initial kernel allocation fails; the
-playback runtime is not started on that fallback.
+Since v0.2.9 the playback heap is no longer embedded in BSS: loading the
+module needs about 3.4 MiB instead of 19.1 MiB. v0.2.10 additionally reserves
+only the heap address at entry (`svcSetHeapSize(0)`). Before HOME is recorded
+as created, startup uses allocation-free SM/FS IPC and flushes diagnostics
+through a native `FsFile`, without mounting fsdev, initializing network/time,
+creating workers or running C++ global constructors.
+
+Startup polls Atmosphere `pm:info` command 65001 for HOME program
+`0100000000001000`. The loader retains that record after HOME is replaced,
+so on-demand launch while a game is running also works. This is a process
+creation boundary, not proof that HOME has finished rendering. Polling stops
+after about 120 seconds; query errors/timeouts release the process without starting
+the runtime. Do not use `pm:shell` GetBootFinishedEventHandle: Atmosphere 1.9.4
+aborts that command outside recovery boot. Do not call NotifyBootFinished.
+
+After the boundary, newlib's first allocation commits 2 MiB and later requests
+grow in 2 MiB steps up to the existing 16 MiB cap. Kernel growth failures
+return `ENOMEM` without changing live allocations. Logical shrink retains
+pages that libnx may have mapped as worker stacks or transfer buffers. A
+256 KiB emergency heap allows diagnostics if the initial address request
+fails; the runtime never uses that fallback. Stage snapshots record shared
+resource-limit usage and ceilings for memory, threads, events, transfer
+memories and sessions. These measurements do not reserve headroom for other
+processes or guarantee that arbitrary sysmodule combinations fit.
 
 It opens three BSD sessions and opens `audout:u`
 only when there is a playable track. Audio is 48 kHz, signed 16-bit stereo;

@@ -29,7 +29,7 @@ overlay_build="${OVERLAY_BUILD_DIR:-build/overlay}"
 export SWITCH_BUILD_DIR="$switch_build" OVERLAY_BUILD_DIR="$overlay_build"
 cmake -S . -B "$switch_build" -G Ninja -DPLATFORM_SWITCH=ON \
     -DCMAKE_BUILD_TYPE=Release "$@"
-cmake --build "$switch_build" --target CloudTune.nro cloudtune-background-package ncm-switch-heap-probe \
+cmake --build "$switch_build" --target CloudTune.nro cloudtune-background-package ncm-switch-heap-probe ncm-switch-runtime-probe \
     --parallel "${BUILD_JOBS:-8}"
 # Background service and overlay are separate processes and separate binaries.
 if [[ -f overlay/Makefile ]]; then

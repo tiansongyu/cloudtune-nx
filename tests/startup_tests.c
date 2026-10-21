@@ -3,22 +3,26 @@
 #include <stdlib.h>
 #include <string.h>
 #include <switch.h>
-#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-static unsigned stage, fail_at, acquired, released, time_setup;
-static bool known_version, heap_failed;
-static char diagnostics[2048];
+static const char *failure;
+static bool known_version, home_confirmed, heap_failed, resource_handle;
+static unsigned acquired, released, queries, sleeps, home_after;
+static size_t committed;
+static char diagnostics[32768], disk_log[32768];
+static bool stale_ready = true;
 static void check(bool ok, const char *message) {
     if (!ok) {
-        fprintf(stderr, "FAIL: %s\n", message);
+        fprintf(stderr, "FAIL [%s]: %s\n", failure, message);
         exit(1);
     }
 }
-static Result init(unsigned bit) {
-    ++stage;
-    if (stage == fail_at)
+static bool fails(const char *stage) {
+    return !strcmp(failure, stage);
+}
+static Result init(const char *stage, unsigned bit) {
+    if (fails(stage))
         return 0x1234;
     check(!(acquired & bit), "Resource acquired twice");
     acquired |= bit;
@@ -29,126 +33,256 @@ static void close_resource(unsigned bit) {
     released |= bit;
 }
 Result smInitialize(void) {
-    return init(1);
+    return init("sm", 1);
 }
 void smExit(void) {
     close_resource(1);
 }
 u32 hosversionGet(void) {
-    return known_version ? MAKEHOSVERSION(20, 1, 0) : 0;
+    return known_version ? MAKEHOSVERSION(20, 4, 0) : 0;
 }
 void hosversionSet(u32 version) {
-    check(version == MAKEHOSVERSION(20, 1, 0), "Firmware version lost");
+    check(version == MAKEHOSVERSION(20, 4, 0), "Firmware lost");
 }
 Result setsysInitialize(void) {
-    return init(2);
+    return init("set:sys", 2);
 }
 Result setsysGetFirmwareVersion(SetSysFirmwareVersion *v) {
-    *v = (SetSysFirmwareVersion){20, 1, 0};
-    ++stage;
-    return stage == fail_at ? 0x1234 : 0;
+    *v = (SetSysFirmwareVersion){20, 4, 0};
+    return fails("firmware") ? 0x1234 : 0;
 }
 void setsysExit(void) {
     close_resource(2);
 }
 Result fsInitialize(void) {
-    return init(4);
+    return init("fs", 4);
 }
 void fsExit(void) {
     close_resource(4);
 }
+Result fsOpenSdCardFileSystem(FsFileSystem *fs) {
+    (void)fs;
+    return init("log-sd-open", 8);
+}
+void fsFsClose(FsFileSystem *fs) {
+    (void)fs;
+    close_resource(8);
+}
+Result fsFsCreateDirectory(FsFileSystem *fs, const char *path) {
+    (void)fs;
+    (void)path;
+    return 0;
+}
+Result fsFsCreateFile(FsFileSystem *fs, const char *path, s64 size, u32 option) {
+    (void)fs;
+    (void)path;
+    (void)size;
+    (void)option;
+    return 0;
+}
+Result fsFsDeleteFile(FsFileSystem *fs, const char *path) {
+    (void)fs;
+    check(strstr(path, "background-ready.log") != NULL, "Unexpected deletion");
+    stale_ready = false;
+    return 0;
+}
+Result fsFsOpenFile(FsFileSystem *fs, const char *path, u32 mode, FsFile *file) {
+    (void)fs;
+    (void)file;
+    check(!strcmp(path, "/config/netease-switch/background-startup.log"), "Wrong log path");
+    check(mode == (FsOpenMode_Write | FsOpenMode_Append), "Log must grow");
+    return init("log-open", 16);
+}
+Result fsFileSetSize(FsFile *file, s64 size) {
+    (void)file;
+    check(size == 0, "Log not reset");
+    return fails("log-truncate") ? 0x1234 : 0;
+}
+Result fsFileWrite(FsFile *file, s64 offset, const void *data, u64 size, u32 option) {
+    (void)file;
+    check(option == FsWriteOption_Flush, "Diagnostic not flushed");
+    check(offset == (s64)strlen(disk_log), "Log offset lost");
+    if (fails("log-write"))
+        return 0x1234;
+    check(offset + size < sizeof(disk_log), "Log overflow");
+    memcpy(disk_log + offset, data, size);
+    disk_log[offset + size] = 0;
+    return 0;
+}
+void fsFileClose(FsFile *file) {
+    (void)file;
+    close_resource(16);
+}
+Result fsFileFlush(FsFile *file) {
+    (void)file;
+    check((acquired & 16) && !(released & 16), "Flush of closed log");
+    return fails("log-flush") ? 0x1234 : 0;
+}
+Result pminfoInitialize(void) {
+    return init("pm-info", 32);
+}
+void pminfoExit(void) {
+    close_resource(32);
+}
+Service *pminfoGetServiceSession(void) {
+    static Service session;
+    return &session;
+}
+Result stubDispatch(Service *service, u32 command, u64 input, u8 *output) {
+    (void)service;
+    check(command == 65001 && input == 0x0100000000001000ull, "Unsafe/wrong boot query");
+    check((acquired & 32) && !(released & 32), "PM session lifetime");
+    check(committed == 0, "Heap allocated before HOME");
+    ++queries;
+    if (fails("home-query"))
+        return 0x1234;
+    *output = queries > home_after;
+    home_confirmed = *output != 0;
+    return 0;
+}
+Result svcSleepThread(s64 ns) {
+    check(ns == 250000000 && !home_confirmed && committed == 0,
+          "Boot wait allocated/blocked incorrectly");
+    ++sleeps;
+    return 0;
+}
 Result fsdevMountSdmc(void) {
-    return init(8);
+    check(home_confirmed, "SD malloc before HOME");
+    committed = 2u * 1024u * 1024u;
+    return init("sd-mount", 64);
 }
 int fsdevUnmountDevice(const char *name) {
     check(!strcmp(name, "sdmc"), "Wrong mount");
-    close_resource(8);
+    close_resource(64);
     return 0;
 }
 Result timeInitialize(void) {
-    return init(16);
+    check(home_confirmed, "Clock before HOME");
+    return init("time", 128);
 }
 void timeExit(void) {
-    close_resource(16);
+    close_resource(128);
 }
 void __libnx_init_time(void) {
-    check(acquired & 16, "Realtime used before time service");
-    ++time_setup;
+    check(acquired & 128, "Realtime used before time service");
 }
 Result socketInitialize(const SocketInitConfig *config) {
-    check(config->num_bsd_sessions == 3, "Socket session budget changed");
-    return init(32);
+    check(home_confirmed && (acquired & 128), "Sockets before HOME/clock");
+    check(config->num_bsd_sessions == 3, "Socket budget changed");
+    return init("sockets", 256);
 }
 void socketExit(void) {
-    close_resource(32);
+    close_resource(256);
 }
 Result svcOutputDebugString(const char *text, size_t size) {
-    check(strlen(diagnostics) + size < sizeof(diagnostics), "Unbounded diagnostics");
+    check(strlen(diagnostics) + size < sizeof(diagnostics), "Diagnostics overflow");
     strncat(diagnostics, text, size);
     return 0;
 }
 Result ncmHeapStartupResult(void) {
     return heap_failed ? 0x10801 : 0;
 }
+size_t ncmHeapCommittedSize(void) {
+    return committed;
+}
+Result svcGetInfo(u64 *out, u32 type, Handle handle, u64 sub) {
+    check(type == InfoType_ResourceLimit && handle == INVALID_HANDLE && sub == 0,
+          "Wrong resource handle query (must use INVALID_HANDLE)");
+    if (fails("resource-handle"))
+        return 0x1234;
+    check(!resource_handle, "Resource handle leaked");
+    resource_handle = true;
+    *out = 99;
+    return 0;
+}
+Result svcGetResourceLimitCurrentValue(s64 *out, Handle handle, LimitableResource resource) {
+    check(resource_handle && handle == 99 && resource <= LimitableResource_Sessions,
+          "Wrong resource");
+    *out = resource == LimitableResource_Memory ? 200000000 : 100;
+    return fails("resource-current") ? 0x1234 : 0;
+}
+Result svcGetResourceLimitLimitValue(s64 *out, Handle handle, LimitableResource resource) {
+    check(resource_handle && handle == 99, "Missing resource handle");
+    *out = resource == LimitableResource_Memory ? 250000000 : 200;
+    return fails("resource-limit") ? 0x1234 : 0;
+}
+Result svcCloseHandle(Handle handle) {
+    check(resource_handle && handle == 99, "Wrong handle close");
+    resource_handle = false;
+    return 0;
+}
+#include "../background/source/boot.c"
+#include "../background/source/boot_query.c"
+#include "../background/source/resources.c"
 #include "../background/source/startup.c"
 
-static void scenario(unsigned failure, bool version, bool writable, bool heap_failure) {
-    fail_at = failure;
-    known_version = version;
-    heap_failed = heap_failure;
-    char directory[] = "/tmp/cloudtune-startup-XXXXXX";
-    check(mkdtemp(directory) && chdir(directory) == 0, "Temporary directory failed");
-    if (writable)
-        mkdir("sdmc:", 0755);
+static void scenario(const char *fail, bool known, unsigned delay) {
+    failure = fail;
+    known_version = known;
+    home_after = delay;
+    heap_failed = fails("heap");
     __appInit();
-    check(ncmStartupResult() == (failure        ? 0x1234
-                                 : heap_failure ? 0x10801
-                                                : 0),
-          "Startup error lost");
-    check(stage == (failure        ? failure
-                    : heap_failure ? (version ? 3 : 5)
-                    : version      ? 5
-                                   : 7),
-          "Startup continued after failure");
-    check(time_setup == ((acquired & 16) ? 1u : 0u), "Realtime initialization missing");
-    check(strstr(diagnostics, "0x00001234") != NULL || !failure, "Failed stage not diagnosed");
-    if (writable && (acquired & 8)) {
-        FILE *log = fopen(NCM_CONFIG_DIRECTORY "/background-startup.log", "r");
-        check(log != NULL, "Startup log missing");
-        char contents[2048] = {0};
-        fread(contents, 1, sizeof(contents) - 1, log);
-        fclose(log);
-        check(strstr(contents, "sm: 0x00000000") != NULL, "Early diagnostics missing");
-        check(!failure || strstr(contents, "0x00001234"), "Failure missing from SD log");
-        check(!heap_failure || strstr(contents, "heap-initial: 0x00010801"),
-              "Heap failure missing from SD log");
+    const bool diagnostic_failure = !strncmp(fail, "log-", 4) || !strncmp(fail, "resource-", 9);
+    const bool success = (!*fail || diagnostic_failure) && delay < 480;
+    check(R_SUCCEEDED(ncmStartupResult()) == success, "Wrong startup outcome");
+    check(!resource_handle, "Diagnostic handle leaked");
+    check(success == ((acquired & 256) != 0), "Failed gate still started playback services");
+    if (queries) {
+        check(sleeps == (delay < 480 ? delay : 480), "Wait did not follow HOME readiness");
+        if (!fails("home-query") && delay < 480)
+            check(queries == delay + 1, "Unexpected polling");
+    }
+    if (log_ready && !fails("log-write")) {
+        check(strstr(disk_log, "CloudTune NX") && strstr(disk_log, "sm: 0x00000000"),
+              "Early log lost");
+        check(!stale_ready, "Stale ready marker retained");
+        if (queries)
+            check(strstr(disk_log, "before-home"), "Pre-boot resource snapshot missing");
+        if (heap_failed)
+            check(strstr(disk_log, "heap-address: 0x00010801"), "Heap error lost");
     }
     __appExit();
-    check(acquired == released, "Startup leaked a resource");
-    __appExit(); // Cleanup must also be safe when there was nothing to release.
-    remove(NCM_CONFIG_DIRECTORY "/background-startup.log");
-    rmdir(NCM_CONFIG_DIRECTORY);
-    rmdir("sdmc:/config");
-    rmdir("sdmc:");
-    chdir("/");
-    rmdir(directory);
+    check(acquired == released, "Startup leaked resources");
+    __appExit();
 }
 int main(void) {
-    for (unsigned version = 0; version < 2; ++version)
-        for (unsigned writable = 0; writable < 2; ++writable)
-            for (unsigned failure = 0; failure <= (version ? 6u : 8u); ++failure) {
-                pid_t child = fork();
-                check(child >= 0, "fork failed");
-                if (!child) {
-                    const bool heap_failure = failure == (version ? 6u : 8u);
-                    scenario(heap_failure ? 0 : failure, version, writable, heap_failure);
-                    _exit(0);
-                }
-                int status;
-                check(waitpid(child, &status, 0) == child && WIFEXITED(status) &&
-                          WEXITSTATUS(status) == 0,
-                      "Startup failure injection aborted or failed");
-            }
-    puts("Startup: all service failures, firmware paths, SD log failures and cleanup passed");
+    const char *failures[] = {"",
+                              "sm",
+                              "set:sys",
+                              "firmware",
+                              "fs",
+                              "log-sd-open",
+                              "log-open",
+                              "log-truncate",
+                              "log-write",
+                              "log-flush",
+                              "heap",
+                              "pm-info",
+                              "home-query",
+                              "sd-mount",
+                              "time",
+                              "sockets",
+                              "resource-handle",
+                              "resource-current",
+                              "resource-limit"};
+    for (unsigned i = 0; i < sizeof(failures) / sizeof(*failures) + 3; ++i) {
+        pid_t child = fork();
+        check(child >= 0, "fork failed");
+        if (!child) {
+            if (i < sizeof(failures) / sizeof(*failures))
+                scenario(failures[i], false, 0);
+            else
+                scenario("", true,
+                         i == sizeof(failures) / sizeof(*failures)       ? 3
+                         : i == sizeof(failures) / sizeof(*failures) + 1 ? 480
+                                                                         : 0);
+            _exit(0);
+        }
+        int status;
+        check(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+              "Startup scenario failed");
+    }
+    puts("Startup: HOME gating, no eager allocation, timeout/query failures, raw flushed SD log, "
+         "resource diagnostics and cleanup passed");
     return 0;
 }

@@ -20,10 +20,13 @@ static Mutex heap_mutex;
 
 void __libnx_initheap(void) {
     void *base = NULL;
-    initial_result = last_result = svcSetHeapSize(&base, HEAP_STEP);
+    /* Reserve the address, not physical pages. The allocation-free boot gate
+     * runs before the first sbrk. Even a successful early 2 MiB allocation can
+     * consume resources AM still needs while starting HOME. */
+    initial_result = last_result = svcSetHeapSize(&base, 0);
     emergency = R_FAILED(initial_result);
     heap_base = emergency ? emergency_heap : base;
-    heap_committed = emergency ? sizeof(emergency_heap) : HEAP_STEP;
+    heap_committed = emergency ? sizeof(emergency_heap) : 0;
     extern char *fake_heap_start, *fake_heap_end;
     fake_heap_start = (char *)heap_base;
     fake_heap_end = (char *)heap_base + heap_committed;
