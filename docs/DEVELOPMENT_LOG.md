@@ -619,3 +619,25 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - Prepared v0.2.5. Details and hardware limits are recorded in
   `docs/design/cloudtune-nx/ui-refresh-v0.2.5.md`; personal photos and test captures
   remain ignored local files, excluded from the public build.
+
+## Content ownership and selection safety (2026-10-21)
+
+- Added a production Model / MusicView regression first; the old code failed
+  12 assertions for failed-page stale content and selection between model/frame
+  updates. New routes now clear their view content synchronously while keeping
+  the playback queue; failed pagination preserves its loaded list.
+- Input uses the displayed snapshot. Model playback checks content generation,
+  page/account and song ID, resolves the canonical position and copies/publishes
+  the queue under one lock. Removed index-only Model playback entry points so
+  the UI cannot accidentally reintroduce the second-snapshot race.
+- Extended regressions to removed songs, queue reorders, account/collection
+  changes, all affected root modes, pagination failure, same-route generation
+  changes and model updates after the UI activation guard.
+- Desktop CTest passed 26/26; all three Switch components built. Native 720p and
+  1080p inspection passed. Actual NRO in an isolated Eden profile passed the
+  loaded-FM / network-failure / Charts / Play / restore-and-retry sequence.
+  Touch and controller selected the displayed third and fourth songs; pause,
+  options and returning to the Original chart retained expected behavior.
+- Prepared v0.2.6 with public/private asset separation. See
+  `docs/design/cloudtune-nx/content-safety-v0.2.6.md` for evidence and remaining
+  audit items; audio/network/service implementation and IPC are unchanged.

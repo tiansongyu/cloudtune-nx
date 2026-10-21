@@ -441,6 +441,7 @@ void MusicView::switch_page(Page p) {
         return;
     reset_content();
     model_.browse(p);
+    reconcile(model_.snapshot());
     page_time_ = 0;
 }
 void MusicView::back() {
@@ -611,7 +612,7 @@ void MusicView::reconcile(const Snapshot &s) {
     anchor_ = selection_ < static_cast<int>(s.items.size()) ? media_key(s.items[selection_]) : "";
 }
 void MusicView::navigate(int d) {
-    auto s = model_.snapshot();
+    auto s = display_;
     if (player_open_) {
         if (d == -2 || d == 2) {
             if (!airplay_source(playback_) && playback_.duration_ms) {
@@ -669,7 +670,7 @@ void MusicView::navigate(int d) {
     anchor_ = selection_ < static_cast<int>(s.items.size()) ? media_key(s.items[selection_]) : "";
 }
 void MusicView::scroll_rows(int rows) {
-    const auto s = model_.snapshot();
+    const auto s = display_;
     if (s.page == Page::Account || s.page == Page::Settings || player_open_)
         return;
     const int columns = grid(s) ? 4 : 1;
@@ -765,16 +766,17 @@ void MusicView::activate() {
         activate_transport(transport_);
         return;
     }
-    auto s = model_.snapshot();
+    auto s = display_;
     // Local photos remain available while music recommendations are loading.
     if (region_ == ui::Region::Header && s.page == Page::Discover && !s.collection &&
         memories_.available() && header_ == 1) {
         open_memories();
         return;
     }
-    if (s.busy)
+    if (!model_.can_activate(s)) {
+        reconcile(model_.snapshot());
         return;
-    reconcile(s);
+    }
     if (region_ == ui::Region::Header) {
         activate_header(s);
         return;
@@ -835,9 +837,9 @@ void MusicView::activate() {
         return;
     if (s.items[selection_].kind == MediaKind::Song) {
         if (s.page == Page::Queue)
-            model_.play_queue(selection_);
+            model_.play_queue(s, selection_);
         else
-            model_.play(selection_);
+            model_.play(s, selection_);
     } else {
         remember(s);
         collection_cover_ = s.items[selection_].cover;
@@ -1042,7 +1044,7 @@ void MusicView::activate_header(const Snapshot &s) {
         return;
     if (s.collection) {
         if (header_ == 0 && !s.items.empty())
-            model_.play(0);
+            model_.play(s, 0);
         if (header_ == 1)
             model_.subscribe_collection();
         if (header_ == 2)
@@ -1060,10 +1062,12 @@ void MusicView::activate_header(const Snapshot &s) {
             model_.fm();
         else
             model_.new_albums();
+        reconcile(model_.snapshot());
     } else if (s.page == Page::Library) {
         const int section = header_;
         reset_content();
         model_.library_section(section);
+        reconcile(model_.snapshot());
     } else if (s.page == Page::Search) {
         if (header_ == 0)
             input_search();
@@ -1086,18 +1090,20 @@ void MusicView::play_pause() {
     }
     if (play_first_)
         return;
-    const auto s = model_.snapshot();
-    if (s.busy)
+    const auto s = display_;
+    if (!model_.can_activate(s)) {
+        reconcile(model_.snapshot());
         return;
+    }
     if (s.items.empty()) {
         model_.report("当前列表暂无可播放的歌曲");
         return;
     }
     if (s.items.front().kind == MediaKind::Song) {
         if (s.page == Page::Queue)
-            model_.play_queue(0);
+            model_.play_queue(s, 0);
         else
-            model_.play(0);
+            model_.play(s, 0);
         return;
     }
     // On a card page, open its first recommendation and wait for that exact
@@ -1123,7 +1129,7 @@ void MusicView::finish_play_first(const Snapshot &s) {
         s.collection_id != request.collection_id || s.collection_kind != request.kind)
         return;
     if (!s.items.empty() && s.items.front().kind == MediaKind::Song)
-        model_.play(0);
+        model_.play(s, 0);
     else
         model_.report("当前歌单暂无可播放的歌曲");
 }
@@ -1193,7 +1199,7 @@ void MusicView::tap(float x, float y) {
             switch_page(static_cast<Page>(NavOrder[i]));
             return;
         }
-    auto s = model_.snapshot();
+    auto s = display_;
     const auto controls = headers(s);
     for (size_t i = 0; i < controls.size(); ++i)
         if (controls[i].first.contains(x, y)) {

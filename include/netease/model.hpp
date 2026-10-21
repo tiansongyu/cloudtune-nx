@@ -21,6 +21,8 @@ struct Snapshot {
     std::string nickname = "未登录", qr_url, qr_key, qr_message, search_query;
     std::string quality = "standard", proxy;
     uint64_t user_id = 0, collection_id = 0;
+    // Changes when content ownership changes, not for artwork or metadata updates.
+    uint64_t content_generation = 0;
     MediaKind collection_kind = MediaKind::Playlist;
     bool subscribed = false, busy = false, more = false, collection = false;
     int search_type = 1, offset = 0, revision = 0;
@@ -60,8 +62,9 @@ class Model {
     void check_in();
     void intelligence(uint64_t current_track_id = 0);
     void fm_dislike(uint64_t id);
-    void play(size_t index);
-    void play_queue(size_t index);
+    bool can_activate(const Snapshot &shown) const;
+    void play(const Snapshot &shown, size_t index);
+    void play_queue(const Snapshot &shown, size_t index);
     void lyrics_for(uint64_t id);
     void set_quality(std::string quality);
     void set_proxy(std::string proxy);
@@ -96,6 +99,9 @@ class Model {
     Json intelligence_arguments(uint64_t current_track_id) const;
     void assign(std::vector<Media> items, std::string title, std::string subtitle,
                 bool more = false);
+    // Caller holds mutex_; clears view content without touching the playback queue.
+    void reset_content_locked(std::string title, std::string subtitle = "");
+    void play_selected(const Snapshot &shown, size_t index, bool from_queue);
     void cover_art(const std::vector<Media> &items);
     void save_settings();
     std::string directory_;

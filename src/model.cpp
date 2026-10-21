@@ -405,14 +405,29 @@ void Model::ensure_artwork(const std::vector<Media> &visible) {
             false);
     }
 }
+void Model::reset_content_locked(std::string title, std::string subtitle) {
+    ++state_.content_generation;
+    state_.items.clear();
+    state_.title = std::move(title);
+    state_.subtitle = std::move(subtitle);
+    state_.collection = false;
+    state_.collection_id = 0;
+    state_.collection_kind = MediaKind::Playlist;
+    state_.subscribed = false;
+    state_.more = false;
+    state_.offset = 0;
+    state_.error.clear();
+    state_.notice.clear();
+    ++state_.revision;
+}
 void Model::browse(Page page) {
     ++view_generation_;
     {
         std::lock_guard<std::mutex> l(mutex_);
         state_.page = page;
-        state_.collection = false;
-        state_.offset = 0;
-        state_.error.clear();
+        const char *titles[] = {"发现音乐", "排行榜",   "搜索",     "我的音乐",
+                                "正在播放", "播放队列", "我的账号", "设置"};
+        reset_content_locked(titles[static_cast<int>(page)]);
         history_.clear();
     }
     if (page == Page::Discover) {
@@ -471,7 +486,8 @@ void Model::refresh() {
 void Model::category(std::string category, bool high) {
     {
         std::lock_guard<std::mutex> l(mutex_);
-        state_.collection = false;
+        reset_content_locked(high ? "精品歌单" : "发现音乐",
+                             "为每一次冒险，找到合适的旋律 · " + category);
     }
     enqueue_view("正在发现音乐", [this, category, high] {
         auto j = api_->call(high ? "top_song_list_highquality" : "top_song_list",
@@ -483,7 +499,7 @@ void Model::category(std::string category, bool high) {
 void Model::new_albums() {
     {
         std::lock_guard<std::mutex> l(mutex_);
-        state_.collection = false;
+        reset_content_locked("新碟上架", "听见新的声音");
     }
     enqueue_view("正在获取新碟", [this] {
         auto j = api_->call("new_albums", {{"limit", 40}});
@@ -497,6 +513,8 @@ void Model::search(std::string text, int type, bool more) {
     int offset = more ? snapshot().offset + 30 : 0;
     {
         std::lock_guard<std::mutex> l(mutex_);
+        if (!more)
+            reset_content_locked("搜索 · " + text, "单曲 / 歌单 / 专辑 / 歌手 / 歌词");
         state_.page = Page::Search;
         state_.search_query = text;
         state_.search_type = type;
@@ -611,6 +629,7 @@ void Model::open(Media item, bool remember_history) {
             std::lock_guard<std::mutex> l(mutex_);
             if (!current_view())
                 return;
+            ++state_.content_generation;
             state_.collection = true;
             state_.collection_id = item.id;
             state_.collection_kind = item.kind;
@@ -630,6 +649,7 @@ void Model::back() {
             return;
         old = std::move(history_.back());
         history_.pop_back();
+        ++state_.content_generation;
         state_.items = old.items;
         state_.title = old.title;
         state_.subtitle = old.subtitle;
@@ -683,6 +703,11 @@ void Model::library_section(int section, bool more) {
     if (section < 0 || section > 4)
         return;
     library_mode_ = section;
+    if (!more) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const char *titles[] = {"我的歌单", "我喜欢的音乐", "收藏专辑", "订阅电台", "音乐云盘"};
+        reset_content_locked(titles[section], "你的音乐，在 Switch 上继续");
+    }
     auto s = snapshot();
     if (!s.user_id) {
         assign({}, "我的音乐", "登录后查看喜欢的音乐、歌单、专辑、电台和云盘");
@@ -750,7 +775,7 @@ void Model::library_section(int section, bool more) {
 void Model::daily() {
     {
         std::lock_guard<std::mutex> l(mutex_);
-        state_.collection = false;
+        reset_content_locked("每日推荐", "每天，为你更新");
     }
     enqueue_view("正在获取每日推荐", [this] {
         auto j = api_->call("recommend_songs");
@@ -764,7 +789,7 @@ void Model::daily() {
 void Model::fm() {
     {
         std::lock_guard<std::mutex> l(mutex_);
-        state_.collection = false;
+        reset_content_locked("私人 FM", "听见下一首惊喜 · X 换一批");
     }
     enqueue_view("正在调频", [this] {
         auto j = api_->call("personal_fm");
@@ -795,6 +820,7 @@ void Model::reset_account_state() {
     library_mode_ = 0;
     likes_loaded_ = false;
     std::lock_guard<std::mutex> lock(mutex_);
+    ++state_.content_generation;
     state_.items.clear();
     state_.queue.clear();
     state_.likes.clear();
@@ -1092,34 +1118,67 @@ void Model::fm_dislike(uint64_t id) {
 void Model::set_play_callback(std::function<void(const std::vector<Media> &, size_t)> cb) {
     on_play_ = std::move(cb);
 }
-void Model::play(size_t index) {
-    if (!accounts_) {
-        report("账号存档不可用，请先恢复 accounts.json 再播放");
-        return;
-    }
-    auto list = snapshot().items;
-    if (index >= list.size() || list[index].kind != MediaKind::Song)
-        return;
-    // Only songs are handed across the IPC boundary. URLs are resolved by the
-    // playback worker so an entire large playlist need not be fetched up front.
-    {
-        std::lock_guard<std::mutex> l(mutex_);
-        state_.queue = list;
-        ++queue_generation_;
-        state_.notice = "正在准备播放";
-    }
-    lyric_id_ = 0; // The same ID selected in a new queue may still need its artwork.
-    if (on_play_)
-        on_play_(list, index);
+namespace {
+bool same_content(const Snapshot &a, const Snapshot &b) {
+    return a.content_generation == b.content_generation && a.user_id == b.user_id &&
+           a.page == b.page && a.collection == b.collection &&
+           (!a.collection ||
+            (a.collection_id == b.collection_id && a.collection_kind == b.collection_kind)) &&
+           (a.page != Page::Search ||
+            (a.search_query == b.search_query && a.search_type == b.search_type));
 }
-void Model::play_queue(size_t index) {
+} // namespace
+bool Model::can_activate(const Snapshot &shown) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return !shown.busy && !state_.busy && same_content(shown, state_);
+}
+void Model::play(const Snapshot &shown, size_t index) {
+    play_selected(shown, index, false);
+}
+void Model::play_queue(const Snapshot &shown, size_t index) {
+    play_selected(shown, index, true);
+}
+void Model::play_selected(const Snapshot &shown, size_t index, bool from_queue) {
     if (!accounts_) {
         report("账号存档不可用，请先恢复 accounts.json 再播放");
         return;
     }
-    auto s = snapshot();
-    if (index < s.queue.size() && on_play_)
-        on_play_(s.queue, index);
+    if (index >= shown.items.size() || shown.items[index].kind != MediaKind::Song)
+        return;
+    const auto id = shown.items[index].id;
+    std::vector<Media> list;
+    size_t resolved = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (shown.busy || state_.busy)
+            return;
+        if (!same_content(shown, state_)) {
+            state_.notice = "列表已更新，请重新选择";
+            return;
+        }
+        const auto &current = from_queue ? state_.queue : state_.items;
+        const auto song = std::find_if(current.begin(), current.end(), [id](const Media &item) {
+            return item.kind == MediaKind::Song && item.id == id;
+        });
+        if (song == current.end()) {
+            state_.notice = "歌曲已不在当前列表，请重新选择";
+            return;
+        }
+        // Resolve identity, copy the canonical list and publish its queue under
+        // one lock. An index resolved against an earlier snapshot is not safe.
+        resolved = static_cast<size_t>(std::distance(current.begin(), song));
+        list = current;
+        if (!from_queue) {
+            state_.queue = list;
+            ++queue_generation_;
+            state_.notice = "正在准备播放";
+        }
+    }
+    if (!from_queue)
+        lyric_id_ = 0;
+    // The existing playback worker still resolves URLs and owns audio/IPC.
+    if (on_play_)
+        on_play_(list, resolved);
 }
 void Model::lyrics_for(uint64_t id) {
     if (!id || id == lyric_id_.exchange(id))

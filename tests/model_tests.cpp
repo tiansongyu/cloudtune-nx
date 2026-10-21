@@ -204,7 +204,7 @@ static void queue_recovery_tests(const std::filesystem::path &directory) {
         replacement.id = 1000;
         replacement.title = "New queue title";
         ModelTestAccess::items(model, {replacement});
-        model.play(0);
+        model.play(model.snapshot(), 0);
         require(!ModelTestAccess::apply_metadata(model, generation, details),
                 "A delayed metadata response changed a newer play queue");
         ModelTestAccess::restore_queue(model);
@@ -432,8 +432,8 @@ static void damaged_accounts_tests(const std::filesystem::path& directory,
         public_song.id = 999;
         ModelTestAccess::items(model, {public_song});
         const auto queue_generation = ModelTestAccess::queue_generation(model);
-        model.play(0);
-        model.play_queue(0);
+        model.play(model.snapshot(), 0);
+        model.play_queue(model.snapshot(), 0);
         require(plays == 0 && model.snapshot().queue.front().id == 111 &&
                     ModelTestAccess::queue_generation(model) == queue_generation,
                 "Corrupt registry allowed playback to activate the old cookie mirror");

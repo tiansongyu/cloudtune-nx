@@ -347,6 +347,7 @@ static void first_play_checks(MusicView &v, Model &m, const std::string &assets)
     });
     auto songs = fixture("daily", assets);
     ModelTestAccess::set(m, songs);
+    MusicViewTestAccess::sync(v, songs);
     MusicViewTestAccess::set_focus(v, 4);
     MusicViewTestAccess::play(v);
     require(plays == 1 && selected == 0 && title == songs.items[0].title,
@@ -354,17 +355,20 @@ static void first_play_checks(MusicView &v, Model &m, const std::string &assets)
     auto queue = fixture("queue", assets);
     queue.queue[0].title = "Canonical first queue song";
     ModelTestAccess::set(m, queue);
+    MusicViewTestAccess::sync(v, queue);
     MusicViewTestAccess::play(v);
     require(plays == 2 && selected == 0 && title == queue.queue[0].title,
             "First play on Queue must use its canonical queue");
     auto empty = fixture("empty", assets);
     ModelTestAccess::set(m, empty);
+    MusicViewTestAccess::sync(v, empty);
     MusicViewTestAccess::play(v);
     require(plays == 2, "An empty page must not start unrelated queue music");
     auto cards = fixture("discover", assets);
     const auto start_card = [&] {
         MusicViewTestAccess::reset(v);
         ModelTestAccess::set(m, cards);
+        MusicViewTestAccess::sync(v, cards);
         // play_pause() reads the actual idle player, independently of the UI fixture.
         MusicViewTestAccess::play(v);
         MusicViewTestAccess::play(v);
@@ -395,6 +399,176 @@ static void first_play_checks(MusicView &v, Model &m, const std::string &assets)
     MusicViewTestAccess::finish_play(v, detail);
     require(plays == 2, "Back must cancel pending first-song playback");
     m.set_play_callback({});
+}
+// Exercise the real model/view boundary between a rendered frame and a worker update.
+static void content_safety_checks(MusicView &v, Model &m, const std::string &assets) {
+    m.api().set_proxy("http://127.0.0.1:9"); // Deterministic refusal, isolated from user data.
+    const auto fence = [&] {
+        auto done = std::make_shared<std::promise<void>>();
+        auto ready = done->get_future();
+        ModelTestAccess::enqueue(m, [done] { done->set_value(); });
+        require(ready.wait_for(std::chrono::seconds(5)) == std::future_status::ready,
+                "Content safety worker timed out");
+    };
+    fence();
+    int failures = 0, plays = 0;
+    uint64_t played_id = 0;
+    size_t played_index = 99;
+    const auto expect = [&](bool ok, const char *message) {
+        std::cout << (ok ? "PASS " : "FAIL ") << message << std::endl;
+        failures += !ok;
+    };
+    m.set_play_callback([&](const std::vector<Media> &list, size_t index) {
+        ++plays;
+        played_id = list[index].id;
+        played_index = index;
+    });
+    const auto songs = fixture("daily", assets);
+    const auto show = [&](const Snapshot &s) {
+        ModelTestAccess::set(m, s);
+        MusicViewTestAccess::reset(v);
+        MusicViewTestAccess::freeze(v, s);
+    };
+    show(songs);
+    MusicViewTestAccess::page(v, Page::Charts);
+    expect(MusicViewTestAccess::display(v).page == Page::Charts &&
+               MusicViewTestAccess::display(v).items.empty(),
+           "Navigation publishes the destination loading frame immediately");
+    fence();
+    auto failed = m.snapshot();
+    expect(failed.page == Page::Charts && !failed.error.empty() && failed.items.empty() &&
+               !failed.more && failed.title == "排行榜",
+           "Failed navigation cannot retain the previous recommendation list");
+    MusicViewTestAccess::sync(v, failed);
+    MusicViewTestAccess::play(v);
+    expect(plays == 0 && m.snapshot().queue.size() == songs.queue.size(),
+           "Play on a failed page cannot replace the existing playback queue");
+    show(songs);
+    m.search("failed-search", 1);
+    fence();
+    failed = m.snapshot();
+    expect(failed.page == Page::Search && failed.items.empty() && !failed.error.empty(),
+           "A failed search cannot relabel another page's songs");
+    MusicViewTestAccess::sync(v, failed);
+    MusicViewTestAccess::play(v);
+    expect(plays == 0, "Failed search must not start an unrelated list");
+
+    // A new root mode owns an empty loading/error state, whereas failed
+    // pagination must preserve the already loaded page and its queue.
+    for (int route = 0; route < 6; ++route) {
+        auto source = songs;
+        source.user_id = 1; // Synthetic identity, no credentials.
+        source.more = true;
+        show(source);
+        if (route == 0)
+            m.daily();
+        else if (route == 1)
+            m.fm();
+        else if (route == 2)
+            m.new_albums();
+        else if (route == 3)
+            m.category("全部");
+        else if (route == 4)
+            m.browse(Page::Library);
+        else
+            m.library_section(4);
+        fence();
+        const auto result = m.snapshot();
+        expect(result.items.empty() && !result.error.empty() && !result.more &&
+                   result.content_generation != source.content_generation &&
+                   result.queue.front().id == source.queue.front().id,
+               "A failed root request clears old content, never the playback queue");
+    }
+    auto search = fixture("search", assets);
+    search.more = true;
+    show(search);
+    m.search(search.search_query, search.search_type, true);
+    fence();
+    const auto paged = m.snapshot();
+    expect(!paged.error.empty() && paged.items.size() == search.items.size() &&
+               paged.items.front().id == search.items.front().id && paged.more &&
+               paged.content_generation == search.content_generation,
+           "Failed pagination preserves the same list and allows retry");
+
+    const auto tap_first = [&] {
+        const auto &shown = MusicViewTestAccess::display(v);
+        const auto row = ui::row(0, MusicViewTestAccess::top(v, shown));
+        MusicViewTestAccess::tap(v, row.x + 150, row.y + 20);
+    };
+    show(songs);
+    auto newer = songs;
+    std::swap(newer.items[0], newer.items[1]);
+    ModelTestAccess::set(m, newer); // Deliberately do not draw/reconcile yet.
+    plays = 0;
+    tap_first();
+    expect(plays == 1 && played_id == songs.items[0].id && played_index == 1,
+           "Touch follows the visible song ID across an unpublished reorder");
+    show(songs);
+    MusicViewTestAccess::set_focus(v, 0);
+    ModelTestAccess::set(m, newer);
+    v.navigate(1);
+    v.activate();
+    expect(played_id == songs.items[1].id,
+           "D-pad movement and activation use the same displayed list");
+    show(songs);
+    ModelTestAccess::set(m, newer);
+    MusicViewTestAccess::play(v);
+    expect(played_id == songs.items.front().id,
+           "Initial Play starts the first displayed song across a reorder");
+    show(songs);
+    newer = songs;
+    newer.items.erase(newer.items.begin());
+    ModelTestAccess::set(m, newer);
+    plays = 0;
+    tap_first();
+    expect(plays == 0, "Removing the visible song never falls through to its replacement row");
+    show(songs);
+    newer = songs;
+    newer.user_id = 777;
+    ModelTestAccess::set(m, newer);
+    plays = 0;
+    tap_first();
+    expect(plays == 0, "A stale frame cannot start playback under another account");
+    show(songs);
+    newer = fixture("collection", assets);
+    ModelTestAccess::set(m, newer);
+    plays = 0;
+    tap_first();
+    expect(plays == 0, "A stale frame cannot play the same ID from a different collection");
+    auto queue = fixture("queue", assets);
+    show(queue);
+    std::swap(queue.queue[0], queue.queue[1]);
+    ModelTestAccess::set(m, queue);
+    plays = 0;
+    tap_first();
+    expect(plays == 1 && played_id == songs.items[0].id && played_index == 1,
+           "Queue touch resolves the displayed ID within the current canonical queue");
+    // A worker can change the model AFTER the UI's activation guard. The
+    // playback API must independently validate and resolve within one lock.
+    show(songs);
+    expect(m.can_activate(songs), "The displayed frame is initially actionable");
+    newer = songs;
+    std::swap(newer.items[0], newer.items[1]);
+    ModelTestAccess::set(m, newer);
+    plays = 0;
+    m.play(songs, 0);
+    expect(plays == 1 && played_id == songs.items[0].id && played_index == 1,
+           "Playback resolves song identity again after the UI guard");
+    ++newer.content_generation;
+    ModelTestAccess::set(m, newer);
+    plays = 0;
+    m.play(songs, 0);
+    m.play_queue(songs, 0);
+    expect(plays == 0, "A new content generation rejects delayed playback in the same route");
+    show(songs);
+    newer = songs;
+    newer.busy = true;
+    ModelTestAccess::set(m, newer);
+    m.play(songs, 0);
+    expect(plays == 0, "Loading cannot replace the active playback queue");
+    m.set_play_callback({});
+    m.api().set_proxy("");
+    require(failures == 0, "Content safety regressions failed");
 }
 static void controller_checks(MusicView &v, Model &m, const std::string &assets) {
     auto root = fixture("discover", assets);
@@ -539,12 +713,14 @@ static void controller_checks(MusicView &v, Model &m, const std::string &assets)
     m.set_play_callback({});
 }
 int main(int argc, char **argv) try {
-    bool check = false;
+    bool check = false, check_content = false;
     int frame_limit = 0;
     std::string scene = "discover", assets = "build/validation/ui-redesign/assets";
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--check")
             check = true;
+        else if (std::string(argv[i]) == "--check-content")
+            check_content = true;
         else if (std::string(argv[i]) == "--frames" && i + 1 < argc)
             frame_limit = std::stoi(argv[++i]);
         else if (std::string(argv[i]) == "--scene" && i + 1 < argc)
@@ -569,6 +745,8 @@ int main(int argc, char **argv) try {
         Model model(directory);
         auto *view = new MusicView(model, player);
         brls::Application::pushActivity(new brls::Activity(view));
+        if (check_content)
+            content_safety_checks(*view, model, assets);
         if (check) {
             transition_checks(*view, model, assets);
             artwork_checks(*view, model, assets);
@@ -587,7 +765,7 @@ int main(int argc, char **argv) try {
                 MusicViewTestAccess::modal(*view);
             if (scene == "memories" && frames == 30)
                 MusicViewTestAccess::memories(*view);
-            if (check && frames > 12)
+            if ((check || check_content) && frames > 12)
                 brls::Application::quit();
             if (frame_limit > 0 && frames >= frame_limit)
                 brls::Application::quit();
