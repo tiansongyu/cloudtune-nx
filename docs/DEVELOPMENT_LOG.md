@@ -672,3 +672,28 @@ Primary references checked:
 - [Atmosphere boot2 launch and memory errors](https://github.com/Atmosphere-NX/Atmosphere/blob/master/libraries/libstratosphere/source/boot2/boot2_api.board.nintendo_nx.cpp)
 - [Official sysmodule memory-pool template](https://github.com/switchbrew/switch-examples/blob/master/templates/sysmodule/sysmodule.json)
 - [libnx 4.12.0 transfer memory cleanup](https://github.com/switchbrew/libnx/blob/v4.12.0/nx/source/kernel/tmem.c)
+
+## 2026-10-21 · v0.2.8 foreground SD cache repair
+
+- Reproduced the user's `Cannot open audio cache` against the unchanged engine
+  with an exclusive-writer filesystem wrapper. The old downloader reopens and
+  truncates the same cache that a separate decoder handle is reading.
+- Use one `w+b` stream, independent read/download offsets and a mutex around
+  file operations. Wait for network data outside that mutex; join before
+  close/reopen, including expired URL retries. Preserve progressive playback
+  and all existing codecs, quality settings and account cache identities.
+- Publish bytes only after successful writes/flushes, retain native FS errors,
+  and expose bounded `cache-errors.log` diagnostics without URLs or accounts.
+  Do not renew CDN URLs in response to disk I/O failures. Join before removing
+  invalid completion markers and retry an unreadable completed cache once.
+- Added 13 deterministic cache scenarios across four media containers, six
+  I/O fault stages, cancellation, invalid data and stale completed caches.
+  All passed, including focused ASan/UBSan/leak checking. Full CTest: 29/29,
+  130.58 s; separate generated local/HTTPS playback integration also passed.
+- Built NRO, background service and Tesla overlay. Isolated Eden loaded the
+  actual NRO and live recommendations, played the first recommended track,
+  paused and sought successfully. This does not substitute for real SD and
+  Atmosphere validation; the user's original native error code is unknown.
+- v0.2.7's no-boot-flag packaging remains: launch the NRO once per boot to
+  start the installed background service. Public packages exclude photos;
+  private photo artifacts and test profiles remain local and ignored.

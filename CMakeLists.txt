@@ -5,7 +5,7 @@ if(NOT PLATFORM_SWITCH AND NOT PLATFORM_DESKTOP)
   set(PLATFORM_DESKTOP ON CACHE BOOL "" FORCE)
 endif()
 include(${BOREALIS_LIBRARY}/cmake/toolchain.cmake)
-project(CloudTuneNX VERSION 0.2.7 LANGUAGES C CXX)
+project(CloudTuneNX VERSION 0.2.8 LANGUAGES C CXX)
 option(CLOUDTUNE_BUILD_OVERLAY_PREVIEW "Build the Linux desktop overlay preview" OFF)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -118,6 +118,14 @@ else()
   target_link_libraries(ncm-storage-tests PRIVATE netease_api)
   add_test(NAME storage COMMAND ncm-storage-tests)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_executable(ncm-cache-io-tests tests/cache_io_tests.cpp)
+  target_link_libraries(ncm-cache-io-tests PRIVATE ncm_engine)
+  target_link_options(ncm-cache-io-tests PRIVATE
+    "-Wl,--wrap=fopen,--wrap=fclose,--wrap=fread,--wrap=fwrite,--wrap=fflush,--wrap=fseek,--wrap=fsync")
+  add_test(NAME cache-io
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/cache_io_tests.py"
+      $<TARGET_FILE:ncm-cache-io-tests>)
+  set_tests_properties(cache-io PROPERTIES TIMEOUT 90)
   add_test(NAME output-recovery
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/output_recovery_tests.py"
       $<TARGET_FILE:ncm-output-recovery-tests> $<TARGET_FILE:ncm-resource-limit-tests>)

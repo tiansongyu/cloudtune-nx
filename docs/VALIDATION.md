@@ -8,6 +8,40 @@ retained as historical evidence; current filenames and commands are documented
 in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
 hardware or emulator validation.
 
+## SD audio cache concurrency — v0.2.8, 2026-10-21
+
+The user reported immediate foreground playback failures on a physical Switch:
+`Cannot open audio cache` and format errors. The previous engine opened the
+growing cache in three stages (`wb`, downloader `wb`, decoder `rb`), including
+a second truncation racing the reader. A host wrapper imposing exclusive
+writer handles reproduces the exact cache-open error on the old engine.
+This is a controlled filesystem model, not a physical-console trace.
+
+The fix shares one synchronized `w+b` stream with independent offsets. The
+new `cache-io` suite passed 13 scenarios: progressive MP3/FLAC/ADTS/M4A playback
+with pause/seek/resume, byte-for-byte cache verification and offline replay;
+six I/O fault stages (open/read/write/flush/seek/sync) and recovery after each;
+cancelled downloads; invalid downloaded media; and automatic recovery of a
+previously marked-complete cache rejected at decoder open. No conflicting
+handles or leaked handles were observed. Failed/cancelled/invalid downloads
+did not retain completion markers. SD errors included operation and numeric
+details instead of codec/network messages.
+
+Full local CTest passed 29/29 (130.58 s), including the desktop overlay test.
+Generated local and throttled HTTPS MP3 integration and independent XEAPI
+verification passed. The focused cache suite also passed ASan/UBSan with leak
+checking (27.89 s). All three Switch artifacts cross-compiled. The actual NRO
+in a fresh isolated Eden profile loaded live recommendations and started the
+first song with an advancing foreground clock; pause and seek were checked.
+Eden was muted, so this is data flow/control validation, not an audible-quality
+assessment or a test of the Atmosphere background service.
+
+Evidence remains in `build/validation/cache-safety/`. The physical SD card,
+its filesystem, current free space and native failure Result have not been
+provided. A real-device retest remains required before confirming all reported
+FLAC failures have the same cause. The optional error log and update steps are
+documented in [INSTALLING.md](INSTALLING.md#recover-foreground-audio-cache-errors).
+
 ## Background startup safety — v0.2.7, 2026-10-21
 
 Local full CTest passed 28/28 (102.58 s). New production startup tests inject

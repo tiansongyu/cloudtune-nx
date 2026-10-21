@@ -192,7 +192,15 @@ struct Engine::Impl {
     std::mt19937 rng;
     AudioDecoder decoder;
     bool decoderOpen = false, paused = false, preview = false;
+    // Horizon SD files must not be reopened by the streaming reader while a
+    // writer owns them. One update stream has two logical offsets, serialized
+    // here; the worker closes it only after joining the downloader.
+    std::mutex cacheMutex;
     FILE* input = nullptr;
+    std::atomic<int> cacheError{0};
+    const char *cacheOperation = "open";
+    uint32_t cacheResult = 0;
+    bool managedCache = false;
     uint64_t cursor = 0, producedFrames = 0;
     uint32_t seekBase = 0, failures = 0;
     std::string currentPath;
@@ -302,6 +310,42 @@ struct Engine::Impl {
         std::lock_guard<std::mutex> lock(mutex);
         snapshot.state = value; snapshot.error_code = error; copyText(snapshot.message, message);
     }
+    // Called under cacheMutex, or before starting the downloader. Capture the
+    // native FS Result immediately: libnx maps most SD errors to plain EIO.
+    void cacheFailure(const char *operation) {
+        if (cacheError)
+            return;
+        const int error = errno ? errno : EIO;
+        cacheOperation = operation;
+#ifdef __SWITCH__
+        cacheResult = error == EIO ? fsdevGetLastResult() : 0;
+#else
+        cacheResult = 0;
+#endif
+        cacheError = error;
+    }
+    void invalidateCache() {
+        // The downloader must have stopped before invalidating its marker.
+        if (managedCache)
+            std::remove((currentPath + ".complete").c_str());
+    }
+    void reportCacheFailure() {
+        closeTrack();
+        invalidateCache();
+        char message[96];
+        std::snprintf(message, sizeof(message), "SD cache %s: errno=%d fs=%08X", cacheOperation,
+                      cacheError.load(), cacheResult);
+        // This bounded error diagnostic contains no account or URL.
+        // If the SD card is unwritable, the status still carries the details.
+        const auto path = config.directory + "/cache-errors.log";
+        std::error_code ignored;
+        const auto size = std::filesystem::file_size(path, ignored);
+        if (FILE *log = std::fopen(path.c_str(), !ignored && size > 64 * 1024 ? "wb" : "ab")) {
+            std::fprintf(log, "%s\n", message);
+            std::fclose(log);
+        }
+        state(NcmPlayback_Error, message, 3);
+    }
     void closeTrack() {
         recoveringOutput = false; outputAttempts = 0; healthyOutputSince = {};
         downloadCancel = true;
@@ -316,31 +360,48 @@ struct Engine::Impl {
         cursor = 0; seekBase = 0;
     }
     static size_t writeDownload(char* data, size_t size, size_t count, void* context) {
-        auto* pair = static_cast<std::pair<Impl*,FILE*>*>(context);
-        Impl* self = pair->first;
+        auto *self = static_cast<Impl *>(context);
+        if (size && count > MaxDownloadBytes / size)
+            return 0;
         size_t bytes = size * count;
-        if (self->downloadCancel || self->interrupt || !self->running ||
-            self->downloaded + bytes > MaxDownloadBytes) return 0;
-        size_t written = std::fwrite(data, 1, bytes, pair->second);
-        if (std::fflush(pair->second) != 0) return 0;
+        if (self->downloadCancel || self->interrupt || !self->running || self->cacheError ||
+            self->downloaded + bytes > MaxDownloadBytes)
+            return 0;
+        std::lock_guard<std::mutex> lock(self->cacheMutex);
+        if (self->cacheError)
+            return 0;
+        // fseek is also the required read->write transition for a C update
+        // stream. Neither thread relies on the shared FILE position.
+        errno = 0;
+        if (std::fseek(self->input, static_cast<long>(self->downloaded.load()), SEEK_SET) != 0) {
+            self->cacheFailure("seek");
+            return 0;
+        }
+        size_t written = std::fwrite(data, 1, bytes, self->input);
+        if (written != bytes) {
+            self->cacheFailure("write");
+            return 0;
+        }
+        if (std::fflush(self->input) != 0) {
+            self->cacheFailure("flush");
+            return 0;
+        }
+        // Never expose bytes to a decoder until the flush succeeded.
         self->downloaded.fetch_add(written);
         return written;
     }
     static int progress(void* context, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
         auto* self = static_cast<Impl*>(context);
-        return self->downloadCancel || self->interrupt || !self->running;
+        return self->downloadCancel || self->interrupt || !self->running || self->cacheError;
     }
     void fetch(std::string url, std::string path) {
-        FILE* output = std::fopen(path.c_str(), "wb");
         CURL* curl = curl_easy_init();
-        if (!output || !curl) {
-            if (output) std::fclose(output);
-            if (curl) curl_easy_cleanup(curl);
-            downloadError = CURLE_WRITE_ERROR; downloadDone = true; return;
+        if (!curl) {
+            downloadError = CURLE_OUT_OF_MEMORY;
+            downloadDone = true;
+            return;
         }
-        std::unique_ptr<FILE,decltype(&std::fclose)> outputOwner(output,std::fclose);
         std::unique_ptr<CURL,decltype(&curl_easy_cleanup)> curlOwner(curl,curl_easy_cleanup);
-        std::pair<Impl*,FILE*> context{this,output};
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
@@ -359,7 +420,7 @@ struct Engine::Impl {
         curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeDownload);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &context);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, this);
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress);
         curl_easy_setopt(curl, CURLOPT_XFERINFODATA, this);
@@ -370,18 +431,24 @@ struct Engine::Impl {
         if (!proxy.empty()) curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
         CURLcode rc = curl_easy_perform(curl);
         if (rc==CURLE_OK) {
-            try { storage::sync_file(output); }
-            catch (const std::exception&) { rc=CURLE_WRITE_ERROR; }
+            std::lock_guard<std::mutex> lock(cacheMutex);
+            errno = 0;
+            if (std::fflush(input) != 0)
+                cacheFailure("flush");
+            else if (::fsync(::fileno(input)) != 0 && errno != EINVAL && errno != ENOSYS)
+                cacheFailure("sync");
+            if (cacheError)
+                rc = CURLE_WRITE_ERROR;
         }
-        if (std::fclose(outputOwner.release())!=0) rc=CURLE_WRITE_ERROR;
-        curl_easy_cleanup(curlOwner.release());
-        downloadError = rc;
-        downloadDone = true;
-        if (rc == CURLE_OK) {
-            // A marker is only published for a completely received response.
+        if (rc == CURLE_OK && !cacheError && !downloadCancel && !interrupt && running) {
+            // Publish before downloadDone, so decoder rejection cannot race
+            // with a late marker. Failure to cache the marker is nonfatal: the
+            // complete audio still plays, and will be downloaded next time.
             FILE* marker = std::fopen((path + ".complete").c_str(), "wb");
             if (marker) std::fclose(marker);
         }
+        downloadError = rc;
+        downloadDone = true;
     }
     void startFetch(const std::string& url) {
         downloader=std::thread([this,url,path=currentPath] {
@@ -392,20 +459,36 @@ struct Engine::Impl {
     static size_t readStream(void* context, void* destination, size_t bytes) {
         auto* self = static_cast<Impl*>(context);
         bool buffering=false;
-        while (self->running && !self->interrupt && !self->downloadDone &&
+        while (self->running && !self->interrupt && !self->downloadDone && !self->cacheError &&
                self->downloaded < self->cursor + bytes) {
             if (self->decoderOpen && !self->paused && !buffering) {
                 self->state(NcmPlayback_Buffering,"Buffering audio"); buffering=true;
             }
             std::this_thread::sleep_for(10ms);
         }
-        if (!self->running || self->interrupt) return 0;
+        if (!self->running || self->interrupt || self->cacheError)
+            return 0;
         if (buffering) self->state(self->paused?NcmPlayback_Paused:NcmPlayback_Playing,
             self->paused?"Paused":self->preview?"Playing preview / 试听":"Playing");
         uint64_t available = self->downloaded > self->cursor ? self->downloaded - self->cursor : 0;
         size_t count = static_cast<size_t>(std::min<uint64_t>(bytes, available));
+        if (!count)
+            return 0;
+        std::lock_guard<std::mutex> lock(self->cacheMutex);
+        if (self->cacheError)
+            return 0;
+        errno = 0;
         clearerr(self->input);
+        if (std::fseek(self->input, static_cast<long>(self->cursor), SEEK_SET) != 0) {
+            self->cacheFailure("seek");
+            return 0;
+        }
         size_t got = std::fread(destination, 1, count, self->input);
+        // EOF is only valid at the published byte count, not within it.
+        if (got != count) {
+            self->cacheFailure("read");
+            return 0;
+        }
         self->cursor += got;
         return got;
     }
@@ -419,11 +502,13 @@ struct Engine::Impl {
         if (base<0 || static_cast<uint64_t>(base)>MaxDownloadBytes || offset< -base ||
             offset>static_cast<int64_t>(MaxDownloadBytes)-base) return false;
         int64_t target = base + offset;
-        while (self->running && !self->interrupt && !self->downloadDone &&
-               self->downloaded < static_cast<uint64_t>(target)) std::this_thread::sleep_for(10ms);
-        if (!self->running || self->interrupt || static_cast<uint64_t>(target) > self->downloaded)
+        while (self->running && !self->interrupt && !self->downloadDone && !self->cacheError &&
+               self->downloaded < static_cast<uint64_t>(target))
+            std::this_thread::sleep_for(10ms);
+        if (!self->running || self->interrupt || self->cacheError ||
+            static_cast<uint64_t>(target) > self->downloaded)
             return false;
-        if (std::fseek(self->input, static_cast<long>(target), SEEK_SET) != 0) return false;
+        // readStream seeks to this logical cursor while holding cacheMutex.
         self->cursor = static_cast<uint64_t>(target); return true;
     }
     static bool tellStream(void* context, int64_t* position) {
@@ -465,7 +550,7 @@ struct Engine::Impl {
         if (url.rfind("http://", 0) == 0) url.replace(0, 7, "https://");
         return url;
     }
-    bool beginTrack(uint32_t index) {
+    bool beginTrack(uint32_t index, bool retryInvalidCache = true) {
         closeTrack();
         if (index >= queue.size()) return false;
         auto& entry = queue[index];
@@ -505,6 +590,9 @@ struct Engine::Impl {
             state(NcmPlayback_Error, "Track unavailable or requires membership", 2); return false;
         }
         currentPath = local ? url : cachePath;
+        managedCache = !explicitLocal;
+        cacheError = 0;
+        cacheResult = 0;
         // cacheHit above requires both the marker and the data file. A marker
         // alone may survive SD/file loss and must not prevent a new download.
         const bool cached = local;
@@ -523,20 +611,26 @@ struct Engine::Impl {
             if (std::remove((currentPath+".complete").c_str())!=0 && errno!=ENOENT) {
                 state(NcmPlayback_Error,"Cannot replace SD audio cache marker",3); return false;
             }
-            // Truncate before publishing the path to the streaming reader.
-            FILE* empty = std::fopen(currentPath.c_str(), "wb");
-            if (!empty) { state(NcmPlayback_Error, "Cannot write SD audio cache", 3); return false; }
-            std::fclose(empty);
-            startFetch(url);
         }
-        input = std::fopen(currentPath.c_str(), "rb");
-        if (!input) { state(NcmPlayback_Error, "Cannot open audio cache", 3); return false; }
+        input = std::fopen(currentPath.c_str(), cached ? "rb" : "w+b");
+        if (!input) {
+            cacheFailure("open");
+            reportCacheFailure();
+            return false;
+        }
+        if (!cached)
+            startFetch(url);
         // Start after 32 KiB. The decoder blocks on the growing file only on
         // underrun, so RAM use is independent of the song's total length.
-        while (running && !interrupt && !downloadDone && downloaded < 32768)
+        while (running && !interrupt && !cacheError && !downloadDone && downloaded < 32768)
             std::this_thread::sleep_for(10ms);
         if (!running || interrupt) return false;
-        if (downloadDone && downloadError && !cached) {
+        if (cacheError) {
+            reportCacheFailure();
+            return false;
+        }
+        if (downloadDone && downloadError && !cached && downloadError != CURLE_WRITE_ERROR &&
+            downloadError != CURLE_OUT_OF_MEMORY) {
             // Signed CDN URLs expire. Resolve once using this queue's session.
             if (downloader.joinable()) downloader.join();
             try {
@@ -545,16 +639,37 @@ struct Engine::Impl {
                 copyText(entry.url, url.c_str());
                 std::fclose(input); input = nullptr;
                 downloadDone = false; downloaded = 0; downloadError = 0;
+                input = std::fopen(currentPath.c_str(), "w+b");
+                if (!input) {
+                    cacheFailure("open");
+                    reportCacheFailure();
+                    return false;
+                }
                 startFetch(url);
-                input = std::fopen(currentPath.c_str(), "rb");
-                while (running && !interrupt && !downloadDone && downloaded < 32768)
+                while (running && !interrupt && !cacheError && !downloadDone && downloaded < 32768)
                     std::this_thread::sleep_for(10ms);
             } catch (const std::exception& e) { state(NcmPlayback_Error, e.what(), 4); return false; }
         }
-        if (!input || !decoder.open(readStream, seekStream, tellStream, this)) {
-            if (cacheHit) std::remove((cachePath+".complete").c_str());
+        if (!running || interrupt)
+            return false;
+        if (cacheError) {
+            reportCacheFailure();
+            return false;
+        }
+        const bool opened = decoder.open(readStream, seekStream, tellStream, this);
+        if (cacheError) {
+            reportCacheFailure();
+            return false;
+        }
+        if (!opened) {
             const bool limited = decoder.resource_limited();
-            if (limited) closeTrack();
+            closeTrack();
+            if (!limited)
+                invalidateCache();
+            // Older versions could leave a complete marker on unreadable
+            // media. Recover once without making the user select it twice.
+            if (cacheHit && !limited && retryInvalidCache && running && !interrupt)
+                return beginTrack(index, false);
             state(NcmPlayback_Error, limited ? "Audio exceeds decoder memory budget" :
                   downloadError ? "Audio download failed" : "Unsupported or damaged MP3/FLAC/AAC",
                   limited ? 10 : 5);
@@ -1006,15 +1121,20 @@ struct Engine::Impl {
                         continue;
                     }
                     drainingSince={};
-                    if (downloadError) {
+                    if (cacheError) {
+                        reportCacheFailure();
+                    } else if (downloadError) {
                         const auto error=static_cast<uint32_t>(downloadError.load());
                         closeTrack();
                         state(NcmPlayback_Error,"Network interrupted; track skipped",error);
                     } else if (decoder.damaged()) {
-                        std::remove((currentPath+".complete").c_str());
                         closeTrack();
+                        invalidateCache();
                         state(NcmPlayback_Error,"Damaged or truncated audio; track skipped",5);
-                    } else { failures=0; advance(false); }
+                    } else {
+                        failures = 0;
+                        advance(false);
+                    }
                 } else if (!sink.write(pcm.data(),frames)) {
                     recoverOutput();
                 } else {

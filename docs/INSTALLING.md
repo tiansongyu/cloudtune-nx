@@ -10,16 +10,16 @@ The canonical repository is
 
 Download `CloudTuneNX-<version>-sd.zip` and `SHA256SUMS` from the same
 [GitHub Release](https://github.com/tiansongyu/cloudtune-nx/releases).
-For v0.2.7, save both files in one directory and verify:
+For v0.2.8, save both files in one directory and verify:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-Confirm that `CloudTuneNX-0.2.7-sd.zip` reports `OK`. The `--ignore-missing`
+Confirm that `CloudTuneNX-0.2.8-sd.zip` reports `OK`. The `--ignore-missing`
 option permits downloading only the SD archive; it does not ignore a checksum
 mismatch in a file you downloaded. Windows users can compare
-`Get-FileHash .\CloudTuneNX-0.2.7-sd.zip -Algorithm SHA256` with the matching
+`Get-FileHash .\CloudTuneNX-0.2.8-sd.zip -Algorithm SHA256` with the matching
 line in `SHA256SUMS`.
 
 Extract **only the SD archive** directly to the root of your SD card.
@@ -118,6 +118,29 @@ removed after SD mount and recreated only after IPC registration succeeds.
 Report the **error code and Program ID**, firmware/Atmosphère versions and
 matching `atmosphere/fatal_errors/` or `atmosphere/crash_reports/` report if present.
 Do not share the entire config directory (it contains login state).
+
+## Recover foreground audio cache errors
+
+For `Cannot open audio cache` or repeated format errors at playback start,
+update to v0.2.8 or later. It uses one shared cache file handle for progressive
+download and decoding, instead of opening the same growing SD file twice.
+Replace `switch/CloudTune/CloudTune.nro`; if the background module is installed,
+replace the matching full SD package and reboot to unload the old service.
+Keep the CloudTune boot flag disabled as described above.
+
+Existing valid caches remain usable. A cached file rejected at decoder open
+is automatically invalidated and downloaded once more. There is no need to
+delete accounts, settings or the entire config directory. Start a song in
+foreground mode, then check pause/resume, seeking and changing tracks.
+
+If playback still reports `SD cache ...: errno=... fs=...`, retain that message
+and `sd:/config/netease-switch/cache-errors.log` when present. The log contains
+only the failed I/O operation and numeric error codes, and is capped at roughly
+64 KiB. Failure to write this log can itself indicate an unwritable SD card.
+Report the application version, firmware/Atmosphère versions, launch mode,
+free SD space and whether the card is FAT32 or exFAT. A genuine unsupported
+source or damaged downloaded audio can still produce a decoder error; this
+update does not claim to add support for every format or validate the SD card.
 
 ## Updates
 

@@ -109,6 +109,17 @@ No complete song is retained in RAM. Backward seek reads the existing cache;
 forward seek can wait for the required bytes to arrive. Track changes and stop
 interrupt the transfer and decoder wait.
 
+Remote downloads use a single `w+b` stream shared by the downloader and decoder.
+A mutex protects each seek/read/write/flush operation; the read cursor and
+download offset are independent. Waiting for network bytes happens outside
+the mutex. The worker joins the downloader before closing or reopening the
+stream, including signed-URL retries. This avoids conflicting SD opens and
+re-truncation under an active reader. Completed/local media uses a read-only
+stream. Cache I/O errors stop the transfer and are reported separately from
+network and decoder errors, with `errno` and, on Switch, the native FS Result.
+The bounded `cache-errors.log` is written even when periodic audio diagnostics
+are disabled, if the config directory remains writable.
+
 The downloader requires HTTPS, verifies the CA chain and hostname, restricts
 redirects to HTTPS, limits redirects, enforces connection/stall/overall
 timeouts, and caps each response at 512 MiB. A `.complete` marker is written
@@ -116,6 +127,12 @@ only after a successful complete response. Incomplete downloads are never
 mistaken for an offline cache hit. Before a new transfer, oldest cache files
 are evicted to retain at most 512 MiB of other tracks, plus at most 512 MiB
 for the current download (approximately 1 GiB total).
+The marker is published before the transfer's done flag. Decoder rejection
+joins the downloader before invalidating the marker, so cancellation cannot
+recreate it afterward. A completed cache rejected while opening the decoder
+is invalidated and downloaded once more; failures are bounded, and explicit
+local files are never invalidated. This does not redownload a stream that was
+opened successfully and only later detected as truncated.
 Cache filenames include the song ID and a digest of the loaded queue's
 authenticated session identity and requested quality. Loading a queue after
 login or changing quality therefore cannot silently reuse an anonymous preview
