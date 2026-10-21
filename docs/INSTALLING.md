@@ -10,16 +10,16 @@ The canonical repository is
 
 Download `CloudTuneNX-<version>-sd.zip` and `SHA256SUMS` from the same
 [GitHub Release](https://github.com/tiansongyu/cloudtune-nx/releases).
-For v0.2.1, save both files in one directory and verify:
+For v0.2.7, save both files in one directory and verify:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-Confirm that `CloudTuneNX-0.2.1-sd.zip` reports `OK`. The `--ignore-missing`
+Confirm that `CloudTuneNX-0.2.7-sd.zip` reports `OK`. The `--ignore-missing`
 option permits downloading only the SD archive; it does not ignore a checksum
 mismatch in a file you downloaded. Windows users can compare
-`Get-FileHash .\CloudTuneNX-0.2.1-sd.zip -Algorithm SHA256` with the matching
+`Get-FileHash .\CloudTuneNX-0.2.7-sd.zip -Algorithm SHA256` with the matching
 line in `SHA256SUMS`.
 
 Extract **only the SD archive** directly to the root of your SD card.
@@ -39,9 +39,7 @@ sd:/
 │   └── contents/
 │       └── 42000000004E434D/
 │           ├── exefs.nsp
-│           ├── toolbox.json
-│           └── flags/
-│               └── boot2.flag
+│           └── toolbox.json
 └── config/
     └── netease-switch/
         └── cacert.pem
@@ -49,8 +47,9 @@ sd:/
 
 `exefs.nsp` is the Atmosphère background system module. It is **not** a
 game-installation NSP and must not be installed with a title installer.
-`boot2.flag` asks Atmosphère to start it at boot. This is the default
-installation mode. Starting the service does not automatically play the saved
+Since v0.2.7, the package does **not** include `boot2.flag`. CloudTune launches
+the installed service on demand when you open the NRO. This keeps a custom
+module out of the system boot sequence. Starting the service does not play the saved
 NetEase queue. Its independent AirPlay 1 receiver starts when enabled; the
 first-use default is enabled, and later starts follow your saved preference.
 
@@ -60,7 +59,8 @@ first-use default is enabled, and later starts follow your saved preference.
    intend to use the in-game overlay.
 2. Copy the SD archive directories to your SD card. Keep the folder
    hierarchy and allow the files from this release to replace older files.
-3. Reboot into Atmosphère to start the background player.
+3. Reboot into Atmosphère. For upgrades, remove the old CloudTune `boot2.flag`
+   first, as described below.
 4. Hold **R** while launching a game to open Homebrew Menu in full application
    mode, then launch **CloudTune NX**. Use this mode for the GUI and networking
    memory budget.
@@ -91,7 +91,39 @@ See [AIRPLAY.md](AIRPLAY.md) for network requirements and validation limits.
 The CA bundle enables certificate validation for the background process.
 Keep it installed even though the NRO also embeds its own bundle.
 
+## Recover a console that crashes during boot
+
+1. Power the console off and access its SD card from a computer.
+2. Rename `sd:/atmosphere/contents/42000000004E434D/flags/boot2.flag` to
+   `boot2.flag.disabled`. This disables only CloudTune automatic startup.
+3. Try booting Atmosphère. If it still fails, move the **CloudTune-only** folder
+   `42000000004E434D` off the SD card and preserve the crash report. Do not remove
+   other modules or `sd:/config/netease-switch/`.
+4. Install v0.2.7 or later, keeping that old boot flag disabled, then open the
+   NRO in full application mode. Confirm it reports background playback before
+   testing playback and the overlay. If the module cannot be launched, the NRO can
+   use foreground playback. If a launched process has not published IPC, the NRO
+   reports that the background service is not ready to avoid two audio owners.
+
+Copying a new ZIP over an old installation does **not** delete the old
+`boot2.flag`. Disable that file explicitly before rebooting. A fresh installation
+of v0.2.7 does not enable boot startup. AirPlay/background control becomes
+available after the NRO first starts the service in each boot session.
+
+The service writes `sd:/config/netease-switch/background-startup.log` with stage
+names and hexadecimal results, replacing it for each attempt that mounts SD.
+Failures before SD mounting are emitted to debug output only; absence of this
+file does not prove that launch was never attempted. `background-ready.log` is
+removed after SD mount and recreated only after IPC registration succeeds.
+Report the **error code and Program ID**, firmware/Atmosphère versions and
+matching `atmosphere/fatal_errors/` or `atmosphere/crash_reports/` report if present.
+Do not share the entire config directory (it contains login state).
+
 ## Updates
+
+When upgrading from v0.2.6 or earlier, disable the old CloudTune
+`flags/boot2.flag` as above; the new archive cannot remove it for you.
+
 
 Replace the NRO, overlay and system module from the **same** release, then
 reboot. Preserve `sd:/config/netease-switch/` to retain account/player state;
@@ -114,6 +146,11 @@ Published version tags and their attachments are not replaced by later builds;
 install a newer version when a fix is released.
 
 ## Disable or uninstall
+
+Automatic startup is opt-in. After verifying on-demand startup and playback on
+your console, you can enable it through a compatible sysmodule manager or create
+an empty `flags/boot2.flag` in the CloudTune module folder. Keep it disabled while
+diagnosing a boot crash.
 
 To stop automatic background startup, remove
 `sd:/atmosphere/contents/42000000004E434D/flags/boot2.flag` and reboot.

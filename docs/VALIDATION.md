@@ -8,6 +8,32 @@ retained as historical evidence; current filenames and commands are documented
 in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
 hardware or emulator validation.
 
+## Background startup safety — v0.2.7, 2026-10-21
+
+Local full CTest passed 28/28 (102.58 s). New production startup tests inject
+all seven initialization failures, both firmware-query paths and unavailable
+SD diagnostics, checking ordinary return and acquired-resource-only cleanup.
+FFT impulse output (including the maximum supported length) and invalid/
+oversized requests pass; existing AAC reference PCM and ALAC tests also pass.
+Generated local and throttled HTTPS MP3 playback integration passed separately.
+All three Switch binaries built with the pinned toolchain. The actual NRO
+started in an isolated Eden profile on display :94; live recommendations loaded
+and the first recommended playlist's first song played with an advancing clock.
+Pause was checked with a held controller input. This exercises foreground NRO
+playback, not an Atmosphere boot or background module.
+
+The old v0.2.6 background ELF has 36,560,896 page-rounded PT_LOAD bytes; the
+candidate has 20,045,824 (34.87 -> 19.12 MiB). The full static image includes the
+unchanged 16 MiB heap. The verifier rejects the old applet-pool NPDM and now
+requires system pool 2, <=22 MiB static background memory and no packaged boot
+flag. This is a build budget, not a measurement of available console memory.
+
+No device crash report was supplied during this investigation. **The reported
+physical console's boot and background playback remain unverified.** See the
+[recovery instructions](INSTALLING.md#recover-a-console-that-crashes-during-boot)
+and [v0.2.7 notes](releases/v0.2.7.md). Local evidence is retained in
+`build/validation/boot-safety/`; do not publish copied account-bearing profiles.
+
 ## CloudTune NX publication build — 2026-10-20
 
 The renamed build passed Docker compilation for `CloudTune.nro`,

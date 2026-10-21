@@ -1,26 +1,18 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../runtime.hpp"
 #include "ipc_server.h"
+#include "startup.h"
 #include <switch.h>
 #include <curl/curl.h>
 #include <cstdio>
 #include <cstring>
 #include <memory>
-#include <sys/stat.h>
 
 namespace {
 static_assert(sizeof(NcmPlaybackStatus) <= NCM_IPC_RESPONSE_MAX_DATA_SIZE,
               "Playback status exceeds CMIF inline reply");
 static_assert(sizeof(NcmAirplayStatus) <= NCM_IPC_RESPONSE_MAX_DATA_SIZE,
               "AirPlay status exceeds CMIF inline reply");
-constexpr SocketInitConfig Sockets = {
-    .tcp_tx_buf_size=0x800, .tcp_rx_buf_size=0x1000,
-    .tcp_tx_buf_max_size=0x4000, .tcp_rx_buf_max_size=0x8000,
-    .udp_tx_buf_size=64*1024, .udp_rx_buf_size=64*1024, .sb_efficiency=2,
-    .num_bsd_sessions=3, .bsd_service_type=BsdServiceType_User,
-};
-Result socketResult;
-void check(Result rc) { if (R_FAILED(rc)) diagAbortWithResult(rc); }
 Result dispatchRequest(void* context, const NcmIpcServerRequest* request, uint8_t* output, size_t* size) {
     auto* engine = static_cast<netease::playback::Runtime*>(context);
     if (request->command_id == NcmCommand_Version) {
@@ -83,54 +75,40 @@ Result dispatch(void* context, const NcmIpcServerRequest* request, uint8_t* outp
     }
 }
 }
-extern "C" {
-u32 __nx_applet_type=AppletType_None;
-u32 __nx_fs_num_sessions=2;
-void __libnx_init_time(void);
-void __libnx_initheap(void) {
-    /* API, TLS, bounded AirPlay buffers and worker stacks share this budget.
-     * The 16 MiB budget still requires concurrent-playback validation on hardware.
-     * Full music downloads remain cached on SD rather than retained in memory. */
-    static char heap[16*1024*1024];
-    extern char* fake_heap_start;
-    extern char* fake_heap_end;
-    fake_heap_start=heap; fake_heap_end=heap+sizeof(heap);
-}
-void __appInit(void) {
-    check(smInitialize());
-    if (!hosversionGet()) {
-        check(setsysInitialize());
-        SetSysFirmwareVersion firmware{};
-        check(setsysGetFirmwareVersion(&firmware));
-        hosversionSet(MAKEHOSVERSION(firmware.major,firmware.minor,firmware.micro));
-        setsysExit();
-    }
-    check(timeInitialize());
-    // This process overrides the default libnx startup. Initialize realtime
-    // explicitly so TLS certificate dates and signed API timestamps are valid.
-    __libnx_init_time();
-    check(fsInitialize()); check(fsdevMountSdmc());
-    socketResult=socketInitialize(&Sockets);
-}
-void __appExit(void) {
-    curl_global_cleanup();
-    if (R_SUCCEEDED(socketResult)) socketExit();
-    fsdevUnmountDevice("sdmc"); fsExit(); timeExit(); smExit();
-}
-}
-int main(int,char**) {
-    mkdir("sdmc:/config",0755); mkdir(NCM_CONFIG_DIRECTORY,0755);
-    check(socketResult);
-    if (curl_global_init(CURL_GLOBAL_DEFAULT)) return 1;
-    auto engine=std::make_unique<netease::playback::Runtime>(
-        netease::playback::EngineConfig{NCM_CONFIG_DIRECTORY,NCM_CONFIG_DIRECTORY "/cacert.pem"});
-    if (!engine->start()) return 1;
+namespace {
+struct CurlLifetime {
+    CURLcode result = curl_global_init(CURL_GLOBAL_DEFAULT);
+    ~CurlLifetime() { if (result == CURLE_OK) curl_global_cleanup(); }
+};
+int run() {
+    if (R_FAILED(ncmStartupResult())) return 1;
+    CurlLifetime curl;
+    ncmStartupRecord("curl", static_cast<Result>(curl.result));
+    if (curl.result != CURLE_OK) return 1;
+    auto engine = std::make_unique<netease::playback::Runtime>(
+        netease::playback::EngineConfig{NCM_CONFIG_DIRECTORY, NCM_CONFIG_DIRECTORY "/cacert.pem"});
+    const bool started = engine->start();
+    ncmStartupRecord("runtime", started ? 0 : MAKERESULT(Module_Libnx, LibnxError_IoError));
+    if (!started) return 1;
     NcmIpcServer server{};
-    check(ncmIpcServerInitialize(&server,NCM_SERVICE_NAME,8));
-    FILE* ready=std::fopen(NCM_CONFIG_DIRECTORY "/background-ready.log","w");
-    if (ready) { std::fputs("CloudTune NX background ready; protocol 1\n",ready); std::fclose(ready); }
+    Result result = ncmIpcServerInitialize(&server, NCM_SERVICE_NAME, 8);
+    ncmStartupRecord("ipc-register", result);
+    if (R_FAILED(result)) return 1;
+    FILE* ready = std::fopen(NCM_CONFIG_DIRECTORY "/background-ready.log", "w");
+    if (ready) { std::fputs("CloudTune NX background ready; protocol 1\n", ready); std::fclose(ready); }
+    ncmStartupRecord("ready", 0);
     while (true) {
-        Result rc=ncmIpcServerProcess(&server,dispatch,engine.get());
-        if (R_FAILED(rc) && rc!=KERNELRESULT(ConnectionClosed)) svcSleepThread(10000000);
+        Result rc = ncmIpcServerProcess(&server, dispatch, engine.get());
+        if (R_FAILED(rc) && rc != KERNELRESULT(ConnectionClosed)) svcSleepThread(10000000);
     }
+}
+}
+int main(int, char**) {
+    try { return run(); }
+    catch (const std::bad_alloc&) {
+        ncmStartupRecord("runtime-allocation", MAKERESULT(Module_Libnx, LibnxError_OutOfMemory));
+    } catch (...) {
+        ncmStartupRecord("runtime-exception", MAKERESULT(Module_Libnx, LibnxError_IoError));
+    }
+    return 1;
 }

@@ -1,0 +1,2 @@
+# Unified-diff blank context lines intentionally contain a single space.
+airplay/vendor/ffmpeg-small-transforms.patch -whitespace

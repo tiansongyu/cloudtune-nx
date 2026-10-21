@@ -641,3 +641,34 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - Prepared v0.2.6 with public/private asset separation. See
   `docs/design/cloudtune-nx/content-safety-v0.2.6.md` for evidence and remaining
   audit items; audio/network/service implementation and IPC are unchanged.
+
+## Background boot safety (2026-10-21)
+
+- Investigated the report that NRO-only works while the full SD installation
+  prevents boot. No physical crash report/firmware details were available yet;
+  do not equate the findings below with a confirmed device-specific root cause.
+- The old package enabled boot2 by default, used applet pool 1 and linked roughly
+  35 MiB of static image memory. The 16 MiB heap was only part of that footprint:
+  unused large FFT tables added almost another 16 MiB. Atmosphere's boot2 aborts
+  on process-launch resource/memory-limit failures before our main can log.
+- Switched to system pool 2 (official sysmodule template), included libnx's linked
+  transfer-memory cleanup SVC, made autostart opt-in, and retained existing NRO
+  on-demand launch. Upgraders must explicitly disable their old boot2.flag.
+- C startup now retains stage diagnostics, cleans only acquired services and
+  returns ordinary failures; main catches runtime-construction exceptions.
+  Failed stages before mounting SD can only reach debug output. Startup tests
+  inject every service failure with both firmware paths and unavailable logging.
+- A packaged, cache-keyed FFmpeg source patch removes transforms above 32768 and
+  checks every recursive initialization entry. FFT output and rejected bounds,
+  existing AAC reference PCM, ALAC and all playback regression tests pass.
+  Static ELF footprint is now about 19.1 MiB (16 MiB heap retained). Packaging
+  enforces system pool, <=22 MiB static memory and no default boot2 flag.
+- Local complete CTest: 28/28, 102.58 s; all three Switch components built.
+  Generated local/throttled HTTPS audio passed; isolated Eden actual NRO
+  startup, recommendations, first-track playback and pause passed. Hardware
+  boot, game coexistence and the reported console still require retest.
+
+Primary references checked:
+- [Atmosphere boot2 launch and memory errors](https://github.com/Atmosphere-NX/Atmosphere/blob/master/libraries/libstratosphere/source/boot2/boot2_api.board.nintendo_nx.cpp)
+- [Official sysmodule memory-pool template](https://github.com/switchbrew/switch-examples/blob/master/templates/sysmodule/sysmodule.json)
+- [libnx 4.12.0 transfer memory cleanup](https://github.com/switchbrew/libnx/blob/v4.12.0/nx/source/kernel/tmem.c)

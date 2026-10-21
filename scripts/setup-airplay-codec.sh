@@ -30,7 +30,9 @@ version="${source_fields[0]}"
 expected="${source_fields[1]}"
 deps="$repo_root/.deps"
 archive="$deps/downloads/${source_fields[2]}"
-source_dir="$deps/src/ffmpeg-$version"
+patch_file="$repo_root/airplay/vendor/ffmpeg-small-transforms.patch"
+patch_hash="$(sha256sum "$patch_file" | cut -d' ' -f1)"
+source_dir="$deps/src/ffmpeg-$version-$patch_hash"
 prefix="$deps/ffmpeg-$platform"
 build_dir="$deps/build/ffmpeg-$platform"
 mkdir -p "$deps/downloads" "$deps/src" "$build_dir"
@@ -44,8 +46,11 @@ if [[ ! -f "$archive" ]]; then
     mv "$archive.part" "$archive"
 fi
 printf '%s  %s\n' "$expected" "$archive" | sha256sum --check
-if [[ ! -f "$source_dir/configure" ]]; then
-    tar -xJf "$archive" -C "$deps/src"
+if [[ ! -f "$source_dir/.cloudtune-patched" ]]; then
+    mkdir -p "$source_dir"
+    tar -xJf "$archive" --strip-components=1 -C "$source_dir"
+    patch --batch --fuzz=0 -d "$source_dir" -p1 < "$patch_file"
+    touch "$source_dir/.cloudtune-patched"
 fi
 flags=(
     "--prefix=$prefix" --disable-autodetect --disable-everything "--enable-decoder=alac,aac"
@@ -73,7 +78,7 @@ else
 fi
 # A relocated checkout, changed recipe or compiler deliberately invalidates the
 # cache, so a stale static library cannot silently enter a release build.
-recipe="$(cat "$repo_root/scripts/setup-airplay-codec.sh" "$manifest" | sha256sum | cut -d' ' -f1)"
+recipe="$(cat "$repo_root/scripts/setup-airplay-codec.sh" "$manifest" "$patch_file" | sha256sum | cut -d' ' -f1)"
 identity="$(printf '%s\n' "$expected" "$recipe" "$prefix" "${flags[@]}" "$("$compiler" --version)" |
     sha256sum | cut -d' ' -f1)"
 if [[ -f "$prefix/.cloudtune-codec-build" &&

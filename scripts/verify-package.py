@@ -19,7 +19,6 @@ SD_FILES = {
     "switch/.overlays/CloudTune.ovl",
     f"atmosphere/contents/{TITLE_ID}/exefs.nsp",
     f"atmosphere/contents/{TITLE_ID}/toolbox.json",
-    f"atmosphere/contents/{TITLE_ID}/flags/boot2.flag",
     "config/netease-switch/cacert.pem",
 }
 COMPONENT_PATHS = {
@@ -31,6 +30,7 @@ COMPONENT_PATHS = {
 FORBIDDEN_PARTS = {".runtime", ".git", "cookies.txt", "cookies.txt.bak", "settings.json",
                    "accounts.json", "accounts.json.bak", "accounts.json.tmp", "accounts.json.new",
                    "queue.nsq", "queue.nsq.bak", "userdata", "credentials", ".env"}
+FFMPEG_PATCH = "airplay/vendor/ffmpeg-small-transforms.patch"
 FFMPEG_MANIFEST = "airplay/vendor/ffmpeg-source.json"
 FFMPEG_LICENSES = ("COPYING.LGPLv2.1", "COPYING.LGPLv3", "LICENSE.md")
 SHAIRPORT_FILES = ("airplay/vendor/SHAIRPORT-LICENSE", "airplay/vendor/shairport_rsa_key.h")
@@ -90,6 +90,7 @@ def validate_third_party_inputs(root):
     source = ffmpeg_source(manifest_path.read_bytes())
     paths = {
         FFMPEG_MANIFEST: manifest_path,
+        FFMPEG_PATCH: root / FFMPEG_PATCH,
         "scripts/setup-airplay-codec.sh": root / "scripts/setup-airplay-codec.sh",
         source["archive"]: root / ".deps/downloads" / source["archive"],
         **{name: root / name for name in SHAIRPORT_FILES},
@@ -114,6 +115,7 @@ def verify_third_party_docs(archive, files):
     required = {
         prefix + "README.md",
         prefix + FFMPEG_MANIFEST,
+        prefix + FFMPEG_PATCH,
         prefix + "scripts/setup-airplay-codec.sh",
         prefix + source["archive"],
         *(prefix + name for name in SHAIRPORT_FILES),
@@ -203,6 +205,22 @@ def elf_build_id(data):
     raise ValueError("ELF lacks GNU build ID")
 
 
+def elf_static_memory(data):
+    """Page-rounded PT_LOAD memory, including zero-filled BSS (not ZIP size)."""
+    table = unpack("<Q", data, 32)[0]
+    entry_size, count = unpack("<HH", data, 54)
+    require(entry_size >= 56 and count > 0, "ELF lacks program headers")
+    require(table + entry_size * count <= len(data), "Truncated ELF program headers")
+    size = 0
+    for index in range(count):
+        offset = table + index * entry_size
+        if unpack("<I", data, offset)[0] == 1:  # PT_LOAD
+            memory = unpack("<Q", data, offset + 40)[0]
+            size += (memory + 0xfff) & ~0xfff
+    require(size > 0, "ELF lacks loadable memory")
+    return size
+
+
 def nro_version(data):
     require(data[16:20] == b"NRO0", "Invalid NRO/overlay header")
     asset = unpack("<I", data, 24)[0]
@@ -242,6 +260,8 @@ def background_nso(package):
     program = unpack("<Q", npdm, aci + 0x10)[0]
     lo, hi = unpack("<QQ", npdm, acid + 0x210)
     require(program == lo == hi == int(TITLE_ID, 16), "Incorrect background program ID")
+    flags = unpack("<I", npdm, acid + 0x20c)[0]
+    require((flags >> 2) & 3 == 2, "Background must use the system memory pool")
     return entries["main"]
 
 
@@ -254,6 +274,9 @@ def validate_components(binaries, symbols, version):
         if component != "background":
             require(nro_version(binary) == version,
                     f"{component} NACP version does not match {version}")
+        else:
+            require(elf_static_memory(elf) <= 22 * 1024 * 1024,
+                    "Background static memory exceeds 22 MiB; inspect codec tables and BSS")
         require(image[64:96] == build_id.ljust(32, b"\0"),
                 f"{component} ELF build ID does not match the packaged binary")
         result[component] = {"build_id": build_id.hex(), "version": version,
@@ -380,8 +403,6 @@ def verify_package(directory, version=None, commit=None, require_release=True):
             zipfile.ZipFile(directory / names["symbols"]) as debug:
         for key, (binary_path, elf_path) in COMPONENT_PATHS.items():
             binaries[key], symbols[key] = sd.read(binary_path), debug.read(elf_path)
-        require(sd.read(f"atmosphere/contents/{TITLE_ID}/flags/boot2.flag") == b"",
-                "boot2.flag must be empty")
         toolbox = json.loads(sd.read(f"atmosphere/contents/{TITLE_ID}/toolbox.json"))
         require(toolbox.get("name") == "CloudTune NX" and toolbox.get("tid") == TITLE_ID,
                 "Unexpected toolbox product/program ID")

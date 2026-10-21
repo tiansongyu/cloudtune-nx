@@ -134,9 +134,6 @@ try:
         copy(paths[component][1], stage / elf_path)
     title = verifier.TITLE_ID
     copy(root / "background/toolbox.json", sd / f"atmosphere/contents/{title}/toolbox.json")
-    flag = sd / f"atmosphere/contents/{title}/flags/boot2.flag"
-    flag.parent.mkdir(parents=True)
-    flag.write_bytes(b"")
     copy(root / "resources/certs/cacert.pem", sd / "config/netease-switch/cacert.pem")
     for source, target in (
         (build / "CloudTune.map", symbols / "app/CloudTune.map"),
@@ -190,11 +187,11 @@ try:
         f"- [Complete project source at this commit](https://github.com/tiansongyu/cloudtune-nx/tree/{commit})\n"
         f"- [Download the project source](https://github.com/tiansongyu/cloudtune-nx/archive/{commit}.tar.gz)\n"
         "- The unmodified FFmpeg release archive, exact version/SHA256 manifest, "
-        "and limited AAC / ALAC build recipe are included in this directory.\n"
+        "the small-transform patch, and the AAC / ALAC build recipe are included here.\n"
         "- From this directory, run `bash scripts/setup-airplay-codec.sh host` "
         "or `bash scripts/setup-airplay-codec.sh switch` with devkitA64/libnx installed. "
         "The recipe uses the bundled archive without downloading it; host builds need "
-        "a C compiler, GNU Make, Python 3 and tar/xz. The main project Dockerfile "
+        "a C compiler, GNU Make, Python 3, patch and tar/xz. The main project Dockerfile "
         "and build instructions are available in the project source and packaged docs.\n"
         "- Upstream FFmpeg licenses are in `../licenses/ffmpeg/` and inside the archive.\n"
         "- Shairport's retained RSA protocol-material header and upstream notice are "

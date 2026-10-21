@@ -92,3 +92,12 @@ top-level license.
 
 The application and service use GPL-3.0-or-later. The independently loaded
 overlay uses GPL-2.0-only and communicates through the GPL-2.0-or-later C ABI.
+
+### CloudTune FFmpeg transform budget (v0.2.7)
+
+The pinned FFmpeg archive is retained unmodified. The reproducible build applies
+`airplay/vendor/ffmpeg-small-transforms.patch` to cap transforms at 32768 samples,
+reject larger/invalid requests before table selection, and omit larger static
+FFT tables. AAC/ALAC decoding remains enabled. The patch and build recipe ship
+with the corresponding-source archive in `-docs.zip`; the recipe hash includes
+the patch. This is a CloudTune modification, not an upstream FFmpeg release.

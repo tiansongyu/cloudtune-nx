@@ -179,8 +179,7 @@ request handling or session cleanup.
 SD card/
 ├── atmosphere/contents/42000000004E434D/
 │   ├── exefs.nsp                 # renamed cloudtune-background.nsp
-│   ├── toolbox.json
-│   └── flags/boot2.flag          # empty file enables boot startup
+│   └── toolbox.json             # boot2.flag is opt-in; not included since v0.2.7
 ├── switch/.overlays/CloudTune.ovl
 └── config/netease-switch/
     └── cacert.pem

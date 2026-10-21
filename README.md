@@ -8,17 +8,17 @@
   <a href="https://github.com/tiansongyu/cloudtune-nx/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/tiansongyu/cloudtune-nx?label=release"></a>
 </p>
 
-**v0.2.6** · 修复切页失败和列表刷新时的误播，保留焦点、封面及首次播放修复、20 秒黑胶旋转与双分辨率适配；支持扫码登录、多账号、黑胶播放器、AirPlay 1 和独立后台服务。
+**v0.2.7** · 后台默认按需启动，降低静态内存占用并增加启动失败保护；保留此前的列表、焦点、封面和播放修复。支持扫码登录、多账号、黑胶播放器、AirPlay 1 和独立后台服务。
 Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[验证记录](docs/VALIDATION.md)。
 
 ## 下载
 
-**[下载 v0.2.6 SD 卡安装包](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.6/CloudTuneNX-0.2.6-sd.zip)**
+**[下载 v0.2.7 SD 卡安装包](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.7/CloudTuneNX-0.2.7-sd.zip)**
 
-[发布说明与全部附件](https://github.com/tiansongyu/cloudtune-nx/releases/tag/v0.2.6) ·
-[SHA-256 校验文件](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.6/SHA256SUMS)
+[发布说明与全部附件](https://github.com/tiansongyu/cloudtune-nx/releases/tag/v0.2.7) ·
+[SHA-256 校验文件](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.7/SHA256SUMS)
 
-安装请选择 `CloudTuneNX-0.2.6-sd.zip`；GitHub 的 Source code 压缩包不含可运行程序。
+安装请选择 `CloudTuneNX-0.2.7-sd.zip`；GitHub 的 Source code 压缩包不含可运行程序。
 `-symbols.zip` 用于崩溃排查，`-docs.zip` 用于离线阅读，无需复制到 SD 卡。
 
 <p align="center">
@@ -51,7 +51,7 @@ Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[�
 
 1. 下载 SD 卡安装包和 `SHA256SUMS`，校验安装包完整性。已有安装时先备份数据目录。
 2. 将 **SD 卡包中的内容复制到 SD 卡根目录**，合并 `switch/`、`atmosphere/`、`config/`。
-3. 重启主机，让 Atmosphère 加载后台服务。
+3. 旧版升级先移除 `atmosphere/contents/42000000004E434D/flags/boot2.flag`，再重启主机。新版安装包默认不启用开机自启，打开 NRO 时按需启动后台。
 4. 按住 **R** 启动一个游戏进入 Homebrew Menu，以完整应用内存打开 **CloudTune NX**。
 5. 进入「我的账号」扫码并在手机上确认，再从「我的音乐」选择歌曲，确认播放与进度正常。
 
@@ -61,13 +61,15 @@ Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[�
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-确认输出包含 `CloudTuneNX-0.2.6-sd.zip: OK`。其他系统可使用支持 SHA-256 的校验工具。
+确认输出包含 `CloudTuneNX-0.2.7-sd.zip: OK`。其他系统可使用支持 SHA-256 的校验工具。
 
 播放栏显示 **「BGM · 后台服务」** 后，才可退出 NRO 并打开游戏。
 通过覆盖层加载器打开 **CloudTune NX** 即可继续控制播放。
 若显示「前台播放」，退出应用会停止音频；覆盖层本身不提供后台服务。
 
 **更新时保留 `config/netease-switch/` 中的账号、设置和缓存。**
+**如果复制旧版完整包后无法开机**，先将上述 `boot2.flag` 改名为 `boot2.flag.disabled`，再尝试开机。覆盖新版 ZIP 不会自动删除旧标志文件。详见[开机崩溃恢复](docs/INSTALLING.md#recover-a-console-that-crashes-during-boot)。
+
 每次同步更新客户端 `CloudTune.nro`、后台服务 `exefs.nsp` 和覆盖层 `CloudTune.ovl`，然后重启。
 完整安装路径、启动方式与排错见[安装指南](docs/INSTALLING.md)。
 

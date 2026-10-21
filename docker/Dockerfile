@@ -9,7 +9,7 @@ LABEL org.opencontainers.image.source="https://github.com/tiansongyu/cloudtune-n
 # crypto and audio stack. Verify requirements without an unpinned system upgrade.
 RUN dkp-pacman -Q devkitA64 libnx switch-cmake switch-curl \
     switch-mbedtls switch-zlib switch-mesa switch-glfw switch-glm \
-    && command -v cmake && command -v ninja && command -v elf2nro
+    && command -v cmake && command -v ninja && command -v elf2nro && command -v patch
 
 ENV DEVKITPRO=/opt/devkitpro
 ENV DEVKITA64=/opt/devkitpro/devkitA64
