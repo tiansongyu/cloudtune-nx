@@ -93,6 +93,20 @@ Keep it installed even though the NRO also embeds its own bundle.
 
 ## Recover a console that crashes during boot
 
+The supplied physical-console fatal report identified Atmosphere boot2
+(`0100000000000008`) aborting after the CloudTune launch request returned
+kernel `0x10801` (`LimitReached`). v0.2.9 removes the 16 MiB static playback
+heap from the loadable image. The image now needs about 3.4 MiB to load; its
+kernel heap starts at 2 MiB and grows on demand up to the previous 16 MiB cap.
+This addresses the large load-time memory reservation. The report does not
+identify which resource was exhausted or enumerate other installed modules;
+it is not a guarantee that every module combination will fit.
+
+Update `exefs.nsp`, not just the NRO, before retesting autostart. Once the
+new module is installed, an empty
+`atmosphere/contents/42000000004E434D/flags/boot2.flag` opts into boot startup.
+The standard public archive still leaves that choice to the user.
+
 1. Power the console off and access its SD card from a computer.
 2. Rename `sd:/atmosphere/contents/42000000004E434D/flags/boot2.flag` to
    `boot2.flag.disabled`. This disables only CloudTune automatic startup.
@@ -118,6 +132,11 @@ removed after SD mount and recreated only after IPC registration succeeds.
 Report the **error code and Program ID**, firmware/Atmosphère versions and
 matching `atmosphere/fatal_errors/` or `atmosphere/crash_reports/` report if present.
 Do not share the entire config directory (it contains login state).
+
+v0.2.9 also records `heap-initial`, `heap-last-result`, and
+`heap-committed-bytes` (hexadecimal bytes, not an error code). Initial heap
+denial is logged and prevents runtime creation. A ready marker should still
+be checked against a live connection; it can remain after an abnormal exit.
 
 ## Recover foreground audio cache errors
 

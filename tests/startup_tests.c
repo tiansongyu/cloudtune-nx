@@ -8,9 +8,8 @@
 #include <unistd.h>
 
 static unsigned stage, fail_at, acquired, released, time_setup;
-static bool known_version;
+static bool known_version, heap_failed;
 static char diagnostics[2048];
-char *fake_heap_start, *fake_heap_end;
 static void check(bool ok, const char *message) {
     if (!ok) {
         fprintf(stderr, "FAIL: %s\n", message);
@@ -88,20 +87,29 @@ Result svcOutputDebugString(const char *text, size_t size) {
     strncat(diagnostics, text, size);
     return 0;
 }
+Result ncmHeapStartupResult(void) {
+    return heap_failed ? 0x10801 : 0;
+}
 #include "../background/source/startup.c"
 
-static void scenario(unsigned failure, bool version, bool writable) {
+static void scenario(unsigned failure, bool version, bool writable, bool heap_failure) {
     fail_at = failure;
     known_version = version;
+    heap_failed = heap_failure;
     char directory[] = "/tmp/cloudtune-startup-XXXXXX";
     check(mkdtemp(directory) && chdir(directory) == 0, "Temporary directory failed");
     if (writable)
         mkdir("sdmc:", 0755);
-    __libnx_initheap();
-    check(fake_heap_end - fake_heap_start == 16 * 1024 * 1024, "Heap budget changed");
     __appInit();
-    check(ncmStartupResult() == (failure ? 0x1234 : 0), "Startup error lost");
-    check(stage == (failure ? failure : version ? 5 : 7), "Startup continued after failure");
+    check(ncmStartupResult() == (failure        ? 0x1234
+                                 : heap_failure ? 0x10801
+                                                : 0),
+          "Startup error lost");
+    check(stage == (failure        ? failure
+                    : heap_failure ? (version ? 3 : 5)
+                    : version      ? 5
+                                   : 7),
+          "Startup continued after failure");
     check(time_setup == ((acquired & 16) ? 1u : 0u), "Realtime initialization missing");
     check(strstr(diagnostics, "0x00001234") != NULL || !failure, "Failed stage not diagnosed");
     if (writable && (acquired & 8)) {
@@ -112,6 +120,8 @@ static void scenario(unsigned failure, bool version, bool writable) {
         fclose(log);
         check(strstr(contents, "sm: 0x00000000") != NULL, "Early diagnostics missing");
         check(!failure || strstr(contents, "0x00001234"), "Failure missing from SD log");
+        check(!heap_failure || strstr(contents, "heap-initial: 0x00010801"),
+              "Heap failure missing from SD log");
     }
     __appExit();
     check(acquired == released, "Startup leaked a resource");
@@ -126,11 +136,12 @@ static void scenario(unsigned failure, bool version, bool writable) {
 int main(void) {
     for (unsigned version = 0; version < 2; ++version)
         for (unsigned writable = 0; writable < 2; ++writable)
-            for (unsigned failure = 0; failure <= (version ? 5u : 7u); ++failure) {
+            for (unsigned failure = 0; failure <= (version ? 6u : 8u); ++failure) {
                 pid_t child = fork();
                 check(child >= 0, "fork failed");
                 if (!child) {
-                    scenario(failure, version, writable);
+                    const bool heap_failure = failure == (version ? 6u : 8u);
+                    scenario(heap_failure ? 0 : failure, version, writable, heap_failure);
                     _exit(0);
                 }
                 int status;

@@ -275,8 +275,8 @@ def validate_components(binaries, symbols, version):
             require(nro_version(binary) == version,
                     f"{component} NACP version does not match {version}")
         else:
-            require(elf_static_memory(elf) <= 22 * 1024 * 1024,
-                    "Background static memory exceeds 22 MiB; inspect codec tables and BSS")
+            require(elf_static_memory(elf) <= 4 * 1024 * 1024,
+                    "Background static memory exceeds 4 MiB; do not embed the playback heap in BSS")
         require(image[64:96] == build_id.ljust(32, b"\0"),
                 f"{component} ELF build ID does not match the packaged binary")
         result[component] = {"build_id": build_id.hex(), "version": version,

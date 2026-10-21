@@ -697,3 +697,28 @@ Primary references checked:
 - v0.2.7's no-boot-flag packaging remains: launch the NRO once per boot to
   start the installed background service. Public packages exclude photos;
   private photo artifacts and test profiles remain local and ignored.
+
+## 2026-10-21 · v0.2.9 boot2 resource-limit repair
+
+- The supplied physical AFE2 dump now confirms boot2 `0100000000000008`
+  aborted after a CloudTune launch returned kernel `0x10801` (LimitReached).
+  It does not identify the exact exhausted resource or installed app build.
+- Remove the 16 MiB inner heap from the loadable BSS. Use a 2 MiB initial
+  kernel heap with bounded 2 MiB growth through newlib's weak sbrk override;
+  preserve the previous 16 MiB cap. Failed growth returns ENOMEM without
+  advancing the break or invalidating allocations. A 256 KiB emergency heap
+  allows startup logging/exit if the first request fails.
+- ELF static load drops from 20,045,824 to 3,530,752 bytes. Packaging now limits
+  that image to 4 MiB. No audio, network, account or IPC behavior was changed.
+- Full host CTest 30/30 and generated local/HTTPS playback passed. Heap/startup
+  injection, bounds and concurrency tests, focused ASan/UBSan, all three Switch
+  builds, actual background NSP startup and the native newlib heap probe passed.
+  The native probe injects quota refusal at the kernel wrapper, checks live
+  memory preservation, then successfully grows to 8 MiB after recovery.
+- The final production NSP received 300 encrypted ALAC packets; real engine
+  diagnostics show non-zero PCM and successful emulated audout. AirPlay volume,
+  FLUSH and TEARDOWN completed. This supplements NRO-only testing without
+  claiming hardware boot/resource validation.
+- Keep public autostart opt-in; provide the user a separate local repair ZIP
+  containing the corrected service and requested boot2 flag. Hardware boot,
+  installed-module coexistence and live Ultrahand must still be retested.

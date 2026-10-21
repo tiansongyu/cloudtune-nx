@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "startup.h"
+#include "heap.h"
 #include "netease/playback_protocol.h"
 #include <stdio.h>
 #include <string.h>
@@ -26,16 +27,6 @@ static bool sm_ready, fs_ready, sd_ready, time_ready, sockets_ready;
  * for libnx/stdio, and retain early diagnostics until SD becomes available. */
 static char early_log[1024];
 static size_t early_size;
-
-void __libnx_initheap(void) {
-    /* Runtime allocations and worker stacks share 16 MiB. The package verifier
-     * also bounds the image's entire static footprint, including codec BSS. */
-    static char heap[16 * 1024 * 1024];
-    extern char *fake_heap_start;
-    extern char *fake_heap_end;
-    fake_heap_start = heap;
-    fake_heap_end = heap + sizeof(heap);
-}
 
 void ncmStartupRecord(const char *stage, Result result) {
     char line[160];
@@ -96,6 +87,8 @@ void __appInit(void) {
     }
     /* A ready marker belongs to this process, never to an older successful run. */
     remove(NCM_CONFIG_DIRECTORY "/background-ready.log");
+    if (!initialized("heap-initial", ncmHeapStartupResult(), NULL))
+        return;
     if (!initialized("time", timeInitialize(), &time_ready))
         return;
     __libnx_init_time();

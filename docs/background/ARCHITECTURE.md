@@ -12,7 +12,18 @@ The background service uses program ID `42000000004E434D` and service name
 `ncm:bg`. Its program ID must not be shared with another installed system module.
 These identifiers and `config/netease-switch/` deliberately remain stable
 across the CloudTune NX rename to preserve installed services and sessions.
-It allocates a fixed 16 MiB heap, opens three BSD sessions, and opens `audout:u`
+Since v0.2.9 it commits 2 MiB of kernel heap initially, growing in 2 MiB steps
+as newlib requests memory, with the existing 16 MiB maximum. The heap is no
+longer embedded in BSS: loading the module reserves about 3.4 MiB instead of
+19.1 MiB. This matters because Atmosphere boot2 aborts on process-launch
+resource-limit failures before application startup can handle them. Kernel
+heap-growth failures instead return `ENOMEM` without changing live allocations.
+Logical heap shrink retains committed pages that libnx may have mapped as
+worker stacks or transfer buffers. A 256 KiB emergency heap permits startup
+diagnostics and ordinary exit if the initial kernel allocation fails; the
+playback runtime is not started on that fallback.
+
+It opens three BSD sessions and opens `audout:u`
 only when there is a playable track. Audio is 48 kHz, signed 16-bit stereo;
 other source rates are linearly resampled, mono is expanded and multichannel
 input is mixed to stereo. High-resolution source support does not imply
@@ -157,7 +168,7 @@ These limits do not change the requested music quality or sample-rate support,
 and the FFmpeg ceiling is not a total-process memory limit. Cache eviction
 keeps only 256 candidates at a time. A C++ allocation failure releases the
 active track and queue file, reports an error and leaves the worker available
-for another selection rather than terminating it. The 16 MiB service heap and
+for another selection rather than terminating it. The 16 MiB service heap cap and
 real peak resident memory still require hardware measurements.
 
 Each track owns a fresh audio output session. Seek discards the old session and

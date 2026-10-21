@@ -8,6 +8,58 @@ retained as historical evidence; current filenames and commands are documented
 in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
 hardware or emulator validation.
 
+## Physical boot2 resource-limit report — v0.2.9, 2026-10-21
+
+The supplied 0x450-byte AFE2 report identifies program `0100000000000008`
+(boot2), error description `0xFFE` (std::abort), PC offset `0xA274`, and a
+saved CMIF `SFCO` reply containing kernel result `0x10801` (LimitReached).
+The saved launch context contains CloudTune program `42000000004E434D`.
+The encoded environment is Atmosphere 1.9.4 / HOS 20.4.0. Atmosphere's boot2
+implementation explicitly aborts on this launch result. No user report,
+photograph, account data or full stack dump is committed.
+
+This confirms a process-launch resource-limit failure, not an audio decode or
+overlay drawing exception. It does not establish which resource counter was
+exhausted or identify the user's installed CloudTune binary. The previous
+v0.2.8 ELF requires 20,045,824 bytes of page-rounded PT_LOAD memory; v0.2.9
+requires 3,530,752 bytes. The removed 16 MiB static heap is replaced by an
+initial 2 MiB kernel heap, growing in 2 MiB increments up to 16 MiB. Packaging
+now rejects background images larger than 4 MiB.
+
+Local full CTest passed 30/30 (133.75 seconds), plus independent XEAPI and
+generated local/throttled HTTPS playback. The focused heap/startup tests and
+heap ASan/UBSan run passed after the final test adjustment. The heap test
+injects the report's exact `0x10801` on growth and verifies ENOMEM, unchanged
+live data, successful recovery, concurrent non-overlapping allocation,
+overflow/underflow rejection, peak cap, and initial-failure emergency logging.
+
+All three Switch components build. The actual background NSP reaches runtime
+startup and SM registration in an isolated Eden profile with a 2 MiB committed
+heap. An optional native `ncm-switch-heap-probe` links production heap/startup
+code and real newlib, wrapping only the kernel allocation call to inject a
+quota denial. All seven assertions pass: 2 MiB initial heap, growth to 4 MiB,
+ENOMEM on rejection, data preservation, recovery/growth to 8 MiB, aligned
+buffers, and bounded peak. The probe logs PASS before calling ExitProcess;
+Eden then incorrectly continues into libnx's unreachable UDF. This emulator
+exit behavior is not counted as a physical-console shutdown validation.
+
+The final production NSP also accepted 300 encrypted ALAC packets from the
+independent Python sender. OPTIONS/ANNOUNCE/SETUP/RECORD, volume, FLUSH and
+TEARDOWN succeeded; the audio diagnostic recorded `airplay-first-pcm`, a
+non-zero PCM range and `audout=00000000`. This checks the background binary,
+not just the foreground NRO, but still uses emulated audio services.
+
+Physical boot2 with the user's other modules, live Ultrahand connection and
+game coexistence still require retest. The emulator does not reproduce the
+console's shared system resource budget. Keep the matching fatal report and
+ELF if a new failure occurs; memory reduction does not guarantee that an
+arbitrary set of third-party modules will fit.
+
+Primary references:
+- [Atmosphere 1.9.4 fatal context](https://github.com/Atmosphere-NX/Atmosphere/blob/1.9.4/libraries/libvapours/include/vapours/ams/ams_fatal_error_context.hpp)
+- [Kernel result definitions](https://github.com/Atmosphere-NX/Atmosphere/blob/1.9.4/libraries/libvapours/include/vapours/results/svc_results.hpp)
+- [Boot2 launch failure handling](https://github.com/Atmosphere-NX/Atmosphere/blob/1.9.4/libraries/libstratosphere/source/boot2/boot2_api.board.nintendo_nx.cpp)
+
 ## SD audio cache concurrency — v0.2.8, 2026-10-21
 
 The user reported immediate foreground playback failures on a physical Switch:

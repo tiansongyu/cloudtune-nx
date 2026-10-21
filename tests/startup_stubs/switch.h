@@ -5,6 +5,7 @@
 #include <stdint.h>
 typedef uint32_t Result;
 typedef uint32_t u32;
+typedef unsigned Mutex;
 #define R_FAILED(r) ((r) != 0)
 #define MAKEHOSVERSION(a, b, c) (((a) << 16) | ((b) << 8) | (c))
 enum { AppletType_None, BsdServiceType_User };
@@ -32,3 +33,6 @@ void timeExit(void);
 Result socketInitialize(const SocketInitConfig *config);
 void socketExit(void);
 Result svcOutputDebugString(const char *text, size_t size);
+Result svcSetHeapSize(void **address, size_t size);
+void mutexLock(Mutex *mutex);
+void mutexUnlock(Mutex *mutex);

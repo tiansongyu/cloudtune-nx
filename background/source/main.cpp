@@ -2,6 +2,7 @@
 #include "../runtime.hpp"
 #include "ipc_server.h"
 #include "startup.h"
+#include "heap.h"
 #include <switch.h>
 #include <curl/curl.h>
 #include <cstdio>
@@ -88,6 +89,8 @@ int run() {
     auto engine = std::make_unique<netease::playback::Runtime>(
         netease::playback::EngineConfig{NCM_CONFIG_DIRECTORY, NCM_CONFIG_DIRECTORY "/cacert.pem"});
     const bool started = engine->start();
+    ncmStartupRecord("heap-last-result", ncmHeapLastResult());
+    ncmStartupRecord("heap-committed-bytes", static_cast<Result>(ncmHeapCommittedSize()));
     ncmStartupRecord("runtime", started ? 0 : MAKERESULT(Module_Libnx, LibnxError_IoError));
     if (!started) return 1;
     NcmIpcServer server{};
@@ -106,6 +109,7 @@ int run() {
 int main(int, char**) {
     try { return run(); }
     catch (const std::bad_alloc&) {
+        ncmStartupRecord("heap-last-result", ncmHeapLastResult());
         ncmStartupRecord("runtime-allocation", MAKERESULT(Module_Libnx, LibnxError_OutOfMemory));
     } catch (...) {
         ncmStartupRecord("runtime-exception", MAKERESULT(Module_Libnx, LibnxError_IoError));
