@@ -8,17 +8,17 @@
   <a href="https://github.com/tiansongyu/cloudtune-nx/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/tiansongyu/cloudtune-nx?label=release"></a>
 </p>
 
-**v0.2.3** · 修复每日推荐与私人 FM 的列表遮挡，保留手柄焦点与双分辨率适配；支持扫码登录、多账号、黑胶播放器、AirPlay 1 和独立后台服务。
+**v0.2.4** · 黑胶动画调整为 20 秒一圈，保留每日推荐布局修复、手柄焦点与双分辨率适配；支持扫码登录、多账号、黑胶播放器、AirPlay 1 和独立后台服务。
 Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[验证记录](docs/VALIDATION.md)。
 
 ## 下载
 
-**[下载 v0.2.3 SD 卡安装包](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.3/CloudTuneNX-0.2.3-sd.zip)**
+**[下载 v0.2.4 SD 卡安装包](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.4/CloudTuneNX-0.2.4-sd.zip)**
 
-[发布说明与全部附件](https://github.com/tiansongyu/cloudtune-nx/releases/tag/v0.2.3) ·
-[SHA-256 校验文件](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.3/SHA256SUMS)
+[发布说明与全部附件](https://github.com/tiansongyu/cloudtune-nx/releases/tag/v0.2.4) ·
+[SHA-256 校验文件](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.4/SHA256SUMS)
 
-安装请选择 `CloudTuneNX-0.2.3-sd.zip`；GitHub 的 Source code 压缩包不含可运行程序。
+安装请选择 `CloudTuneNX-0.2.4-sd.zip`；GitHub 的 Source code 压缩包不含可运行程序。
 `-symbols.zip` 用于崩溃排查，`-docs.zip` 用于离线阅读，无需复制到 SD 卡。
 
 <p align="center">
@@ -39,7 +39,7 @@ Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[�
 - **界面与手柄**：1280×720 / 1920×1080、白色焦点、返回恢复位置；设置中支持减少动态和 95% / 90% 安全区。
 - **发现与资料库**：搜索、歌单、排行榜、专辑、歌手、电台、每日推荐、私人 FM、收藏与音乐云盘。
 - **二维码与多账号**：用网易云音乐手机 App 扫码；在设置中添加、切换或移除本机保存的账号。
-- **黑胶播放器**：播放时以 33⅓ RPM 旋转，暂停时停转；支持同步歌词、封面、进度跳转、随机和循环。
+- **黑胶播放器**：播放时以 20 秒一圈匀速旋转，暂停时停转；支持同步歌词、封面、进度跳转、随机和循环。
 - **自动识别音频**：支持 MP3、FLAC、AAC（ADTS / M4A），按文件内容选择解码器，支持 HTTPS 流式播放和 SD 缓存。
 - **后台与覆盖层**：独立服务负责音频，Tesla 覆盖层提供游戏内播放控制；服务不可用时可前台播放。
 - **AirPlay 1 接收**：同一局域网的设备可向 Switch 投送音频，无需登录网易云账号。
@@ -61,7 +61,7 @@ Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[�
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-确认输出包含 `CloudTuneNX-0.2.3-sd.zip: OK`。其他系统可使用支持 SHA-256 的校验工具。
+确认输出包含 `CloudTuneNX-0.2.4-sd.zip: OK`。其他系统可使用支持 SHA-256 的校验工具。
 
 播放栏显示 **「BGM · 后台服务」** 后，才可退出 NRO 并打开游戏。
 通过覆盖层加载器打开 **CloudTune NX** 即可继续控制播放。

@@ -578,3 +578,21 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - Prepared v0.2.3 with public screenshots and release notes. Personal artwork
   remains local and excluded from the public package. Evidence and remaining
   hardware limits: `docs/design/cloudtune-nx/daily-layout-v0.2.3.md`.
+
+## Vinyl animation speed calibration (2026-10-21)
+
+- Verified the first-party stylesheet referenced by NetEase's official mobile
+  song sharing page: a linear, 20-second rotation, with paused animation state.
+  Recorded the URL, content hash and scope of that evidence in
+  `docs/design/cloudtune-nx/vinyl-speed-v0.2.4.md`.
+- Changed only the native rotation rate from 1.8 to 20 seconds per revolution.
+  Kept the playback/reduced-motion guards and angle continuity. Updated the
+  design tokens, Web prototype and current UI documentation to match.
+- Existing UI tests passed. Sampled the actual production view at 720p and
+  1080p over 20 seconds; quarter turns and the completed revolution matched
+  the intended speed within screenshot timing precision.
+- Built all three Switch components and booted the actual photo NRO with a
+  fresh, isolated Eden profile. Anonymous FM playback and resume both rotated
+  at approximately 18 degrees/second; the paused disc remained pixel-identical
+  over two seconds. Prepared v0.2.4 without changing audio, network,
+  account or background-service implementation. Personal assets remain local.

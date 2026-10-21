@@ -25,6 +25,8 @@ enum SettingRow {
 };
 constexpr int NavOrder[] = {0, 1, 2, 3, 4, 5, 7, 6};
 constexpr float NavTop[] = {131, 179, 227, 299, 347, 395, 473, 525};
+// NetEase's official mobile song page uses a 20-second linear turn.
+constexpr float FullTurn = 6.2831853f, VinylPeriodSeconds = 20.f;
 ui::Rect nav_rect(int index) {
     return {24, NavTop[index], 160, 40};
 }
@@ -1218,7 +1220,7 @@ void MusicView::vinyl(NVGcontext *v, const Snapshot &s, float x, float y, float 
     nvgSave(v);
     nvgTranslate(v, x, y);
     nvgRotate(v, angle_);
-    // Visible specular sectors and label rotate with the record, at 33 1/3 rpm.
+    // Visible specular sectors and label rotate with the record.
     for (int i = 0; i < 2; ++i) {
         nvgBeginPath(v);
         nvgMoveTo(v, 0, 0);
@@ -1778,7 +1780,7 @@ void MusicView::draw(NVGcontext *v, float x, float y, float w, float h, brls::St
         last_airplay_poll_ = now;
     }
     if (!reduced_motion_ && playback_.state == NcmPlayback_Playing)
-        angle_ = std::fmod(angle_ + dt * 3.4906585f, 6.2831853f);
+        angle_ = std::fmod(angle_ + dt * (FullTurn / VinylPeriodSeconds), FullTurn);
     const float target_arm = playback_.state == NcmPlayback_Playing ? .4f : .08f;
     tonearm_ += (target_arm - tonearm_) * (reduced_motion_ ? 1 : std::min(1.f, dt * 12));
     const auto &s = display_;
