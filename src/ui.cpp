@@ -530,14 +530,16 @@ int MusicView::visible_rows(const Snapshot &s) const {
         return SettingsCount;
     if (s.page == Page::Account)
         return account_rows(s);
-    return grid(s) ? 1 : s.collection ? 5 : 6;
+    return grid(s) ? 1 : ui::list_rows(content_top(s));
 }
 float MusicView::content_top(const Snapshot &s) const {
     if (s.collection)
         return 270;
-    if (grid(s))
-        return s.page == Page::Discover ? 292 : 224;
-    return 210;
+    // Daily recommendations and FM replace cards with songs, but retain the
+    // discovery banner and section heading. Both content types must clear them.
+    if (s.page == Page::Discover)
+        return 292;
+    return grid(s) ? 224 : 210;
 }
 void MusicView::reset_content() {
     selection_ = scroll_ = header_ = 0;
@@ -1470,7 +1472,7 @@ void MusicView::paint_list(NVGcontext *v, const Snapshot &s) {
     }
     const int total = static_cast<int>(s.items.size()) + (s.more ? 1 : 0);
     if (total > visible) {
-        const float height = grid(s) ? 266 : 58 * visible_rows(s) - 8;
+        const float height = grid(s) ? 266 : ui::RowPitch * (visible_rows(s) - 1) + ui::RowHeight;
         const float thumb = std::max(22.f, height * visible / total);
         rect(v, 1256, top, 3, height, raised, 1);
         rect(v, 1256,

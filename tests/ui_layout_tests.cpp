@@ -13,7 +13,8 @@ int main() try {
                             Rect{0, 0, 2560, 1080}}) {
         for (float safe : {1.f, .95f, .9f}) {
             const auto viewport = Viewport::fit(dimensions.w, dimensions.h, safe);
-            for (auto target : {card(3, 292), setting(5), account(2), transport(5, false)}) {
+            for (auto target : {card(3, 292), row(0, 292), row(list_rows(292) - 1, 292), setting(5),
+                                account(2), transport(5, false)}) {
                 const float px = viewport.x + (target.x + target.w / 2) * viewport.scale;
                 const float py = viewport.y + (target.y + target.h / 2) * viewport.scale;
                 require(target.contains(viewport.logical_x(px), viewport.logical_y(py)),
@@ -39,6 +40,14 @@ int main() try {
     require(card(0, 292).y + card(0, 292).h + 7 < MiniTop, "Card focus must clear the mini player");
     require(setting(5).y + setting(5).h + 7 < MiniTop,
             "Last settings focus must clear the mini player");
+    for (const float top : {210.f, 270.f, 292.f}) {
+        const int count = list_rows(top);
+        const auto last = row(count - 1, top), next = row(count, top);
+        require(last.y + last.h + 7 < MiniTop,
+                "All visible song rows and their focus must fit above the player");
+        require(next.y + next.h + 7 >= MiniTop,
+                "List capacity must fill the available space without a clipped extra row");
+    }
     std::cout << "UI layout and navigation boundaries passed\n";
     return 0;
 } catch (const std::exception &e) {

@@ -558,3 +558,23 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
   remain unverified. No diagnostic logging was retained in application code.
 - Updated the v0.2.2 release notes and README. Added Xvfb / xauth to CI so the
   production Borealis controller regression runs in both native and UBSan jobs.
+
+## Discovery song list overlap fix (2026-10-21)
+
+- Reproduced daily recommendations overlapping the retained discovery banner
+  and section heading. FM uses the same song-list state and shared the defect.
+- Kept discovery content below its header and derived song capacity from the
+  available height, including focus clearance above the mini player. Painting,
+  scrolling and touch continue to share the same geometry. No Model, Player,
+  audio, networking or service changes were needed.
+- Added a regression that failed before the fix and passed afterward, covering
+  header boundaries, last-row focus, scrolling to the final song, touch indices
+  and returning to the header. UI tests passed with and without personal assets.
+- Reviewed native 720p and 1080p scenes in both themes and rebuilt all three
+  Switch components. A fresh Eden profile loaded the actual private NRO and
+  displayed an anonymous FM result below the banner after touch activation.
+  Logged-in daily recommendations use production-view fixture coverage; no
+  account credentials were copied into the validation profile.
+- Prepared v0.2.3 with public screenshots and release notes. Personal artwork
+  remains local and excluded from the public package. Evidence and remaining
+  hardware limits: `docs/design/cloudtune-nx/daily-layout-v0.2.3.md`.

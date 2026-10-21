@@ -6,6 +6,7 @@ namespace netease::ui {
 // Every painted control and touch target uses this same logical canvas.
 constexpr float Width = 1280, Height = 720, MainLeft = 248, MainRight = 1240;
 constexpr float MiniTop = 580, HintsTop = 664;
+constexpr float RowPitch = 58, RowHeight = 50;
 struct Rect {
     float x, y, w, h;
     bool contains(float px, float py) const {
@@ -67,7 +68,11 @@ inline Rect card(int column, float top) {
     return {MainLeft + column * 258.f, top, 218, 273};
 }
 inline Rect row(int row, float top) {
-    return {MainLeft, top + row * 58.f, 992, 50};
+    return {MainLeft, top + row * RowPitch, 992, RowHeight};
+}
+inline int list_rows(float top) {
+    // Leave room for the focus outline above the persistent player.
+    return std::max(1, 1 + static_cast<int>((MiniTop - 8 - top - RowHeight) / RowPitch));
 }
 inline Rect setting(int row) {
     return {MainLeft, 112.f + row * 73, 992, 65};

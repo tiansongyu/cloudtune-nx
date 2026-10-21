@@ -70,6 +70,18 @@ struct MusicViewTestAccess {
     static int scroll(const MusicView &v) {
         return v.scroll_;
     }
+    static float top(const MusicView &v, const Snapshot &s) {
+        return v.content_top(s);
+    }
+    static int rows(const MusicView &v, const Snapshot &s) {
+        return v.visible_rows(s);
+    }
+    static std::vector<ui::Rect> header_bounds(const MusicView &v, const Snapshot &s) {
+        std::vector<ui::Rect> bounds;
+        for (const auto &control : v.headers(s))
+            bounds.push_back(control.first);
+        return bounds;
+    }
     static ui::Region region(const MusicView &v) {
         return v.region_;
     }
@@ -159,6 +171,10 @@ static Snapshot fixture(const std::string &scene, const std::string &assets) {
         s.collection_id = 1001;
         s.title = "海岸线的慢时光";
         s.subtitle = "CloudTune Sessions · 8 首音乐 · 36 分钟";
+        s.items = s.queue;
+    }
+    if (scene == "daily" || scene == "fm") {
+        s.title = scene == "daily" ? "每日推荐" : "私人 FM";
         s.items = s.queue;
     }
     if (scene == "search") {
@@ -258,6 +274,39 @@ static void controller_checks(MusicView &v, Model &m, const std::string &assets)
     v.activate();
     require(played == 4 && played_title == detail.items[4].title,
             "Collection activation must hand the selected song to the existing model");
+    for (const auto *scene : {"daily", "fm"}) {
+        auto songs = fixture(scene, assets);
+        ModelTestAccess::set(m, songs);
+        MusicViewTestAccess::sync(v, songs);
+        MusicViewTestAccess::set_focus(v, 0);
+        const float top = MusicViewTestAccess::top(v, songs);
+        const int rows = MusicViewTestAccess::rows(v, songs);
+        const auto first = ui::row(0, top), last = ui::row(rows - 1, top);
+        for (const auto &header : MusicViewTestAccess::header_bounds(v, songs))
+            require(first.y - 7 > header.y + header.h,
+                    "Discovery song rows must clear the banner and header actions");
+        require(first.y - 7 > 276 && last.y + last.h + 7 < ui::MiniTop,
+                "Song focus must clear the section title and mini player");
+        for (int i = 0; i < static_cast<int>(songs.items.size()) - 1; ++i)
+            v.navigate(1);
+        require(MusicViewTestAccess::selected(v) == 7 &&
+                    MusicViewTestAccess::scroll(v) == 8 - rows &&
+                    MusicViewTestAccess::region(v) == ui::Region::Content,
+                "Every discovery song must remain reachable within the visible rows");
+        played = 99;
+        MusicViewTestAccess::tap(v, last.x + 140, last.y + last.h / 2);
+        require(played == 7 && played_title == songs.items[7].title,
+                "Touch must activate the visible song after scrolling");
+        MusicViewTestAccess::set_focus(v, 0);
+        v.navigate(-1);
+        require(MusicViewTestAccess::region(v) == ui::Region::Header,
+                "Discovery songs must retain header navigation");
+        v.navigate(1);
+        played = 99;
+        MusicViewTestAccess::tap(v, first.x + 140, first.y + first.h / 2);
+        require(played == 0 && played_title == songs.items[0].title,
+                "First song touch must not activate the daily banner");
+    }
     auto settings = fixture("settings", assets);
     ModelTestAccess::set(m, settings);
     MusicViewTestAccess::sync(v, settings);
