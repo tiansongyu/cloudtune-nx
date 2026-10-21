@@ -1,0 +1,60 @@
+{
+  "date": "2026-10-21",
+  "native_stack": "Borealis / C++ / NanoVG",
+  "reference_resolution": [
+    1280,
+    720
+  ],
+  "docked_resolution": [
+    1920,
+    1080
+  ],
+  "full_ctest": {
+    "passed": 25,
+    "failed": 0
+  },
+  "final_ui_ctest": {
+    "passed": 2,
+    "failed": 0
+  },
+  "switch_targets": [
+    "CloudTune.nro",
+    "background service",
+    "CloudTune.ovl"
+  ],
+  "nro_sha256": "d9921549460b85487b0c485c98cfeed056a157124d5ac454346b6e5bdf4189cc",
+  "evidence": "native/",
+  "fixture_screens": 28,
+  "fixture_data": "Synthetic songs, lyrics and original design covers; QR points to example.invalid. No user accounts.",
+  "checks": [
+    "grid edges and incomplete rows",
+    "header, sidebar, content and transport access",
+    "sidebar Right returns without browsing",
+    "player overlay preserves collection history",
+    "B restores stable item and scroll",
+    "refresh reorders by stable media identity",
+    "queue uses canonical playback queue",
+    "collection selection preserves song index",
+    "FM header action survives content reset",
+    "Chinese modal focus and dismissal",
+    "touch coordinates at 90% safe area",
+    "UI preference persistence",
+    "native NRO handheld and docked rendering",
+    "optional gallery preserves Model page and history",
+    "missing artwork preserves FM header mapping"
+  ],
+  "unchanged": [
+    "src/model.cpp",
+    "src/player.cpp",
+    "src/api.cpp",
+    "src/crypto.cpp",
+    "background/",
+    "airplay/",
+    "overlay/"
+  ],
+  "hardware_validation": "Physical Switch, TV overscan, real Joy-Con feel and game coexistence remain unverified in this UI pass.",
+  "real_desktop_opened": true,
+  "real_desktop_data": "Isolated review directory; existing accounts and settings preserved",
+  "emulator_input": "Unverified in final pass: XTest keyboard input did not reach either final build or released v0.2.1 baseline. Rendering passed; desktop production-view controller checks passed.",
+  "optional_artwork": "Local-only resources ignored by Git; all five files must be present to expose the gallery. Missing artwork retains the public theme. Original photos and private screenshots excluded from published evidence."
+}

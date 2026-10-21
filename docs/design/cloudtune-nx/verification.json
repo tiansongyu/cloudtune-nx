@@ -1,0 +1,285 @@
+{
+  "date": "2026-10-21",
+  "environment": "Headful Chrome on isolated Xvfb :91; deviceScaleFactor 1",
+  "viewports": [
+    [
+      1280,
+      720
+    ],
+    [
+      1920,
+      1080
+    ]
+  ],
+  "checks": [
+    {
+      "check": "initial focus",
+      "passed": true,
+      "detail": {
+        "scene": "discover",
+        "state": "normal",
+        "focusId": "card-0",
+        "paused": false,
+        "volume": 70,
+        "position": 98,
+        "modal": false
+      }
+    },
+    {
+      "check": "grid right",
+      "passed": true,
+      "detail": {
+        "scene": "discover",
+        "state": "normal",
+        "focusId": "card-1",
+        "paused": false,
+        "volume": 70,
+        "position": 98,
+        "modal": false
+      }
+    },
+    {
+      "check": "A opens collection",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "B restores card",
+      "passed": true,
+      "detail": {
+        "scene": "discover",
+        "state": "normal",
+        "focusId": "card-1",
+        "paused": false,
+        "volume": 70,
+        "position": 98,
+        "modal": false
+      }
+    },
+    {
+      "check": "+ opens immersive player",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "player seek +10",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "Y toggles pause",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "X opens modal",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "modal prevents background Y",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "modal traps directional focus",
+      "passed": true,
+      "detail": {
+        "scene": "player",
+        "state": "normal",
+        "focusId": "modal-4",
+        "paused": true,
+        "volume": 70,
+        "position": 108,
+        "modal": true
+      }
+    },
+    {
+      "check": "player returns source",
+      "passed": true,
+      "detail": {
+        "scene": "discover",
+        "state": "normal",
+        "focusId": "card-1",
+        "paused": true,
+        "volume": 70,
+        "position": 108,
+        "modal": false
+      }
+    },
+    {
+      "check": "AirPlay blocks seek",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "AirPlay disables previous/next",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "search empty state",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "reduced motion stops record",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "discover 1280 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "player 1280 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "collection 1280 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "search 1280 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "library 1280 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "charts 1280 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "queue 1280 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "account 1280 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "settings 1280 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "discover 1920 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "player 1920 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "collection 1920 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "search 1920 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "library 1920 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "charts 1920 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "queue 1920 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "account 1920 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "settings 1920 exact canvas",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "B returns to parent menu",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "second B closes root menu",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "root B restores last content focus",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "queue initial focus is current song",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "library scrolled focus fully visible",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "specification readable",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "check": "no JS runtime errors",
+      "passed": true,
+      "detail": []
+    },
+    {
+      "check": "no focused content hidden by playerbar",
+      "passed": true,
+      "detail": []
+    }
+  ],
+  "contrastRatios": {
+    "#F5F3EF on #101114": 17.04,
+    "#ACAEB7 on #1B1D22": 7.62,
+    "#101114 on #FF4B57": 5.75,
+    "#FF8893 on #352127": 6.58,
+    "#FAF8F3 on #292B32": 13.32,
+    "#F0C8CD on #342229": 9.84
+  },
+  "notVerified": [
+    "Physical Nintendo Switch and Joy-Con/Pro Controller",
+    "Borealis native performance and audio behavior",
+    "TV viewing distance and overscan",
+    "Complete real backend state transitions"
+  ],
+  "realDesktopOpened": {
+    "display": ":1",
+    "title": "CloudTune NX · 视觉设计评审",
+    "url": "file:///home/ubuntu/github/netease-switch/docs/design/cloudtune-nx/index.html?scene=player&resolution=1920",
+    "page": "player",
+    "imagesLoaded": true,
+    "specificationOpen": true,
+    "nativeWindow": "CloudTune NX · 视觉设计评审 - Google Chrome",
+    "mappedAndActive": true
+  }
+}

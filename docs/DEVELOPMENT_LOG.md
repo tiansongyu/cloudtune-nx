@@ -501,3 +501,60 @@ Hardware-only results remain unfilled in `docs/HARDWARE_TESTING.md`.
 - Expanded native, UBSan and focused ASan/leak checks with the new regressions.
   Kept the unpublished version at 0.2.2 and documented remaining HOS-service,
   hardware memory and game-coexistence boundaries.
+
+## Native music UI redesign (2026-10-21)
+
+- Implemented the approved CloudTune visual system in the existing Borealis /
+  C++ / NanoVG view: large cover shelves, collection rows, persistent transport,
+  immersive vinyl and lyrics, account and settings panels, and centered native
+  menus. Added Chinese translations for the standard widget hints.
+- Unified painting and touch geometry on a 1280 × 720 reference canvas, with
+  proportional 1080p scaling, contain behavior and optional 95% / 90% safe areas.
+  UI preferences are stored separately in `ui.json`; existing service settings
+  and account storage are unchanged.
+- Added explicit sidebar, header, content and transport focus regions. Sidebar
+  Right returns to content without browsing. Player expansion is a UI overlay,
+  preserving the Model collection history, stable media focus and scroll offset.
+  Queue actions use the existing canonical queue API; all other music and account
+  actions retain their existing Model / Player entry points.
+- Added focus, press, page, menu, cover, lyric and tonearm transitions, with a
+  reduced-motion setting. Preserved native Borealis button repeat behavior and
+  the existing AirPlay L/R handoff back to NetEase playback.
+- Added layout boundary tests and production MusicView tests under Xvfb,
+  including partial grid rows, focus restoration, refresh reordering, queue and
+  collection song indices, and the FM header action. The full native suite passed
+  25 tests; final UI-only checks passed again after the visual and input refinements.
+- Built all three Switch components. Checked the desktop UI and actual NRO on
+  isolated virtual displays with fresh profiles, including handheld and docked
+  rendering. Desktop checks cover Chinese menus, controller equivalents, 90%
+  touch coordinates and loading / empty / error states. Retained 28 native fixture screenshots plus
+  emulator and safe-area evidence in `docs/design/cloudtune-nx/native/`.
+- Audio, networking, Model, Player, AirPlay, IPC, background service and overlay
+  implementation files were not modified. Physical Switch / Joy-Con feel, TV
+  overscan and game coexistence remain hardware acceptance items. The native
+  implementation report is `docs/design/cloudtune-nx/implementation.html`.
+
+## Optional local artwork and release preparation (2026-10-21)
+
+- Added an optional native photo gallery with four contained images, directional
+  and shoulder-button selection, 220 ms crossfades, reduced-motion support and
+  B return to the previous music focus. Opening it preserves the Model history,
+  queue and playback; Y continues to use the existing play/pause action.
+- Added a gently shaded discovery banner and optional player ambience. Original
+  gallery photos retain their composition; only the panorama is a generated
+  composite. Text contrast is protected by fixed scrims. The bounded texture
+  cache is reused while switching images.
+- Kept all personal artwork and private validation captures outside version
+  control. The public CI checkout and release use the standard theme. All five
+  optional artwork files must exist before the gallery is exposed; tested this
+  fallback and its FM action mapping with the resources absent.
+- Native production-view tests passed with and without optional resources.
+  Inspected 720p / 1080p photo scenes on an isolated virtual display. Rebuilt
+  all three Switch targets without personal resources for public evidence.
+- Final Eden rendering was checked separately from input. Keyboard injection
+  failed in the final build and the released v0.2.1 baseline in the same isolated
+  environment; this remains an emulator input limitation, not a passed
+  controller acceptance test. Physical Switch / Joy-Con and game coexistence
+  remain unverified. No diagnostic logging was retained in application code.
+- Updated the v0.2.2 release notes and README. Added Xvfb / xauth to CI so the
+  production Borealis controller regression runs in both native and UBSan jobs.

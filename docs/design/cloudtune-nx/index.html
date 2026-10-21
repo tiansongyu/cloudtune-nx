@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#101114"><title>CloudTune NX · 视觉设计评审</title><link rel="stylesheet" href="design.css"></head>
+<body>
+<header class="reviewbar">
+  <div class="reviewbrand"><strong>CloudTune NX</strong><span>视觉提案 01 · 演示数据</span></div>
+  <div class="reviewtools">
+    <label>页面 <select id="scene"><option value="discover">发现音乐</option><option value="player">黑胶播放器</option><option value="collection">歌单详情</option><option value="search">搜索</option><option value="library">我的音乐</option><option value="charts">排行榜</option><option value="queue">播放队列</option><option value="account">我的账号</option><option value="settings">设置</option></select></label>
+    <label>状态 <select id="state"><option value="normal">正常</option><option value="loading">加载中</option><option value="empty">空内容</option><option value="error">网络错误</option><option value="airplay">AirPlay 接收</option></select></label>
+    <label>画布 <select id="resolution"><option value="1280">1280 × 720</option><option value="1920">1920 × 1080</option></select></label>
+    <button id="motion" aria-pressed="false">减少动态：关</button>
+    <a href="specification.html" target="_blank">完整设计规范 ↗</a>
+    <button id="fullscreen">全屏</button>
+  </div>
+</header>
+<main class="reviewstage"><div id="viewport"><div id="app" aria-label="CloudTune NX 界面交互原型"></div></div></main>
+<footer class="reviewfoot"><span><b>体验手柄焦点</b>　方向键移动 · Enter / A 确认 · Esc / B 返回 · X 选项 · Space / Y 播放 · P 播放器</span><span>L / R 切歌 · Q / E 音量　<span id="pad-status">可连接手柄</span></span></footer>
+<script src="prototype.js"></script>
+</body></html>

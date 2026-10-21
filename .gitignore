@@ -6,6 +6,8 @@
 /release/
 /logs/
 /.runtime/
+# Personal artwork is packaged locally, never included in a public source commit.
+/resources/personal/
 *.o
 *.elf
 *.nro

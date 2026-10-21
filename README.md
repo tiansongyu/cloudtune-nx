@@ -8,34 +8,35 @@
   <a href="https://github.com/tiansongyu/cloudtune-nx/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/tiansongyu/cloudtune-nx?label=release"></a>
 </p>
 
-**v0.2.1** · 支持扫码登录、多账号、旋转黑胶播放器、AirPlay 1 和独立后台服务。
+**v0.2.2** · 全新原生音乐界面、手柄焦点与双分辨率适配；支持扫码登录、多账号、黑胶播放器、AirPlay 1 和独立后台服务。
 Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[验证记录](docs/VALIDATION.md)。
 
 ## 下载
 
-**[下载 v0.2.1 SD 卡安装包](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.1/CloudTuneNX-0.2.1-sd.zip)**
+**[下载 v0.2.2 SD 卡安装包](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.2/CloudTuneNX-0.2.2-sd.zip)**
 
-[发布说明与全部附件](https://github.com/tiansongyu/cloudtune-nx/releases/tag/v0.2.1) ·
-[SHA-256 校验文件](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.1/SHA256SUMS)
+[发布说明与全部附件](https://github.com/tiansongyu/cloudtune-nx/releases/tag/v0.2.2) ·
+[SHA-256 校验文件](https://github.com/tiansongyu/cloudtune-nx/releases/download/v0.2.2/SHA256SUMS)
 
-安装请选择 `CloudTuneNX-0.2.1-sd.zip`；GitHub 的 Source code 压缩包不含可运行程序。
+安装请选择 `CloudTuneNX-0.2.2-sd.zip`；GitHub 的 Source code 压缩包不含可运行程序。
 `-symbols.zip` 用于崩溃排查，`-docs.zip` 用于离线阅读，无需复制到 SD 卡。
 
 <p align="center">
-  <img src="docs/images/player.png" alt="CloudTune NX v0.2.1 播放界面：黑胶唱片、封面、进度与播放控制" width="900">
+  <img src="docs/design/cloudtune-nx/native/player-1920.png" alt="CloudTune NX v0.2.2 播放界面：黑胶唱片、封面、进度与播放控制" width="900">
 </p>
 
 <details>
   <summary>查看发现音乐界面</summary>
   <p align="center">
-    <img src="docs/images/discover.png" alt="CloudTune NX v0.2.1 发现音乐界面：歌单推荐与导航" width="900">
+    <img src="docs/design/cloudtune-nx/native/discover-1920.png" alt="CloudTune NX v0.2.2 发现音乐界面：歌单推荐与导航" width="900">
   </p>
 </details>
 
-*截图更新于 2026-10-20，来自 v0.2.1 同源 Borealis 桌面客户端的未登录会话，原图为 1920 × 1080；实际 Switch NRO 的 Eden 测试见[验证记录](docs/VALIDATION.md)。*
+*截图更新于 2026-10-21，来自实际 Borealis 桌面视图的 1920 × 1080 测试场景；曲目、歌词与封面为原创演示数据。双分辨率截图与验证边界见[原生界面验收](docs/design/cloudtune-nx/implementation.html)。公开版不包含私人照片。*
 
 ## 功能
 
+- **界面与手柄**：1280×720 / 1920×1080、白色焦点、返回恢复位置；设置中支持减少动态和 95% / 90% 安全区。
 - **发现与资料库**：搜索、歌单、排行榜、专辑、歌手、电台、每日推荐、私人 FM、收藏与音乐云盘。
 - **二维码与多账号**：用网易云音乐手机 App 扫码；在设置中添加、切换或移除本机保存的账号。
 - **黑胶播放器**：播放时以 33⅓ RPM 旋转，暂停时停转；支持同步歌词、封面、进度跳转、随机和循环。
@@ -60,7 +61,7 @@ Atmosphère 与游戏同时播放等场景仍需 Switch 实机验收，详见[�
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
-确认输出包含 `CloudTuneNX-0.2.1-sd.zip: OK`。其他系统可使用支持 SHA-256 的校验工具。
+确认输出包含 `CloudTuneNX-0.2.2-sd.zip: OK`。其他系统可使用支持 SHA-256 的校验工具。
 
 播放栏显示 **「BGM · 后台服务」** 后，才可退出 NRO 并打开游戏。
 通过覆盖层加载器打开 **CloudTune NX** 即可继续控制播放。

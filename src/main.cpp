@@ -15,8 +15,12 @@ int main(int argc, char **argv) try {
     // Declared before the model/player so their handles and workers are gone
     // before global curl resources are released, including early-return paths.
     struct CurlCleanup {
-        ~CurlCleanup() { curl_global_cleanup(); }
+        ~CurlCleanup() {
+            curl_global_cleanup();
+        }
     } curl_cleanup;
+    // The music UI is Chinese; native menus and IME hints use the same locale.
+    brls::Platform::APP_LOCALE_DEFAULT = brls::LOCALE_ZH_HANS;
     if (!brls::Application::init())
         return 1;
 #ifdef __SWITCH__
