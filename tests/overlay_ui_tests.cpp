@@ -11,18 +11,23 @@ namespace {
 NcmPlaybackStatus response{};
 bool serviceAvailable = true;
 bool failStatus = false;
+bool active = true;
+Result commandResult = 0;
 uint32_t seekArgument = 0;
 unsigned commands = 0, launches = 0;
 }
 extern "C" {
-Result ncmPlaybackInitialize() { return serviceAvailable ? 0 : 1; }
+Result ncmPlaybackInitialize() { active = serviceAvailable; return active ? 0 : 1; }
+bool ncmPlaybackIsActive() { return active; }
+void ncmPlaybackConnectionMessage(char* out, size_t size) { std::snprintf(out, size, "Synthetic connection diagnostic"); }
 void ncmPlaybackExit() {}
 void ncmPlaybackShutdown() {}
 Result ncmPlaybackGetStatus(NcmPlaybackStatus* out) {
     *out = failStatus ? NcmPlaybackStatus{} : response;
+    if (failStatus) active = false;
     return failStatus ? 1 : 0;
 }
-Result ncmPlaybackPlayPause() { ++commands; return 0; }
+Result ncmPlaybackPlayPause() { ++commands; return commandResult; }
 Result ncmPlaybackPrevious() { ++commands; return 0; }
 Result ncmPlaybackNext() { ++commands; return 0; }
 Result ncmPlaybackStop() { ++commands; return 0; }
@@ -67,6 +72,10 @@ int main() {
     response.volume_permille = 700;
     gui.update();
     assert(item(1)->text == "Synthetic song" && item(4)->text == "暂停");
+    commandResult = 1;
+    gui.handleInput(HidNpadButton_X, 0, {}, {}, {});
+    assert(connected); // A valid rejected command keeps the live session.
+    commandResult = 0;
     failStatus = true;
     // A control action requests the next immediate status refresh.
     gui.handleInput(HidNpadButton_X, 0, {}, {}, {});

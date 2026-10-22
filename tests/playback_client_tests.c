@@ -10,18 +10,42 @@ static NcmPlaybackStatus reply;
 static NcmAirplayStatus airplay_reply;
 static Result reply_result;
 static void* wire;
-static u64 ticks;
-static bool ready, stall, allowed = true, cancel_once;
+static bool ready, stall;
+static Mutex fake_mutex = PTHREAD_MUTEX_INITIALIZER;
+static CondVar fake_ready = PTHREAD_COND_INITIALIZER;
+Result testThreadCreateResult;
+static Result kernel_result;
 static unsigned sends, closes[256];
 static u32 last_command, last_argument;
 static bool corrupt_reply_type;
-static u8 server_tls[256] __attribute__((aligned(16)));
+static bool service_present = true;
+static Result process_result = MAKERESULT(15, 1), launch_result;
+static unsigned launches, pm_acquired, pm_released;
+Result testHasService(u8* present) { *present = service_present; return 0; }
+Result pmshellInitialize(void) { ++pm_acquired; return 0; }
+void pmshellExit(void) { ++pm_released; }
+Result pmdmntInitialize(void) { ++pm_acquired; return 0; }
+void pmdmntExit(void) { ++pm_released; }
+Result pmdmntGetProcessId(u64* pid, u64 program) {
+    if (program != NCM_PROGRAM_ID) abort();
+    *pid = process_result ? 0 : 99;
+    return process_result;
+}
+Result pmshellLaunchProgram(u32 flags, const NcmProgramLocation* location, u64* pid) {
+    if (flags || location->program_id != NCM_PROGRAM_ID) abort();
+    ++launches; *pid = 99; return launch_result;
+}
+static _Thread_local u8 server_tls[256] __attribute__((aligned(16)));
+static _Thread_local u8 client_tls[256] __attribute__((aligned(16)));
+static _Thread_local bool server_side;
 static void check(bool value, const char* reason) {
     if (!value) { fprintf(stderr, "FAIL: %s\n", reason); exit(1); }
 }
 SmServiceName smEncodeName(const char* name) { (void)name; return 1; }
-bool envIsSyscallHinted(unsigned id) { check(id == 0x23, "wrong syscall hint"); return allowed; }
-u64 armGetSystemTick(void) { return ticks; }
+u64 armGetSystemTick(void) {
+    struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
+    return (u64)now.tv_sec * 1000000000 + now.tv_nsec;
+}
 Result svcConnectToNamedPort(Handle* handle, const char* name) {
     check(strcmp(name, "sm:") == 0, "wrong named port"); *handle = 1; return 0;
 }
@@ -29,7 +53,7 @@ Result svcCloseHandle(Handle handle) {
     check(handle < 256 && handle != 0, "invalid handle closed"); ++closes[handle]; return 0;
 }
 _Noreturn void svcExitProcess(void) { _exit(70); }
-void* armGetTls(void) { return server_tls; }
+void* armGetTls(void) { return server_side ? server_tls : client_tls; }
 Result svcAcceptSession(Handle* out, Handle port) { (void)out; (void)port; return 1; }
 Result svcReplyAndReceive(s32* index, const Handle* handles, s32 count, Handle reply_to, u64 timeout) {
     (void)index; (void)handles; (void)count; (void)reply_to; (void)timeout; return 1;
@@ -43,6 +67,7 @@ static void serverRespond(const void* bytes, size_t size, Result result) {
     // Exercise the real service parser and reply encoder, not a second
     // handwritten approximation of CloudTune's CMIF response.
     memcpy(server_tls, wire, sizeof(server_tls));
+    server_side = true;
     NcmIpcServerRequest request;
     check(parseRequest(&request) == 0 && request.command_id == last_command,
           "production server rejected client request");
@@ -51,13 +76,14 @@ static void serverRespond(const void* bytes, size_t size, Result result) {
         check(!memcmp(request.data, &last_argument, sizeof(last_argument)), "control argument mismatch");
     }
     prepareResponse(result, bytes, size);
-    memset(wire, 0, 4096);
+    server_side = false;
+    memset(wire, 0, 256);
     memcpy(wire, server_tls, sizeof(server_tls));
     if (corrupt_reply_type) ((HipcHeader*)wire)->type = CmifCommandType_Control;
     ready = true;
 }
 static void respond(const void* bytes, size_t size, Handle handle, Result result) {
-    memset(wire, 0, 4096);
+    memset(wire, 0, 256);
     HipcHeader* header = wire;
     size_t offset = sizeof(*header);
     if (handle) {
@@ -73,14 +99,19 @@ static void respond(const void* bytes, size_t size, Handle handle, Result result
     if (size) memcpy((u8*)wire + aligned + sizeof(cmif), bytes, size);
     ready = true;
 }
-Result svcSendAsyncRequestWithUserBuffer(Handle* event, void* buffer, u64 size, Handle session) {
-    check(size == 4096 && ((uintptr_t)buffer & 4095) == 0, "unaligned/non-page IPC buffer");
-    ++sends; wire = buffer; ready = false; *event = 100;
+Result svcSendSyncRequest(Handle session) {
+    void* buffer = armGetTls();
+    mutexLock(&fake_mutex);
+    ++sends; wire = buffer; ready = false;
     const HipcParsedRequest parsed = hipcParseRequest(buffer);
     const u32* cmif = cmifGetAlignedDataStart(parsed.data.data_words, buffer);
     check(cmif[0] == CMIF_IN_HEADER_MAGIC, "missing CMIF request magic");
     last_command = cmif[2]; last_argument = cmif[4];
-    if (stall) return 0;
+    if (stall) {
+        while (!ready) condvarWait(&fake_ready, &fake_mutex);
+        mutexUnlock(&fake_mutex);
+        return kernel_result;
+    }
     if (session == 1) {
         if (!last_command) {
             check(parsed.meta.send_pid, "SM registration omitted PID");
@@ -92,18 +123,53 @@ Result svcSendAsyncRequestWithUserBuffer(Handle* event, void* buffer, u64 size, 
     else if (last_command == NCM_COMMAND_AIRPLAY_STATUS)
         serverRespond(&airplay_reply, sizeof(airplay_reply), reply_result);
     else serverRespond(NULL, 0, reply_result);
+    mutexUnlock(&fake_mutex);
     return 0;
 }
 Result svcWaitSynchronization(s32* index, const Handle* handles, s32 count, u64 timeout) {
-    check(count == 1 && *handles == 100, "wrong completion event");
-    if (cancel_once) { cancel_once = false; ticks += 1000000; return KERNELRESULT(Cancelled); }
-    if (!ready) { ticks += timeout; return KERNELRESULT(TimedOut); }
-    *index = 0; return 0;
+    (void)index; (void)handles; (void)count; (void)timeout; return 1;
 }
 #include "../background/client/timed_ipc.c"
+static const char* startup_fixture;
+static FILE* diagnosticOpen(const char* path, const char* mode) {
+    (void)mode;
+    check(!strcmp(path,NCM_CONFIG_DIRECTORY "/background-startup.log"), "unexpected diagnostic file");
+    if (!startup_fixture) return NULL;
+    FILE* file=tmpfile(); check(file!=NULL,"diagnostic fixture failed");
+    fputs(startup_fixture,file); rewind(file); return file;
+}
+#define fopen diagnosticOpen
 #include "../background/client/playback_client.c"
+#undef fopen
+static void awaitIdle(void) {
+    for(unsigned i=0;i<1000 && !ncmIpcIdle();++i) usleep(1000);
+    check(ncmIpcIdle(), "worker never completed late reply");
+}
 
 int main(void) {
+    // PM presence and service presence are deliberately independent. A booting
+    // process must never be launched a second time just because IPC is absent.
+    process_result = 0;
+    service_present = false;
+    check(ncmPlaybackLaunchBackground() == 0 && launches == 0, "duplicate process launch");
+    check(R_FAILED(ncmPlaybackInitialize()), "missing IPC treated as connected");
+    char startup_message[256];
+    startup_fixture = "resource memory: used=328032256 limit=328204288 free=172032\n"
+        "boot-resource-gate: 0x00006359\nstartup-exit: 0x00006359\n";
+    ncmPlaybackConnectionMessage(startup_message,sizeof(startup_message));
+    check(strstr(startup_message,"168 KiB") && strstr(startup_message,"上次"),
+          "physical low-memory evidence not explained as historical");
+    startup_fixture = "resource memory: used=328032256 limit=328204288 free=172032\n";
+    ncmPlaybackConnectionMessage(startup_message,sizeof(startup_message));
+    check(!strstr(startup_message,"内存不足"), "in-progress startup misreported as failed");
+    startup_fixture = NULL;
+    process_result = 0x1234;
+    check(ncmPlaybackLaunchBackground() == process_result && launches == 0,
+          "unknown process state launched a duplicate");
+    process_result = MAKERESULT(15, 1);
+    check(ncmPlaybackLaunchBackground() == 0 && launches == 1, "missing process not launched");
+    check(pm_acquired == pm_released, "PM lookup/launch leaked sessions");
+    service_present = true;
     reply.version = NCM_PROTOCOL_VERSION;
     airplay_reply.version = NCM_AIRPLAY_VERSION;
     check(ncmPlaybackInitialize() == 0, "service initialization failed");
@@ -117,6 +183,7 @@ int main(void) {
     check(R_FAILED(ncmPlaybackGetStatus(&status)) && !memcmp(&status,&zero,sizeof(status)),
           "incompatible status exposed");
     reply.version = NCM_PROTOCOL_VERSION;
+    check(ncmPlaybackInitialize() == 0, "reconnect after incompatible status failed");
     reply_result = 1;
     check(R_FAILED(ncmPlaybackGetStatus(&status)) && !memcmp(&status,&zero,sizeof(status)),
           "failed status exposed");
@@ -145,19 +212,20 @@ int main(void) {
           !memcmp(&status, &zero, sizeof(status)), "invalid reply type accepted");
     corrupt_reply_type = false;
     check(ncmPlaybackInitialize() == 0, "reconnect after invalid reply failed");
-    cancel_once = true;
-    check(ncmPlaybackGetStatus(&status) == 0, "cancelled wait was not retried");
+
 
     stall = true;
-    const u64 started = ticks;
-    check(R_FAILED(ncmPlaybackGetStatus(&status)) && ticks-started == NormalTimeout,
+    const unsigned closed_before_timeout = closes[42];
+    const u64 started = armGetSystemTick();
+    check(R_FAILED(ncmPlaybackGetStatus(&status)) && armGetSystemTick()-started >= NormalTimeout && armGetSystemTick()-started < NormalTimeout + 200000000ull,
           "stalled peer did not respect deadline");
     check(!memcmp(&status,&zero,sizeof(status)), "timeout exposed stale data");
+    check(closes[42] == closed_before_timeout, "pending worker's session closed too early");
     unsigned submitted = sends;
-    unsigned char pending_bytes[4096]; memcpy(pending_bytes,wire,sizeof(pending_bytes));
+    unsigned char pending_bytes[256]; memcpy(pending_bytes,wire,sizeof(pending_bytes));
     for (int i=0;i<100;++i) check(R_FAILED(ncmPlaybackInitialize()),"pending request reused");
     check(sends == submitted && !memcmp(pending_bytes,wire,sizeof(pending_bytes)),
-          "pending kernel buffer overwritten or retry allocated another request");
+          "pending worker buffer overwritten or retry allocated another request");
     ncmPlaybackExit();
     check(!memcmp(pending_bytes,wire,sizeof(pending_bytes)), "Exit touched pending buffer");
     // Final shutdown cannot safely return to an NRO loader with a live buffer.
@@ -165,26 +233,38 @@ int main(void) {
     if (!child) { ncmPlaybackShutdown(); _exit(99); }
     int exit_status = 0; waitpid(child,&exit_status,0);
     check(WIFEXITED(exit_status) && WEXITSTATUS(exit_status)==70,"unsafe pending shutdown");
+    mutexLock(&fake_mutex);
     respond(NULL,0,77,0); // Late moved handle must not leak or be adopted.
+    condvarWakeAll(&fake_ready);
+    mutexUnlock(&fake_mutex);
+    awaitIdle();
+    check(closes[42] == closed_before_timeout + 1, "deferred close leaked session");
     stall = false;
     check(ncmPlaybackInitialize() == 0 && closes[77] == 1, "late reply handle leaked");
 
     // Malformed response length and unexpected handles are rejected and closed.
     stall = true;
     check(R_FAILED(ncmPlaybackGetStatus(&status)),"second stall failed");
+    mutexLock(&fake_mutex);
     respond(&reply,sizeof(reply),78,0);
     ((HipcHeader*)wire)->num_data_words = 1023;
+    condvarWakeAll(&fake_ready); mutexUnlock(&fake_mutex); awaitIdle();
     check(ncmIpcIdle() && closes[78]==1,"malformed late reply leaked handle");
     stall = false;
     check(ncmPlaybackInitialize() == 0, "recovery after malformed reply failed");
     stall = true;
     check(R_FAILED(ncmPlaybackGetStatus(&status)),"kernel-error fixture failed");
-    memset(wire,0,4096); ((u32*)wire)[2]=KERNELRESULT(ConnectionClosed); ready=true;
-    check(ncmIpcIdle(), "kernel async error not reaped");
+    mutexLock(&fake_mutex);
+    kernel_result=KERNELRESULT(ConnectionClosed); ready=true;
+    condvarWakeAll(&fake_ready); mutexUnlock(&fake_mutex); awaitIdle();
+    check(ncmIpcIdle(), "worker transport error not reaped");
     stall=false;
     ncmPlaybackShutdown();
-    allowed=false;
-    check(R_FAILED(ncmPlaybackInitialize()) && !completion, "unsupported SVC used");
+    testThreadCreateResult=0x10801;
+    check(ncmPlaybackInitialize()==testThreadCreateResult && !worker_started, "worker creation failure not propagated");
+    char diagnostic[128];
+    ncmPlaybackConnectionMessage(diagnostic, sizeof(diagnostic));
+    check(strstr(diagnostic, "注册客户端") && strstr(diagnostic, "0x"), "handshake error lacks stage/result");
     ncmPlaybackShutdown();
     puts("PASS: production client/server framing, service errors, bounded IPC, late replies, handles and shutdown");
 }

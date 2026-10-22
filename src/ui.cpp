@@ -1680,7 +1680,10 @@ void MusicView::paint_player(NVGcontext *v, const Snapshot &s, bool full) {
     } else {
         nav_icon(v, 5, 1030, 618, white);
         text(v, 1082, 615, 12, player_.background() ? nvgRGB(169, 216, 196) : muted,
-             player_.background() ? "BGM · 后台服务" : "前台播放", 150);
+             player_.background()               ? "BGM · 后台服务"
+             : player_.waiting_for_background() ? "后台连接中"
+                                                : "前台播放",
+             150);
         text(v, 1082, 638, 14, muted,
              "音量 " + std::to_string(playback_.volume_permille / 10) + "%", 150);
     }
@@ -1777,8 +1780,12 @@ void MusicView::paint_settings(NVGcontext *v, const Snapshot &s) {
         quality_name(s.quality),
         s.proxy.empty() ? "直连" : s.proxy,
         tool,
-        player_.background() ? "独立后台服务" : "本应用音频引擎",
-        player_.background() ? "退出后，后台服务继续播放" : "退出后，前台音频将停止"};
+        player_.background()               ? "独立后台服务"
+        : player_.waiting_for_background() ? "后台连接中"
+                                           : "本应用音频引擎",
+        player_.background()               ? "退出后，后台服务继续播放"
+        : player_.waiting_for_background() ? "后台尚未就绪，请查看启动日志"
+                                           : "退出后，前台音频将停止"};
     for (int i = 0; i < SettingsCount; ++i) {
         const auto r = ui::setting(i);
         const bool focused = region_ == ui::Region::Content && selection_ == i;

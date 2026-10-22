@@ -172,6 +172,9 @@ void ncmPlaybackExit(void) {
 void ncmPlaybackShutdown(void) { ncmPlaybackExit(); }
 
 bool ncmPlaybackIsActive(void) { return active.load(); }
+void ncmPlaybackConnectionMessage(char* output, size_t size) {
+    if (output && size) std::snprintf(output, size, "本机预览服务未连接");
+}
 
 Result ncmPlaybackGetStatus(NcmPlaybackStatus* status) {
     if (!status)

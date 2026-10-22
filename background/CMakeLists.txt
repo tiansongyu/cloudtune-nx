@@ -72,6 +72,17 @@ if(NINTENDO_SWITCH)
   find_program(NPDMTOOL npdmtool HINTS "$ENV{DEVKITPRO}/tools/bin" REQUIRED)
   find_program(ELF2NSO elf2nso HINTS "$ENV{DEVKITPRO}/tools/bin" REQUIRED)
   find_program(BUILD_PFS0 build_pfs0 HINTS "$ENV{DEVKITPRO}/tools/bin" REQUIRED)
+  add_executable(ncm-switch-ipc-probe EXCLUDE_FROM_ALL
+    "${NCM_ROOT}/tests/switch_ipc_probe.c" client/timed_ipc.c source/ipc_server.c)
+  target_include_directories(ncm-switch-ipc-probe PRIVATE source "${NCM_ROOT}/include")
+  target_link_libraries(ncm-switch-ipc-probe PRIVATE nx)
+  set(IPC_PROBE_DIR "${CMAKE_CURRENT_BINARY_DIR}/ipc-probe-package")
+  add_custom_target(ncm-switch-ipc-probe-package
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${IPC_PROBE_DIR}"
+    COMMAND ${NPDMTOOL} "${CMAKE_CURRENT_SOURCE_DIR}/netease-sysmodule.json" "${IPC_PROBE_DIR}/main.npdm"
+    COMMAND ${ELF2NSO} $<TARGET_FILE:ncm-switch-ipc-probe> "${IPC_PROBE_DIR}/main"
+    COMMAND ${BUILD_PFS0} "${IPC_PROBE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ipc-probe.nsp"
+    DEPENDS ncm-switch-ipc-probe VERBATIM)
   set(PACKAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/package")
   add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cloudtune-background.nsp"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${PACKAGE_DIR}"

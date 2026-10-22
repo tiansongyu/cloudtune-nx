@@ -8,6 +8,47 @@ retained as historical evidence; current filenames and commands are documented
 in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
 hardware or emulator validation.
 
+## Frontend/background communication — v0.2.12, 2026-10-22
+
+The supplied SD's NSP matched v0.2.11. Its current startup log reports
+**168 KiB** free (328,032,256 / 328,204,288 bytes used), a failed
+`boot-resource-gate` and `startup-exit`. No runtime or IPC registration occurred
+in that boot. The older `ipc.log` had a different timestamp. This establishes
+resource exhaustion as the observed startup blocker, not a failed handshake
+with a running service. Other quota types had headroom.
+
+- Full host run: **33/33** CTest cases, independent XEAPI verification and
+  generated local/throttled HTTPS audio passed. Focused final regressions
+  cover delayed registration, automatic reconnect, PM lookup uncertainty,
+  valid command rejection, stale-log clearing and NRO-only fallback.
+- The production C client runs on real host threads in fault-injection tests.
+  A slow server enforces the 150 ms caller deadline, pending retries cannot
+  overwrite worker memory, and delayed handle disposal prevents reuse. Late
+  reply handles close before recovery; shutdown cannot return to a loader
+  with a live worker. Focused ASan/UBSan tests passed.
+- Switch NRO, NSP and overlay cross-compile. The excluded native IPC probe
+  exercises actual SM registration/acquisition, libnx TLS, production client
+  transport and server framing: **13 assertions passed**, including 216-byte
+  status, two simultaneous sessions, controls, valid errors, bounded timeout,
+  late completion/reconnect and worker shutdown/recreation. Only Atmosphere
+  presence/HasService is substituted because Eden lacks that extension.
+- Desktop controller/content regressions passed; the actual photo NRO also
+  rendered Chinese discovery content and the foreground-mode indicator in an
+  isolated Eden profile. No account credentials were copied. Waiting-state
+  ownership is tested by the real Player Switch branch against fake endpoints;
+  Eden is not an Atmosphere frontend/background integration test.
+- Earlier probes exposed Eden v0.2.1's incomplete async user-buffer service
+  path. That is emulator evidence, not proof of the same failure on hardware.
+  The replacement follows TriPlayer's ordinary TLS/CMIF path with bounded
+  caller waits; the C wire protocol and audio runtime are unchanged.
+
+Evidence remains ignored under `build/validation/ipc-reconnect/`. With explicit
+user approval, five third-party boot markers were reversibly renamed on the
+mounted SD; CloudTune and the Tesla/Ultrahand loader remain enabled. This is a
+local isolation profile, not a public release modification. Newly available
+memory, physical background playback and in-game overlay operation must be
+measured after a full reboot. No hardware success is claimed here.
+
 ## Autostart resource guards — v0.2.11, 2026-10-22
 
 - Full host run: **32/32** CTest cases passed (129.84 s), followed by independent

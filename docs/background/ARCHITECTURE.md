@@ -65,22 +65,24 @@ process. This foreground fallback stops when the application exits.
 The runtime owns both the music engine and the independent AirPlay receiver.
 Connection probing first checks libnx's Atmosphère flag, then uses
 Atmosphère's TIPC `HasService` command (65100). Acquisition uses a private SM
-session and asynchronous user-buffer CMIF, bounding the race in which the
-service disappears after that check. Each handshake/status/control request
-has a 150 ms deadline; the acknowledged account-clear barrier allows 5.5 s.
-Disconnected overlays retry every two seconds. Stock/emulated Horizon receives
-no Atmosphère extension commands, and loaders without the required async SVC
-are rejected instead of falling back to an unbounded custom-service request.
+session and standard TLS/CMIF on one dedicated worker. This follows the
+ordinary libnx session path used by TriPlayer while keeping bounded caller
+waits: handshake/status/control requests allow 150 ms each, and the acknowledged
+account-clear barrier allows 5.5 s. The worker has a 16 KiB stack and a fixed
+256-byte mailbox; no SVC 0x23 or user-buffer mapping is needed. PM process-ID
+lookup precedes launch, so an existing process behind the boot gate is not
+started again. Unknown PM state prevents a second local player. Foreground
+and overlay clients reconnect at most once every two seconds after startup.
+Stock/emulated Horizon receives no Atmosphere extension commands in production.
 
-Only one aligned 4 KiB IPC page may be pending. A timeout closes the client
-handle without sending a synchronous CMIF Close, clears displayed status and
-never automatically replays a command whose outcome is unknown. The page is
-retained until its completion event signals; late transferred handles are
-closed before reusing it. If a permanently hung peer still owns the page at
-final shutdown, the client exits its process instead of returning that memory
-to an NRO loader. This exceptional path requires restarting the overlay loader
-before opening another overlay. It prevents late kernel writes into reused
-memory; it does not claim to restart a hung background service automatically.
+Only one request can be pending. A timeout logically disconnects the client
+without sending a synchronous CMIF Close and never automatically replays a
+command whose outcome is unknown. The worker retains its session handle and
+memory until its system call returns, preventing handle reuse while the
+worker is descheduled. Late transferred handles are closed before reuse. A permanently
+blocked worker causes final shutdown to exit the process rather than return
+to a loader which might recycle its stack. Otherwise shutdown joins the idle
+worker and releases its resources. This does not restart a hung service.
 The reply parser accepts type 0 and the existing server's type-4 framing,
 while checking the CMIF header, data bounds and transferred handles. A valid
 service error remains distinguishable from a transport failure, allowing
@@ -302,16 +304,27 @@ Retrieved 2026-10-20:
 - [Atmosphère SM user interface](https://github.com/Atmosphere-NX/Atmosphere/blob/master/libraries/libstratosphere/include/stratosphere/sm/impl/sm_user_interface.hpp):
   nonblocking service availability command 65100.
 - [libnx kernel calls](https://github.com/switchbrew/libnx/blob/v4.12.0/nx/include/switch/kernel/svc.h):
-  asynchronous user-buffer requests and their completion events.
+  ordinary TLS SendSyncRequest, thread and condition-variable primitives.
 - [Atmosphère server session](https://github.com/Atmosphere-NX/Atmosphere/blob/master/libraries/libmesosphere/source/kern_k_server_session.cpp):
   request completion and client-close behavior. Closing a client does not
   immediately cancel a request already received by the server.
-- [nx-ovlloader permissions](https://github.com/WerWolv/nx-ovlloader/blob/master/ovll.json):
-  the upstream process permits `SendAsyncRequestWithUserBuffer` (SVC `0x23`);
-  the client also checks the active loader's syscall hint at runtime.
 - [dr_mp3](https://github.com/mackron/dr_libs/blob/master/dr_mp3.h):
   streaming read callbacks must fill the requested size unless at EOF.
 - [libtesla](https://github.com/WerWolv/libtesla): standalone overlay lifecycle.
 - Local Switify phase2 source at commit
   `e4b86610598dcf511b3682be0e047855e7445ac6`: process separation, CMIF service
   loop, background service metadata, and overlay architecture.
+
+### TriPlayer communication review (2026-10-22)
+
+Reviewed the local TriPlayer checkout at commit
+`737adfdfcea89924286b1cd13ec47a9ebaffda96` (MIT).
+`Common/source/ipc/TriPlayer.cpp` uses HasService, normal libnx sessions and
+CMIF commands; `Application/source/Sysmodule.cpp` serializes requests and
+performs a version handshake. `Application/source/utils/NX.cpp` checks the
+process ID before launch. `Sysmodule/source/ipc/Server.cpp` handles ordinary
+sessions, while `Sysmodule/source/Service.cpp` separates audio work from IPC.
+CloudTune adopts those communication patterns with independently written
+code, retaining bounded waits, its existing protocol and single runtime owner.
+TriPlayer's fixed heap does not solve a shared system-memory shortage and was
+not copied. Its playback/network implementation was not substituted.

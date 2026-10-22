@@ -1,12 +1,56 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "timed_ipc.h"
-#include <malloc.h>
-#include <stdlib.h>
 #include <string.h>
 
-enum { PageSize = 4096, MaxInline = 512 };
-static void* page;
-static Handle completion;
+enum { PageSize = 256, MaxInline = 192 };
+static u8 page[PageSize] __attribute__((aligned(16)));
+static Thread worker;
+static Mutex work_mutex;
+static CondVar request_ready, reply_ready;
+static bool worker_started, worker_stop;
+static enum { Idle, Pending, Done } state;
+static Handle work_session;
+static bool close_work_session;
+
+/* Use libnx's ordinary TLS/CMIF transport, as established music sysmodules
+ * do. One worker owns the entire request, including after a caller timeout.
+ * Never retry a timed-out command or hand caller-owned memory to the worker. */
+static void ipcWorker(void* unused) {
+    (void)unused;
+    mutexLock(&work_mutex);
+    for (;;) {
+        while (!worker_stop && state != Pending) condvarWait(&request_ready, &work_mutex);
+        if (worker_stop) break;
+        memcpy(armGetTls(), page, PageSize);
+        const Handle session = work_session;
+        mutexUnlock(&work_mutex);
+        const Result result = svcSendSyncRequest(session);
+        mutexLock(&work_mutex);
+        if (close_work_session) {
+            svcCloseHandle(session);
+            close_work_session = false;
+        }
+        if (R_SUCCEEDED(result)) memcpy(page, armGetTls(), PageSize);
+        else {
+            memset(page, 0, PageSize);
+            memcpy(page + 8, &result, sizeof(result));
+        }
+        state = Done;
+        condvarWakeAll(&reply_ready);
+    }
+    mutexUnlock(&work_mutex);
+}
+
+static Result startWorker(void) {
+    if (worker_started) return 0;
+    Result result = threadCreate(&worker, ipcWorker, NULL, NULL, 0x4000, 44, -2);
+    if (R_FAILED(result)) return result;
+    worker_stop = false;
+    result = threadStart(&worker);
+    if (R_FAILED(result)) { threadClose(&worker); return result; }
+    worker_started = true;
+    return 0;
+}
 
 static Result protocolError(void) { return MAKERESULT(421, 1); }
 static Result timeoutError(void) { return MAKERESULT(Module_Libnx, LibnxError_Timeout); }
@@ -14,9 +58,9 @@ static Result timeoutError(void) { return MAKERESULT(Module_Libnx, LibnxError_Ti
 /* The kernel validates handle descriptors, but data counts and CMIF contents
  * still come from the peer. Validate bounds before exposing any output. */
 static Result response(void* output, size_t size, Handle* moved, bool* replied) {
-    const u32* words = page;
+    const u32* words = (const u32*)page;
     if (!words[0] && !words[1])
-        return words[2] ? words[2] : protocolError(); /* Kernel async failure. */
+        return words[2] ? words[2] : protocolError(); /* Worker transport failure. */
     HipcHeader header;
     memcpy(&header, page, sizeof(header));
     HipcParsedRequest parsed = hipcParseRequest(page);
@@ -62,63 +106,72 @@ static Result response(void* output, size_t size, Handle* moved, bool* replied) 
 }
 
 bool ncmIpcIdle(void) {
-    if (!completion) return true;
-    s32 index = -1;
-    if (R_FAILED(svcWaitSynchronization(&index, &completion, 1, 0))) return false;
-    svcCloseHandle(completion);
-    completion = INVALID_HANDLE;
-    /* A late successful GetService can transfer a handle even though the
-     * caller already timed out. Discard it rather than replaying the command. */
-    response(NULL, 0, NULL, NULL);
-    return true;
+    mutexLock(&work_mutex);
+    const bool idle = state != Pending;
+    if (state == Done) {
+        // Late successful GetService replies still own a handle; discard it.
+        response(NULL, 0, NULL, NULL);
+        state = Idle;
+    }
+    mutexUnlock(&work_mutex);
+    return idle;
+}
+void ncmIpcCloseSession(Handle session) {
+    if (!session) return;
+    mutexLock(&work_mutex);
+    /* A descheduled worker may not have entered SendSyncRequest yet. Never
+     * let its numeric handle be recycled into an unrelated service. */
+    if (state == Pending && work_session == session) close_work_session = true;
+    else svcCloseHandle(session);
+    mutexUnlock(&work_mutex);
 }
 
 Result ncmIpcRequest(Handle session, u32 command, const void* input, size_t input_size,
                     void* output, size_t output_size, Handle* moved_handle,
                     bool send_pid, u64 timeout_ns, bool* replied) {
     if (replied) *replied = false;
-    if (!session || input_size > MaxInline || output_size > MaxInline ||
+    if (!session || input_size > MaxInline || output_size > 216 ||
         (input_size && !input) || (output_size && !output))
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     if (output_size) memset(output, 0, output_size);
     if (moved_handle) *moved_handle = INVALID_HANDLE;
     if (!ncmIpcIdle()) return timeoutError();
-    if (!envIsSyscallHinted(0x23))
-        return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
-    if (!page) page = memalign(PageSize, PageSize);
-    if (!page) return MAKERESULT(Module_Libnx, LibnxError_OutOfMemory);
+    Result result = startWorker();
+    if (R_FAILED(result)) return result;
+    mutexLock(&work_mutex);
     memset(page, 0, PageSize);
     CmifRequest request = cmifMakeRequest(page, (CmifRequestFormat){
         .request_id = command, .data_size = input_size, .send_pid = send_pid,
     });
     if (input_size) memcpy(request.data, input, input_size);
-    Result result = svcSendAsyncRequestWithUserBuffer(&completion, page, PageSize, session);
-    if (R_FAILED(result)) { completion = INVALID_HANDLE; return result; }
+    work_session = session;
+    state = Pending;
+    condvarWakeOne(&request_ready);
     const u64 started = armGetSystemTick();
-    for (;;) {
+    while (state == Pending) {
         const u64 elapsed = armTicksToNs(armGetSystemTick() - started);
-        s32 index = -1;
-        result = svcWaitSynchronization(&index, &completion, 1,
-                                       elapsed < timeout_ns ? timeout_ns - elapsed : 0);
-        if (result != KERNELRESULT(Cancelled) || elapsed >= timeout_ns) break;
+        if (elapsed >= timeout_ns) { result = timeoutError(); break; }
+        result = condvarWaitTimeout(&reply_ready, &work_mutex, timeout_ns - elapsed);
+        if (R_FAILED(result) && result != KERNELRESULT(Cancelled) &&
+            result != KERNELRESULT(TimedOut)) break;
     }
-    if (R_FAILED(result)) {
-        /* Do not free, overwrite, or allocate another page while the kernel
-         * owns this request. One hung peer therefore consumes at most 4 KiB. */
-        return result == KERNELRESULT(TimedOut) ? timeoutError() : result;
+    if (state == Done) {
+        result = response(output, output_size, moved_handle, replied);
+        state = Idle;
     }
-    svcCloseHandle(completion);
-    completion = INVALID_HANDLE;
-    return response(output, output_size, moved_handle, replied);
+    mutexUnlock(&work_mutex);
+    return result;
 }
 
 void ncmIpcShutdown(void) {
-    if (!ncmIpcIdle()) {
-        /* Closing a client handle does not cancel a request already received
-         * by a hung server. Process exit is the only safe bounded teardown;
-         * returning to hbloader would let it recycle still-owned memory. */
-        svcExitProcess();
-    }
-    free(page);
-    page = NULL;
+    // A hung worker must never survive an NRO reload into recycled memory.
+    if (!ncmIpcIdle()) svcExitProcess();
+    if (!worker_started) return;
+    mutexLock(&work_mutex);
+    worker_stop = true;
+    condvarWakeOne(&request_ready);
+    mutexUnlock(&work_mutex);
+    if (R_FAILED(threadWaitForExit(&worker))) svcExitProcess();
+    threadClose(&worker);
+    worker_started = false;
 }

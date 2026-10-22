@@ -1,5 +1,6 @@
 #pragma once
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+#include <stddef.h>
 #include "netease/playback_protocol.h"
 #include "netease/airplay_protocol.h"
 #include <switch.h>
@@ -7,9 +8,15 @@
 extern "C" {
 #endif
 Result ncmPlaybackInitialize(void);
+/* Last connection failure, including its handshake stage. This reports
+ * historical startup diagnostics as such; a file is never a liveness check. */
+void ncmPlaybackConnectionMessage(char* output, size_t size);
+/* PM lookup distinguishes a live, still-starting process from an absent IPC
+ * service. MAKERESULT(15, 1) means no such process; other failures are unknown. */
+Result ncmPlaybackGetBackgroundProcessId(u64* pid);
 void ncmPlaybackExit(void);
 /* Final exit only, after all client users stop. May terminate the process if
- * a hung peer still owns an async IPC buffer, preventing unsafe NRO reload. */
+ * an IPC worker is still blocked, preventing unsafe NRO reload. */
 void ncmPlaybackShutdown(void);
 bool ncmPlaybackIsActive(void);
 Result ncmPlaybackGetStatus(NcmPlaybackStatus* status);

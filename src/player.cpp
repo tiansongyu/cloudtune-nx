@@ -3,8 +3,8 @@
 #include "netease/storage.hpp"
 #include <algorithm>
 #include <chrono>
-#include <cstring>
 #include <cstdio>
+#include <cstring>
 #include <thread>
 #ifdef __SWITCH__
 #include "netease/playback_client.h"
@@ -30,6 +30,10 @@ bool Player::background() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return background_;
 }
+bool Player::waiting_for_background() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return remote_seen_ && !background_ && !local_ && !stopped_;
+}
 std::string Player::error() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return error_;
@@ -37,6 +41,25 @@ std::string Player::error() const {
 bool Player::start_tools() {
     std::lock_guard<std::mutex> lock(mutex_);
     return ensure_runtime();
+}
+bool Player::connect_background() {
+#ifdef __SWITCH__
+    if (stopped_ || local_)
+        return false;
+    const auto now = std::chrono::steady_clock::now();
+    if (now < reconnect_at_)
+        return false;
+    reconnect_at_ = now + std::chrono::seconds(2);
+    if (R_SUCCEEDED(ncmPlaybackInitialize())) {
+        background_ = remote_seen_ = true;
+        error_.clear();
+        return true;
+    }
+    char diagnostic[256];
+    ncmPlaybackConnectionMessage(diagnostic, sizeof(diagnostic));
+    error_ = std::string("后台尚未就绪，正在重连。") + diagnostic;
+#endif
+    return false;
 }
 bool Player::ensure_runtime() {
     if (stopped_) {
@@ -49,10 +72,10 @@ bool Player::ensure_runtime() {
     const Result connection = ncmPlaybackInitialize();
     if (R_SUCCEEDED(connection)) {
         background_ = remote_seen_ = true;
+        error_.clear();
         return true;
     }
-    if (connection == MAKERESULT(Module_Libnx, LibnxError_Timeout) ||
-        connection == MAKERESULT(421, 1))
+    if (connection != MAKERESULT(Module_Libnx, LibnxError_NotFound) && hosversionIsAtmosphere())
         remote_seen_ = true; // Existing ownership is unresolved; do not start a second player.
     // A service that is already starting can report "already launched".
     // Always give that process a short bounded chance to register its IPC.
@@ -63,15 +86,23 @@ bool Player::ensure_runtime() {
         for (int i = 0; i < 15; ++i) {
             if (R_SUCCEEDED(ncmPlaybackInitialize())) {
                 background_ = remote_seen_ = true;
+                error_.clear();
                 return true;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+        u64 pid = 0;
+        // Only an explicit PM "not found" permits a foreground fallback.
+        // A denied/failed lookup cannot safely establish audio ownership.
+        if (ncmPlaybackGetBackgroundProcessId(&pid) != MAKERESULT(15, 1))
+            remote_seen_ = true;
     }
     if (remote_seen_) {
         // A known background process can still be starting or recovering.
         // Never create another listener while its ownership is unresolved.
-        error_ = "后台服务尚未就绪，请稍后重试";
+        char diagnostic[256];
+        ncmPlaybackConnectionMessage(diagnostic, sizeof(diagnostic));
+        error_ = std::string("后台尚未就绪，正在重连。") + diagnostic;
         return false;
     }
 #endif
@@ -141,9 +172,10 @@ bool Player::clear_account() {
     if (stopped_)
         return false;
     try {
-        const NcmQueueHeader empty{{'N','C','M','Q','U','E','U','E'}, NCM_PROTOCOL_VERSION, 0};
+        const NcmQueueHeader empty{
+            {'N', 'C', 'M', 'Q', 'U', 'E', 'U', 'E'}, NCM_PROTOCOL_VERSION, 0};
         storage::write_file(directory_ + "/queue.nsq",
-                            std::string(reinterpret_cast<const char*>(&empty), sizeof(empty)));
+                            std::string(reinterpret_cast<const char *>(&empty), sizeof(empty)));
         if (!ensure_runtime())
             return false;
 #ifdef __SWITCH__
@@ -157,13 +189,15 @@ bool Player::clear_account() {
         if (local_ && local_->command(NcmCommand_ClearQueue))
             return true;
         error_ = "播放队列尚未清除，请稍后重试账号切换";
-    } catch (const std::exception&) {
+    } catch (const std::exception &) {
         error_ = "无法清除账号播放队列，请检查存储空间";
     }
     return false;
 }
 bool Player::command_locked(NcmCommand cmd, uint32_t arg) {
 #ifdef __SWITCH__
+    if (!background_ && remote_seen_ && !local_)
+        connect_background();
     if (background_) {
         Result rc = 0;
         switch (cmd) {
@@ -207,9 +241,14 @@ bool Player::command_locked(NcmCommand cmd, uint32_t arg) {
             return false;
         }
         if (R_FAILED(rc)) {
-            ncmPlaybackExit();
-            background_ = false;
-            error_ = "后台服务连接中断，重新选择歌曲可重连";
+            // The C client preserves a valid error reply. Queue-full and
+            // unsupported controls do not mean the transport disconnected.
+            background_ = ncmPlaybackIsActive();
+            char message[128];
+            std::snprintf(message, sizeof(message), "%s（0x%08X）",
+                          background_ ? "后台未接受此操作，请稍后重试" : "后台连接中断，正在重连",
+                          rc);
+            error_ = message;
             return false;
         }
         return true;
@@ -222,16 +261,26 @@ NcmPlaybackStatus Player::status() {
     NcmPlaybackStatus s{};
     s.volume_permille = 700;
 #ifdef __SWITCH__
+    if (!background_ && remote_seen_ && !local_)
+        connect_background();
     if (background_) {
-        if (R_FAILED(ncmPlaybackGetStatus(&s))) {
-            ncmPlaybackExit();
-            background_ = false;
+        const Result rc = ncmPlaybackGetStatus(&s);
+        if (R_FAILED(rc)) {
+            background_ = ncmPlaybackIsActive();
             s.state = NcmPlayback_Error;
-            std::strncpy(s.message, "Background service disconnected", sizeof(s.message) - 1);
+            s.error_code = rc;
+            std::strncpy(s.message,
+                         background_ ? "Background status temporarily unavailable"
+                                     : "Background disconnected; reconnecting",
+                         sizeof(s.message) - 1);
         }
         return s;
     }
 #endif
+    if (!local_ && remote_seen_ && !stopped_) {
+        s.state = NcmPlayback_Error;
+        std::snprintf(s.message, sizeof(s.message), "后台未就绪，请稍后重试");
+    }
     return local_ ? local_->status() : s;
 }
 NcmAirplayStatus Player::airplay_status() {
@@ -243,6 +292,8 @@ NcmAirplayStatus Player::airplay_status_locked() {
     result.version = NCM_AIRPLAY_VERSION;
     result.state = NcmAirplay_Error;
 #ifdef __SWITCH__
+    if (!background_ && remote_seen_ && !local_)
+        connect_background();
     if (background_) {
         const Result rc = ncmAirplayGetStatus(&result);
         if (R_SUCCEEDED(rc))

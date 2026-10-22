@@ -22,8 +22,7 @@ class PlayerGui : public tsl::Gui {
     std::chrono::steady_clock::time_point animation_time = std::chrono::steady_clock::now();
     void control(Result result) {
         if (R_FAILED(result)) {
-            ncmPlaybackExit();
-            connected = false;
+            connected = ncmPlaybackIsActive();
         }
         refresh = {};
     }
@@ -112,6 +111,7 @@ class PlayerGui : public tsl::Gui {
         button(list, "开启 / 关闭随机播放", [] { return ncmPlaybackSetShuffle(!status.shuffle); });
         button(list, "停止播放", [] { return ncmPlaybackStop(); });
         button(list, "启动 / 重连后台服务", [] {
+            if (R_SUCCEEDED(ncmPlaybackInitialize())) return Result{0};
             ncmPlaybackLaunchBackground();
             return ncmPlaybackInitialize();
         }, false);
@@ -131,9 +131,14 @@ class PlayerGui : public tsl::Gui {
         refresh = now + std::chrono::milliseconds(500);
         if (!connected)
             connected = R_SUCCEEDED(ncmPlaybackInitialize());
-        if (connected && R_FAILED(ncmPlaybackGetStatus(&status))) {
-            ncmPlaybackExit();
-            connected = false;
+        if (connected) {
+            const Result rc = ncmPlaybackGetStatus(&status);
+            if (R_FAILED(rc)) {
+                connected = ncmPlaybackIsActive();
+                status.state = NcmPlayback_Error;
+                status.error_code = rc;
+                std::snprintf(status.message, sizeof(status.message), "后台状态暂不可用：0x%08X", rc);
+            }
         }
         if (!connected) {
             refresh = now + std::chrono::seconds(2);
@@ -144,7 +149,9 @@ class PlayerGui : public tsl::Gui {
             play->setText("播放 / 暂停");
             volume->setValue("--");
             mode->setValue("--");
-            information->setText("请安装或启动后台服务");
+            char diagnostic[256];
+            ncmPlaybackConnectionMessage(diagnostic, sizeof(diagnostic));
+            information->setText(diagnostic);
             return;
         }
         title->setText(status.title[0] ? status.title : "请在主应用中选择歌曲");

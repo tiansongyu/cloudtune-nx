@@ -760,3 +760,22 @@ Primary references checked:
 - Confirmed AirPlay pause is intentionally local in the existing engine.
   Sender pause requires a separate remote-control implementation and sender
   support; documented without claiming that all AirPlay devices behave this way.
+
+## 2026-10-22 · TriPlayer reference and connection recovery (v0.2.12)
+
+- Compared TriPlayer's standard SM/CMIF client, serialized poller, prelaunch
+  process lookup and server dispatch at `737adfdfcea89924286b1cd13ec47a9ebaffda96`.
+  Independently implement the communication patterns; preserve CloudTune's
+  protocol, engine and network/account behavior.
+- Replace async user-buffer IPC with one bounded TLS worker. Preserve request
+  memory and its handle until completion, discard late replies safely and do
+  not replay ambiguous controls. Add native two-client/timeout regression probe.
+- Query PM before launch, reconnect a known background owner, retain valid
+  command-error sessions and expose waiting/diagnostic states in both clients.
+- Physical SD logs show only 168 KiB free: startup never reached IPC. Clear
+  stale IPC diagnostics early and report completed low-memory startup failures.
+  Preserve the resource guard and the user's CloudTune boot2 marker.
+- With user authorization, reversibly disable five unrelated autostart modules
+  for a minimal hardware retest. Keep the loader enabled; do not claim that
+  the configuration change alone establishes successful playback. Host, native
+  probe and hardware boundaries are recorded in VALIDATION.md.

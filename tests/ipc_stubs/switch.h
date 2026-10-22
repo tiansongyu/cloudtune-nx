@@ -6,6 +6,9 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <pthread.h>
+#include <time.h>
+#include <errno.h>
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
@@ -14,6 +17,35 @@ typedef int32_t s32;
 typedef uint32_t Result;
 typedef uint32_t Handle;
 typedef uint64_t SmServiceName;
+typedef pthread_mutex_t Mutex;
+typedef pthread_cond_t CondVar;
+typedef struct { pthread_t handle; void (*entry)(void*); void* arg; } Thread;
+static inline void mutexLock(Mutex* m) { pthread_mutex_lock(m); }
+static inline void mutexUnlock(Mutex* m) { pthread_mutex_unlock(m); }
+static inline Result condvarWaitTimeout(CondVar* c, Mutex* m, u64 ns) {
+    if (ns == UINT64_MAX) return pthread_cond_wait(c, m) ? 1 : 0;
+    struct timespec until;
+    clock_gettime(CLOCK_REALTIME, &until);
+    until.tv_sec += ns / 1000000000;
+    until.tv_nsec += ns % 1000000000;
+    if (until.tv_nsec >= 1000000000) { ++until.tv_sec; until.tv_nsec -= 1000000000; }
+    const int rc = pthread_cond_timedwait(c, m, &until);
+    return rc == ETIMEDOUT ? 0xea01 : (Result)rc;
+}
+static inline Result condvarWait(CondVar* c, Mutex* m) { return condvarWaitTimeout(c,m,UINT64_MAX); }
+static inline void condvarWakeOne(CondVar* c) { pthread_cond_signal(c); }
+static inline void condvarWakeAll(CondVar* c) { pthread_cond_broadcast(c); }
+static inline void* testThreadEntry(void* data) {
+    Thread* t = (Thread*)data; t->entry(t->arg); return NULL;
+}
+extern Result testThreadCreateResult;
+static inline Result threadCreate(Thread* t, void (*entry)(void*), void* arg, void* stack, size_t size, int priority, int cpu) {
+    (void)stack; (void)size; (void)priority; (void)cpu;
+    t->entry=entry; t->arg=arg; return testThreadCreateResult;
+}
+static inline Result threadStart(Thread* t) { return pthread_create(&t->handle,NULL,testThreadEntry,t); }
+static inline Result threadWaitForExit(Thread* t) { return pthread_join(t->handle,NULL); }
+static inline Result threadClose(Thread* t) { (void)t; return 0; }
 #define MAX_WAIT_OBJECTS 64
 #define INVALID_HANDLE 0
 #define Module_Libnx 345
@@ -106,10 +138,15 @@ u64 armGetSystemTick(void);
 static inline u64 armTicksToNs(u64 ticks) { return ticks; }
 Result svcSendAsyncRequestWithUserBuffer(Handle*, void*, u64, Handle);
 Result svcConnectToNamedPort(Handle*, const char*);
+#ifdef __cplusplus
+[[noreturn]] void svcExitProcess(void);
+#else
 _Noreturn void svcExitProcess(void);
+#endif
 void* armGetTls(void);
 Result svcCloseHandle(Handle handle);
 Result svcAcceptSession(Handle*, Handle);
+Result svcSendSyncRequest(Handle);
 Result svcReplyAndReceive(s32*, const Handle*, s32, Handle, u64);
 Result svcWaitSynchronization(s32*, const Handle*, s32, u64);
 Result smRegisterServiceCmif(Handle*, SmServiceName, bool, s32);
@@ -127,16 +164,18 @@ static inline void* smGetServiceSessionTipc(void) { return NULL; }
 static inline Result smGetService(Service* service, const char* name) {
     (void)name; service->active = true; return 0;
 }
-static inline Result pmshellInitialize(void) { return 0; }
-static inline void pmshellExit(void) {}
-static inline Result pmshellLaunchProgram(u32 flags, const NcmProgramLocation* location, u64* pid) {
-    (void)flags; (void)location; *pid=1; return 0;
-}
+Result pmshellInitialize(void);
+void pmshellExit(void);
+Result pmshellLaunchProgram(u32 flags, const NcmProgramLocation* location, u64* pid);
+Result pmdmntInitialize(void);
+void pmdmntExit(void);
+Result pmdmntGetProcessId(u64*, u64);
 Result testServiceCall(Service*, u32, void*, size_t);
 #define serviceDispatchOut(service, command, output) \
     testServiceCall(service, command, &(output), sizeof(output))
 #define serviceDispatchIn(service, command, input) \
     testServiceCall(service, command, (void*)&(input), sizeof(input))
 #define serviceDispatch(service, command) testServiceCall(service, command, NULL, 0)
+Result testHasService(u8*);
 #define tipcDispatchInOut(service, command, input, output) \
-    ((void)(service), (void)(command), (void)(input), (output)=1, (Result)0)
+    ((void)(service), (void)(command), (void)(input), testHasService(&(output)))

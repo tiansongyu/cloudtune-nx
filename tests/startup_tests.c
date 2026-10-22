@@ -11,7 +11,7 @@ static bool known_version, home_confirmed, heap_failed, resource_handle;
 static unsigned acquired, released, queries, sleeps, home_after;
 static size_t committed;
 static char diagnostics[32768], disk_log[32768];
-static bool stale_ready = true;
+static bool stale_ready = true, stale_ipc = true;
 static bool process_exited;
 void svcExitProcess(void) {
     process_exited = true;
@@ -86,8 +86,9 @@ Result fsFsCreateFile(FsFileSystem *fs, const char *path, s64 size, u32 option) 
 }
 Result fsFsDeleteFile(FsFileSystem *fs, const char *path) {
     (void)fs;
-    check(strstr(path, "background-ready.log") != NULL, "Unexpected deletion");
-    stale_ready = false;
+    if (strstr(path, "background-ready.log")) stale_ready = false;
+    else if (strstr(path, "ipc.log")) stale_ipc = false;
+    else check(false, "Unexpected deletion");
     return 0;
 }
 Result fsFsOpenFile(FsFileSystem *fs, const char *path, u32 mode, FsFile *file) {
@@ -252,7 +253,7 @@ static void scenario(const char *fail, bool known, unsigned delay) {
     if (log_ready && !fails("log-write")) {
         check(strstr(disk_log, "CloudTune NX") && strstr(disk_log, "sm: 0x00000000"),
               "Early log lost");
-        check(!stale_ready, "Stale ready marker retained");
+        check(!stale_ready && !stale_ipc, "Stale ready/IPC marker retained");
         if (queries)
             check(strstr(disk_log, "before-home"), "Pre-boot resource snapshot missing");
         if (heap_failed)

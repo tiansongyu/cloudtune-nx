@@ -67,6 +67,9 @@ static void open_log(void) {
     fsFsCreateDirectory(&log_fs, "/config");
     fsFsCreateDirectory(&log_fs, LOG_DIRECTORY);
     fsFsDeleteFile(&log_fs, LOG_DIRECTORY "/background-ready.log");
+    /* A rejected boot never reaches IPC initialization. Do not leave a
+     * previous boot's successful registration looking like current evidence. */
+    fsFsDeleteFile(&log_fs, LOG_DIRECTORY "/ipc.log");
     /* Create if absent, then truncate an existing file after opening it. */
     fsFsCreateFile(&log_fs, LOG_PATH, 0, 0);
     result = fsFsOpenFile(&log_fs, LOG_PATH, FsOpenMode_Write | FsOpenMode_Append, &log_file);

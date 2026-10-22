@@ -53,14 +53,40 @@ module out of the system boot sequence. Starting the service does not play the s
 NetEase queue. Its independent AirPlay 1 receiver starts when enabled; the
 first-use default is enabled, and later starts follow your saved preference.
 
+## v0.2.12 connection and low-memory troubleshooting
+
+Update all three matching components: the NRO, `exefs.nsp` and `CloudTune.ovl`.
+Preserve `config/netease-switch/` and any local photo resources. A local
+autostart repair bundle includes an empty
+`atmosphere/contents/42000000004E434D/flags/boot2.flag`; public downloads keep
+autostart opt-in. `boot.flag` is not the Atmosphere boot2 marker.
+
+The foreground and overlay now reuse an existing process and retry a delayed
+connection. The GUI distinguishes **后台连接中** from **前台播放**. An absent
+service is not necessarily an IPC fault: check the current boot's
+`background-startup.log`. `runtime`, `ipc-register` and `ready` should all
+report zero. A failed `boot-resource-gate` followed by `startup-exit` means
+initialization stopped before registration. v0.2.12 clears the previous
+`ipc.log` at startup, so an old success line cannot stand in for this boot.
+
+One physical v0.2.11 log showed only **168 KiB** free in the shared system
+memory quota. CloudTune correctly refused startup; its first heap growth alone
+needs 2 MiB, before the existing safety margin. To test with more headroom,
+fully power off, temporarily rename unused third-party modules' `boot2.flag`
+files, preserve CloudTune and your overlay loader, then reboot. Record the new
+resource counters and test frontend/overlay controls. Restore the renamed
+markers one at a time, rebooting between trials. Do not lower the resource
+guard or assume that a module's file size equals its runtime memory usage.
+
 ## First launch
 
 1. Install a compatible Tesla/Ultrahand overlay loader separately if you
    intend to use the in-game overlay.
 2. Copy the SD archive directories to your SD card. Keep the folder
    hierarchy and allow the files from this release to replace older files.
-3. Reboot into Atmosphère. For upgrades, remove the old CloudTune `boot2.flag`
-   first, as described below.
+3. Reboot into Atmosphère. Standard packages launch on demand. If you have
+   deliberately enabled the current service at boot, keep its `boot2.flag`;
+   disable it only when using the boot-failure recovery steps below.
 4. Hold **R** while launching a game to open Homebrew Menu in full application
    mode, then launch **CloudTune NX**. Use this mode for the GUI and networking
    memory budget.
