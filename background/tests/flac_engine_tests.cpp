@@ -74,7 +74,7 @@ int main(int argc,char** argv) {
         waitFor(engine,[](auto s){return s.position_ms>150;},"music reload failed");
         check(engine.begin_external(44100),"AirPlay handoff failed");
         std::vector<int16_t> external(44100*2,1000);
-        check(engine.write_external(external.data(),44100),"AirPlay PCM rejected");
+        check(engine.write_external(external.data(), 22050), "AirPlay PCM rejected");
         waitFor(engine,[](auto s){return s.track_id==0 && s.position_ms>100;},"AirPlay not playing");
         emptyQueue(directory);
         check(engine.command(NcmCommand_ClearQueue),"clear during AirPlay failed");

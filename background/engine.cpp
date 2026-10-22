@@ -75,9 +75,17 @@ public:
 #ifdef __SWITCH__
         if (R_FAILED(error_ = audoutInitialize())) return false;
         active_ = true;
-        for (auto& buffer : buffers_) {
-            buffer.buffer = memalign(0x1000, 0x2000);
-            if (!buffer.buffer) { error_=UINT32_MAX; close(); return false; }
+        // One allocation prevents six aligned blocks from fragmenting the
+        // small heap needed by the next AAC decoder during a natural handoff.
+        storage_ = memalign(0x1000, buffers_.size() * 0x2000);
+        if (!storage_) {
+            error_ = UINT32_MAX;
+            close();
+            return false;
+        }
+        for (size_t i = 0; i < buffers_.size(); ++i) {
+            auto &buffer = buffers_[i];
+            buffer.buffer = static_cast<uint8_t *>(storage_) + i * 0x2000;
             buffer.buffer_size = 0x2000;
             buffer.data_size = 0;
         }
@@ -100,8 +108,9 @@ public:
     void close() {
 #ifdef __SWITCH__
         if (active_) { audoutStopAudioOut(); audoutExit(); }
-        for (auto& buffer : buffers_) {
-            if (buffer.buffer) std::free(buffer.buffer);
+        std::free(storage_);
+        storage_ = nullptr;
+        for (auto &buffer : buffers_) {
             buffer = {};
         }
         busy_.fill(false);
@@ -116,7 +125,17 @@ public:
 #ifdef __SWITCH__
         AudioOutBuffer* released = nullptr;
         u32 count = 0;
-        if (R_FAILED(error_ = audoutGetReleasedAudioOutBuffer(&released, &count))) return false;
+        // Wait on the release event when full, rather than issuing an audio
+        // IPC query every 4 ms. The bounded wait keeps transport responsive.
+        const bool full = std::all_of(busy_.begin(), busy_.end(), [](bool value) { return value; });
+        error_ = full ? audoutWaitPlayFinish(&released, &count, 10000000)
+                      : audoutGetReleasedAudioOutBuffer(&released, &count);
+        if (error_ == KERNELRESULT(TimedOut)) {
+            error_ = 0;
+            return false;
+        }
+        if (R_FAILED(error_))
+            return false;
         while (released) {
             for (size_t i=0; i<buffers_.size(); ++i) if (&buffers_[i] == released) busy_[i] = false;
             released = released->next;
@@ -164,8 +183,10 @@ private:
     bool active_ = false;
     uint32_t error_ = 0;
 #ifdef __SWITCH__
-    std::array<AudioOutBuffer, 4> buffers_{};
-    std::array<bool, 4> busy_{};
+    // 256 ms at 48 kHz; only 16 KiB more than the previous four-buffer queue.
+    std::array<AudioOutBuffer, 6> buffers_{};
+    std::array<bool, 6> busy_{};
+    void *storage_ = nullptr;
 #else
     SDL_AudioDeviceID device_ = 0;
 #endif
@@ -360,7 +381,7 @@ struct Engine::Impl {
         }
         state(NcmPlayback_Error, message, 3);
     }
-    void closeTrack() {
+    void closeTrack(bool keepOutput = false) {
         recoveringOutput = false; outputAttempts = 0; healthyOutputSince = {};
         downloadCancel = true;
         if (downloader.joinable()) downloader.join();
@@ -368,7 +389,8 @@ struct Engine::Impl {
         decoderOpen = false;
         if (input) std::fclose(input);
         input = nullptr;
-        sink.close();
+        if (!keepOutput)
+            sink.close();
         havePair = false; reachedEnd = false;
         decodedCount = decodedPosition = 0; producedFrames = 0; phase = 0;
         cursor = 0; seekBase = 0;
@@ -469,9 +491,16 @@ struct Engine::Impl {
     void startFetch(const std::string& url) {
         if (config.can_start_work && !config.can_start_work())
             throw std::runtime_error("System resources low; retry playback later");
-        downloader=std::thread([this,url,path=currentPath] {
-            try { fetch(url,path); }
-            catch (...) { downloadError=CURLE_OUT_OF_MEMORY; downloadDone=true; }
+        downloader = std::thread([this, url, path = currentPath] {
+#ifdef __SWITCH__
+            svcSetThreadPriority(CUR_THREAD_HANDLE, 55);
+#endif
+            try {
+                fetch(url, path);
+            } catch (...) {
+                downloadError = CURLE_OUT_OF_MEMORY;
+                downloadDone = true;
+            }
         });
     }
     static size_t readStream(void* context, void* destination, size_t bytes) {
@@ -568,8 +597,8 @@ struct Engine::Impl {
         if (url.rfind("http://", 0) == 0) url.replace(0, 7, "https://");
         return url;
     }
-    bool beginTrack(uint32_t index, bool retryInvalidCache = true) {
-        closeTrack();
+    bool beginTrack(uint32_t index, bool retryInvalidCache = true, bool keepOutput = false) {
+        closeTrack(keepOutput);
         if (index >= queue.size()) return false;
         auto& entry = queue[index];
         paused = false; preview = false;
@@ -693,6 +722,23 @@ struct Engine::Impl {
                 opened = decoder.open(readStream, seekStream, tellStream, this);
             }
         }
+        if (!opened && decoder.resource_limited() && keepOutput && !cacheError && !downloadError &&
+            running && !interrupt) {
+            // A demanding decoder may not fit beside the retained DMA block.
+            // Preserve the audible tail, then retry with that memory released.
+            // This bounded fallback trades a transition gap for continued play.
+            const auto deadline = std::chrono::steady_clock::now() + 5s;
+            while (running && !interrupt && sink.queuedMs() && !sink.error() &&
+                   std::chrono::steady_clock::now() < deadline) {
+                sink.canWrite();
+                std::this_thread::sleep_for(4ms);
+            }
+            sink.close();
+            if (!running || interrupt)
+                return false;
+            cursor = 0;
+            opened = decoder.open(readStream, seekStream, tellStream, this);
+        }
         if (cacheError) {
             reportCacheFailure();
             return false;
@@ -712,6 +758,10 @@ struct Engine::Impl {
             return false;
         }
         decoderOpen = true;
+        // A finished download still owns its std::thread stack until joined.
+        // Reclaim it before opening audout, especially with AAC in compact mode.
+        if (downloadDone && downloader.joinable())
+            downloader.join();
         const bool outputReady = sink.open();
         if (decoder.frames()) {
             const uint64_t duration=decoder.frames()*1000/decoder.sample_rate();
@@ -825,11 +875,12 @@ struct Engine::Impl {
         }
         return beginTrack(index);
     }
-    bool advance(bool manual, bool previous = false) {
+    bool advance(bool manual, bool previous = false, bool keepOutput = false) {
         auto s = getStatus();
         if (queue.empty()) return false;
         uint32_t index = s.queue_index < queue.size() ? s.queue_index : 0;
-        if (!manual && s.repeat == NcmRepeat_One) return beginTrack(index);
+        if (!manual && s.repeat == NcmRepeat_One)
+            return beginTrack(index, true, keepOutput);
         if (s.shuffle && queue.size()>1) {
             std::uniform_int_distribution<uint32_t> pick(1, static_cast<uint32_t>(queue.size()-1));
             index=(index+pick(rng))%queue.size();
@@ -841,7 +892,7 @@ struct Engine::Impl {
                 else { closeTrack(); sink.close(); state(NcmPlayback_Stopped,"Queue finished"); return true; }
             }
         }
-        return beginTrack(index);
+        return beginTrack(index, true, keepOutput);
     }
     NcmPlaybackStatus getStatus() const {
         std::lock_guard<std::mutex> lock(mutex); return snapshot;
@@ -1059,6 +1110,8 @@ struct Engine::Impl {
         auto drainingSince=std::chrono::steady_clock::time_point{};
         auto lastIteration=std::chrono::steady_clock::now();
         while (running) {
+            if (downloadDone && downloader.joinable())
+                downloader.join();
             const auto iteration = std::chrono::steady_clock::now();
             const bool longGap = iteration - lastIteration > 2s;
             lastIteration = iteration;
@@ -1083,7 +1136,8 @@ struct Engine::Impl {
                     next.first != NcmCommand_Shuffle) {
                     stalledSince={}; drainingSince={};
                 }
-                continue;
+                // Give audio an output turn even under sustained volume/mode
+                // commands. An unbounded command stream must not starve PCM.
             }
             if (interrupt) { std::this_thread::sleep_for(2ms); continue; }
             if (recoveringOutput) {
@@ -1093,7 +1147,7 @@ struct Engine::Impl {
                 std::this_thread::sleep_for(4ms);
                 continue;
             }
-            if (longGap && getStatus().state == NcmPlayback_Playing &&
+            if (!hasCommand && longGap && getStatus().state == NcmPlayback_Playing &&
                 (decoderOpen || externalMode)) {
                 recoverOutput();
                 stalledSince = {};
@@ -1112,9 +1166,19 @@ struct Engine::Impl {
                 }
                 if (!externalPaused && external.active()) {
                     stalledSince = {};
+                    // Partial live packets wait for a complete output block.
+                    // The already-submitted audio still advances while waiting.
+                    {
+                        const uint64_t elapsed = externalFrames * 1000 / SampleRate;
+                        const auto queued = sink.queuedMs();
+                        std::lock_guard<std::mutex> lock(mutex);
+                        snapshot.position_ms =
+                            static_cast<uint32_t>(elapsed > queued ? elapsed - queued : 0);
+                    }
                     const auto volume = getStatus().volume_permille;
-                    const size_t frames = external.render(pcm.data(), FramesPerBuffer,
-                        static_cast<float>(volume) * externalGain.load() / 1000000.f);
+                    const size_t frames = external.render(
+                        pcm.data(), FramesPerBuffer,
+                        static_cast<float>(volume) * externalGain.load() / 1000000.f, true);
                     if (frames) {
                         if (!sink.write(pcm.data(), frames)) {
                             recoverOutput();
@@ -1151,6 +1215,20 @@ struct Engine::Impl {
                 lastIteration = std::chrono::steady_clock::now();
                 if (interrupt || !running) continue;
                 if (!frames) {
+                    // Prepare the next decoder while the current track's tail
+                    // is still audible. Reuse the output session and append new
+                    // PCM after that tail; no drain/close/reopen gap for cached
+                    // queues. Network misses can still require buffering.
+                    const auto current = getStatus();
+                    const bool nextAvailable =
+                        !queue.empty() &&
+                        (current.repeat != NcmRepeat_Off || (current.shuffle && queue.size() > 1) ||
+                         current.queue_index + 1 < queue.size());
+                    if (!cacheError && !downloadError && !decoder.damaged() && nextAvailable) {
+                        failures = 0;
+                        advance(false, false, true);
+                        continue;
+                    }
                     // Drain the last queued PCM before changing tracks.
                     if (sink.queuedMs()) {
                         const auto now=std::chrono::steady_clock::now();
@@ -1199,6 +1277,12 @@ struct Engine::Impl {
         closeTrack(); sink.close();
     }
     void run() {
+#ifdef __SWITCH__
+        // Match the established background-player priority range. libnx's
+        // std::thread default (59) can be starved by system work during games.
+        // The sysmodule's existing core-3-only mask is unchanged.
+        svcSetThreadPriority(CUR_THREAD_HANDLE, 49);
+#endif
         while (running) {
             try { runLoop(); }
             catch (const std::bad_alloc&) {
@@ -1254,6 +1338,15 @@ bool Engine::command(NcmCommand cmd,uint32_t argument) {
         (cmd==NcmCommand_Shuffle && argument>1) ||
         (cmd==NcmCommand_LoadQueue && argument>=NCM_MAX_QUEUE)) return false;
     std::unique_lock<std::mutex> lock(impl_->mutex);
+    // Sliders/repeat toggles can arrive faster than audout releases a buffer.
+    // Adjacent updates have only one observable final value; retain transport
+    // ordering and reserve queue space for pause/stop instead of filling it.
+    if ((cmd == NcmCommand_Volume || cmd == NcmCommand_Repeat || cmd == NcmCommand_Shuffle) &&
+        !impl_->commands.empty() && impl_->commands.back().first == cmd) {
+        impl_->commands.back().second = argument;
+        impl_->cv.notify_all();
+        return true;
+    }
     if (cmd==NcmCommand_ClearQueue) {
         // Supersede stale queued music commands before waiting for the active
         // decoder/download to stop. Keep AirPlay lifecycle and volume/modes.

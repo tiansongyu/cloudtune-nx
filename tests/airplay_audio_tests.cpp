@@ -42,6 +42,12 @@ int main(int argc, char** argv) {
         check(!stream.push(ramp.data(), PcmStream::Capacity + 1), "Unbounded input accepted");
         stream.close();
         check(!stream.push(ramp.data(), 441), "Closed source accepted audio");
+        check(stream.open(44100) && stream.push(ramp.data(), 441), "Block aggregation setup");
+        check(stream.render(output.data(), 480, 1, true) == 0,
+              "Partial network packet consumed an output buffer");
+        check(stream.push(ramp.data(), 441) && stream.render(output.data(), 480, 1, true) == 480,
+              "Complete output block did not preserve pending input");
+        stream.close();
 
         const std::string directory = argv[1];
         std::filesystem::create_directories(directory);
@@ -55,21 +61,21 @@ int main(int argc, char** argv) {
         check(engine.start() && engine.command(NcmCommand_LoadQueue), "Music start failed");
         const auto music = wait(engine, [](auto s) { return s.track_id == 901 && s.position_ms > 200; });
         check(engine.begin_external(44100), "External handoff failed");
-        std::vector<int16_t> audio(44100 * 2);
-        for (size_t i = 0; i < 44100; ++i)
+        std::vector<int16_t> audio(22050 * 2);
+        for (size_t i = 0; i < 22050; ++i)
             audio[i * 2] = audio[i * 2 + 1] = static_cast<int16_t>(1000 * std::sin(i * .07));
-        check(engine.write_external(audio.data(), 44100), "External PCM rejected");
+        check(engine.write_external(audio.data(), 22050), "External PCM rejected");
         wait(engine, [](auto s) { return s.track_id == 0 && s.position_ms > 150; });
         check(engine.external_active(), "External source not active");
         engine.command(NcmCommand_Pause);
         const auto paused = wait(engine, [](auto s) { return s.state == NcmPlayback_Paused; });
         std::this_thread::sleep_for(100ms);
         check(engine.status().position_ms == paused.position_ms, "Paused external clock advanced");
-        engine.write_external(audio.data(), 44100); // Must be discarded at the live edge.
+        engine.write_external(audio.data(), 22050); // Must be discarded at the live edge.
         engine.command(NcmCommand_Play);
         wait(engine, [](auto s) { return s.state == NcmPlayback_Playing; });
         engine.flush_external();
-        engine.write_external(audio.data(), 44100);
+        engine.write_external(audio.data(), 22050);
         wait(engine, [](auto s) { return s.position_ms > 100; });
         engine.end_external();
         const auto restored = wait(engine, [](auto s) {

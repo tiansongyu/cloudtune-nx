@@ -102,7 +102,10 @@ if(NINTENDO_SWITCH)
   target_compile_definitions(ncm-switch-handoff-probe PRIVATE CLOUDTUNE_VERSION="${PROJECT_VERSION}-handoff-probe")
   target_link_libraries(ncm-switch-handoff-probe PRIVATE ncm_runtime)
   target_link_options(ncm-switch-handoff-probe PRIVATE "-Wl,--wrap=ncmBootHasHomeMenu"
-    "-Wl,--wrap=ncmIpcServerProcess")
+    "-Wl,--wrap=ncmIpcServerProcess" "-Wl,--wrap=audoutStartAudioOut"
+    "-Wl,--wrap=audoutAppendAudioOutBuffer" "-Wl,--wrap=svcSetHeapSize"
+    "-Wl,--wrap=malloc" "-Wl,--wrap=memalign"
+    "-Wl,--wrap=svcGetResourceLimitCurrentValue" "-Wl,--wrap=svcGetResourceLimitLimitValue")
   set(HANDOFF_PROBE_DIR "${CMAKE_CURRENT_BINARY_DIR}/handoff-probe-package")
   add_custom_target(ncm-switch-handoff-probe-package
     COMMAND ${CMAKE_COMMAND} -E make_directory "${HANDOFF_PROBE_DIR}"

@@ -844,3 +844,32 @@ Primary references checked:
   five previously disabled optional modules. Preserve the user's photo NRO
   locally; public builds exclude private resources. See VALIDATION.md for
   successful tests and the remaining physical acceptance boundary.
+
+
+## 2026-10-22 · Background continuity and AirPlay cover handling (v0.3.0)
+
+- The user confirms v0.2.15 physical background playback works. New reports
+  concern music dropouts while games remain smooth, and NetEase phone AirPlay
+  connecting without usable audio. Version advances directly to 0.3.0.
+- Reproduce a background-only AirPlay failure with the real native 2 MiB
+  policy: a 2.25-second-latency encrypted ALAC stream plus a 256 KiB image
+  terminates the old receiver. Drain ignored RTSP bodies incrementally, bound
+  parsed metadata, preserve pipeline/partial-request framing and keep RTP work
+  scheduled during large control transfers.
+- Assign audio/receiver/download priorities 49/52/55 within the existing core-3
+  background mask. Use six 8 KiB output buffers and bounded release-event waits;
+  coalesce adjacent slider values and provide output turns during control floods.
+- Reduce the final PCM handoff from 192,000 to 96,000 bytes and aggregate small
+  packets into complete device blocks. Maintain the playback clock while the
+  last submitted blocks drain. Release finished downloader stacks promptly.
+- Stress exposed real AAC allocation fragmentation: 554,256-byte aligned
+  allocation failed with 659,744 total free bytes. Reduce background UDP TX
+  from 64 to 8 KiB, retaining 64 KiB RX, releasing 112 KiB of pinned allocation.
+  Keep the 2 MiB cap and all shared-system resource checks unchanged.
+- Reuse output for natural queue transitions, preparing the next decoder while
+  the previous tail plays. Preserve a bounded drain/reopen retry when a decoder
+  cannot coexist with retained output. Network misses can still need buffering.
+- Expand host and native coverage for continuous queues, dual-client transport
+  cycles, dense slider updates, real PCM submissions, memory bounds, synthetic
+  system-core contention and AAC-to-AirPlay takeover with repeated covers.
+  Exact executed results and limits are recorded in VALIDATION.md.

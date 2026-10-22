@@ -13,13 +13,19 @@ namespace netease::playback {
  * never call audout/SDL, allocate an unbounded queue or wait for the device. */
 class PcmStream {
 public:
-    static constexpr size_t Capacity = 48000;
-    bool open(uint32_t rate) {
-        if (rate != 44100 && rate != 48000) return false;
-        std::lock_guard<std::mutex> lock(mutex_);
-        rate_ = rate; active_ = true; paused_ = false; clear_locked();
-        return true;
-    }
+  // Network jitter is handled by the receiver's timestamped packet queue.
+  // This is only the final handoff (~500 ms), not a second one-second cache.
+  static constexpr size_t Capacity = 24000;
+  bool open(uint32_t rate) {
+      if (rate != 44100 && rate != 48000)
+          return false;
+      std::lock_guard<std::mutex> lock(mutex_);
+      rate_ = rate;
+      active_ = true;
+      paused_ = false;
+      clear_locked();
+      return true;
+  }
     void close() {
         std::lock_guard<std::mutex> lock(mutex_);
         active_ = false; clear_locked();
@@ -49,11 +55,17 @@ public:
         count_ += frames;
         return true;
     }
-    size_t render(int16_t* output, size_t limit, float gain) {
+    size_t render(int16_t *output, size_t limit, float gain, bool completeBlock = false) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!active_ || paused_) return 0;
         size_t produced = 0;
         const double ratio = static_cast<double>(rate_) / 48000.0;
+        // Network packets are typically only 352 frames (~8 ms). Aggregate
+        // them into output blocks instead of spending a device buffer/IPC on
+        // each tiny packet. Keep interpolation state until a full block fits.
+        if (completeBlock && limit &&
+            count_ < static_cast<size_t>(phase_ + (limit - 1) * ratio) + 2)
+            return 0;
         while (produced < limit && count_ >= 2) {
             const size_t next = (head_ + 1) % Capacity;
             for (size_t channel = 0; channel < 2; ++channel) {
@@ -72,6 +84,7 @@ public:
         }
         return produced;
     }
+
 private:
     void clear_locked() { head_ = count_ = 0; phase_ = 0; }
     mutable std::mutex mutex_;

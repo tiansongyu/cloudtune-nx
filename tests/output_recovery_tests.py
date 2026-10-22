@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix="cloudtune-output-") as directory:
     subprocess.run([sys.argv[2], str(oversized), str(flac)], check=True, timeout=15)
     environment = dict(os.environ, SDL_AUDIODRIVER="dummy")
     scenarios = sys.argv[3:] or ["", "seek-recovery", "resume-recovery", "tail-stall", "control-stall",
-                               "command-oom"]
+                               "command-oom", "continuous", "control-flood"]
     for scenario in scenarios:
         subprocess.run([sys.argv[1], str(root / ("profile-" + scenario)), str(flac)] +
                        ([scenario] if scenario else []),

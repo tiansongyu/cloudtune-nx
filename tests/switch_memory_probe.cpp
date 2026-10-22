@@ -134,13 +134,22 @@ extern "C" Result __wrap_ncmIpcServerProcess(NcmIpcServer *, NcmIpcServerHandler
         const auto airplay = runtime->airplay_status();
         if (airplay.state == NcmAirplay_Error)
             finish(false, "AirPlay listener failed");
-        if (stage == 4 && airplay.state == NcmAirplay_Playing && airplay.received_packets >= 200 &&
+        if (stage == 4 && status.state == NcmPlayback_Playing && status.queue_index == 1 &&
+            status.position_ms >= 1000) {
+            finish(true, "AAC active; awaiting AirPlay");
+            stage = 5;
+        }
+        if (stage == 5 && airplay.state == NcmAirplay_Playing && airplay.received_packets >= 200 &&
             status.position_ms >= 1000) {
             finish(ncmHeapCommittedSize() <= 2u * 1024u * 1024u,
                    "AirPlay ALAC emitted within compact heap");
-            stage = 5;
+            stage = 6;
         }
-        if (stage == 5 && airplay.state == NcmAirplay_Ready) {
+        if (stage == 6 && airplay.state == NcmAirplay_Ready) {
+            std::fprintf(log, "AIRPLAY: received=%u lost=%u buffered=%u\n",
+                         airplay.received_packets, airplay.lost_packets, airplay.buffered_frames);
+            finish(airplay.received_packets >= 3500 && airplay.lost_packets <= 3,
+                   "sustained phone-latency stream with repeated artwork");
             runtime->stop();
             finish(true, "RESULT: music, AirPlay teardown and orderly stop");
             std::fclose(log);
@@ -158,7 +167,8 @@ extern "C" Result __wrap_ncmIpcServerProcess(NcmIpcServer *, NcmIpcServerHandler
             finish(runtime->command(NcmCommand_Next), "next track accepted");
             ++stage;
         } else {
-            finish(runtime->command(NcmCommand_Stop), "all formats complete; awaiting AirPlay");
+            finish(runtime->command(NcmCommand_LoadQueue, 1),
+                   "all formats complete; reload AAC for takeover");
             deadline = armGetSystemTick() + armNsToTicks(120000000000ull);
             stage = 4;
         }

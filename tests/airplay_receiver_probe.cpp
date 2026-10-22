@@ -1,12 +1,22 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../airplay/receiver.hpp"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
+#include <new>
 #include <string>
+
+static std::atomic<bool> boundedAllocations{false};
+extern "C" void *__real__Znwm(size_t);
+extern "C" void *__wrap__Znwm(size_t bytes) {
+    if (boundedAllocations && bytes > 64 * 1024)
+        throw std::bad_alloc();
+    return __real__Znwm(bytes);
+}
 
 namespace {
 struct Capture {
@@ -86,6 +96,8 @@ int main(int argc, char **argv) {
         return 1;
     std::string command;
     while (std::getline(std::cin, command)) {
+        if (command == "bounded-memory")
+            boundedAllocations = true;
         if (command == "stop")
             break;
         if (command == "disconnect") {

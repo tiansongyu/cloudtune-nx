@@ -254,8 +254,29 @@ active track and queue file, reports an error and leaves the worker available
 for another selection rather than terminating it. The selected 2/16 MiB service heap cap can reject demanding files or queues;
 real peak resident memory and game coexistence still require hardware measurements.
 
-Each track owns a fresh audio output session. Seek discards the old session and
-opens a new one, so queued DMA buffer tags cannot cross a seek or track change.
+Manual track changes and seeks discard the old output session. Natural queue
+advancement retains its buffers and output session while preparing the next
+decoder, appending new PCM after the previous tail. Cached transitions avoid
+a drain/close/reopen gap; network misses still need buffering. If a decoder
+cannot fit alongside retained output, drain the tail with a bounded wait,
+release output memory and retry once. Seek always opens a fresh session, so
+stale DMA tags cannot cross an explicit discontinuity.
+On Switch, six aligned 8 KiB output buffers provide 256 ms of queued audio.
+They share one 48 KiB allocation. A full queue waits on the audout release
+event for at most 10 ms; this replaces repeated 4 ms polling IPC. Audio,
+AirPlay and download workers use priorities 49, 52 and 55 respectively; the
+background NPDM still permits only CPU core 3. Compare libnx's
+[default thread priority of 59](https://github.com/switchbrew/libnx/blob/master/nx/source/runtime/newlib.c)
+and TriPlayer's playback thread priority 49. These settings do not reserve
+CPU time or alter game clock speeds. Adjacent slider updates coalesce and
+command processing gives audio an output turn under sustained control traffic.
+Completed download threads are joined promptly to release their stacks. The
+final live-PCM ring uses 96,000 bytes; RTP jitter buffering remains separate.
+Background UDP TX is 8 KiB for small discovery/timing/resend messages, while
+UDP RX retains 64 KiB for audio bursts. With socket efficiency 2 this removes
+112 KiB of pinned transfer allocation, leaving room for AAC's approximately
+541 KiB contiguous allocation under the unchanged compact heap cap.
+
 Pause releases the output session and retains the audible position; resume seeks
 the decoder to that position and opens a new session. Repeated play/pause commands
 are idempotent. Failed output calls, five seconds without released buffers, or

@@ -8,6 +8,66 @@ retained as historical evidence; current filenames and commands are documented
 in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
 hardware or emulator validation.
 
+## Background continuity and AirPlay artwork — v0.3.0, 2026-10-22
+
+The user now confirms physical v0.2.15 background playback works. The new
+reports are intermittent music dropouts during otherwise smooth games, and
+NetEase Music on iPhone connecting through AirPlay without usable audio.
+No physical-game CPU trace or real-phone packet capture is available.
+
+Executed checks:
+
+- Reproduce the previous native receiver failure at the production 2 MiB
+  compact heap cap: encrypted ALAC with 2.25 seconds of sender latency and
+  a 256 KiB cover resets the connection and terminates reception. Incremental
+  body consumption passes the same case without retaining duplicate images.
+- Full host and UBSan suites pass **33/33** each. Independent XEAPI verification
+  and generated local/throttled HTTPS playback also pass. Focused ASan/UBSan
+  client, output-recovery, AirPlay PCM, allocation-failure and runtime checks
+  pass. The complete AirPlay wire test passes ASan/UBSan directly; its normal
+  and UBSan runs additionally use the negative-descriptor poll guard. The
+  ASan preload/guard combination failed sanitizer initialization, so it is
+  not counted as a passing run.
+- Native IPC stress links the actual client, dispatcher, runtime, SD/network,
+  decoders and audout. It completes **8,013 assertions**, 30 transport cycles
+  (two clients, pause/resume, next/previous, seek, toggle, repeat/shuffle,
+  stop), 3,000 volume commands and 3,000 status polls. Queue-clear acknowledgement,
+  client close, reconnect and orderly shutdown pass. The initial connection
+  still runs with the actual kernel session creation quota exhausted.
+- After warming three generated HTTPS tracks, four automatic MP3/AAC/FLAC
+  transitions pass with a synthetic competing core-3 thread. Audout open count
+  remains **186 before and after** that phase; 4,017 PCM submissions are
+  observed across the run. The maximum interval between submissions in the
+  monitored continuous phase is **46 ms**, within the 256 ms output buffer.
+  This measures submission continuity, not captured speaker output or an
+  end-to-end perceptual gap bound. The audio worker's priority is verified as 49.
+- Idle allocation returns to **771,776 bytes** after every transport cycle and
+  the automatic-transition phase. Heap commitment stays at 2 MiB. An earlier
+  stress run exposed AAC fragmentation (554,256-byte aligned allocation failed
+  with 659,744 total bytes free); reducing unused UDP send capacity frees
+  112 KiB of pinned allocation and the complete stress sequence then passes.
+- A fresh-cache native run starts with 512 generated queue entries, emits
+  throttled HTTPS MP3/AAC/FLAC, then accepts AirPlay while AAC is playing.
+  A 60-second encrypted ALAC stream at 2.25-second sender latency transmits
+  repeated 256 KiB covers: **7,517 packets received, zero lost**. PCM output,
+  FLUSH, TEARDOWN and orderly shutdown pass within the same 2 MiB cap.
+  Discovery is disabled and the sender uses loopback; this is not an iPhone
+  interoperability test.
+
+The native probes use separate client/server threads within one emulated
+process, not separate physical applications. Physical memory counters are
+injected at the SVC query boundary to select the real compact policy; other
+quotas, the allocator, IPC and playback path execute in Eden. Synthetic core
+contention does not reproduce every game's scheduling. Tests use anonymous
+generated audio, no account or personal photographs. Evidence is retained
+locally under `build/validation/audio-v030/`.
+
+Physical acceptance still requires a reboot into the matching three components,
+long background-only queues during actual games, NetEase iPhone discovery and
+playback, and sleep/wake. Cached transitions are covered; a cold download,
+broken network, invalid file or decoder exceeding the memory budget can still
+require buffering or return an error.
+
 ## Application-mode IPC session quota — v0.2.15, 2026-10-22
 
 The user's physical v0.2.14 startup log reaches `runtime`, `ipc-register` and

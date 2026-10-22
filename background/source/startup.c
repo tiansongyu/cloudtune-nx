@@ -15,7 +15,10 @@ static const SocketInitConfig sockets = {
     .tcp_rx_buf_size = 0x1000,
     .tcp_tx_buf_max_size = 0x4000,
     .tcp_rx_buf_max_size = 0x8000,
-    .udp_tx_buf_size = 64 * 1024,
+    // Outbound UDP is only discovery/timing/resend control (small datagrams).
+    // Keep the full receive budget for audio bursts; avoid pinning 112 KiB of
+    // extra transfer memory for a sender-sized UDP TX queue in compact mode.
+    .udp_tx_buf_size = 8 * 1024,
     .udp_rx_buf_size = 64 * 1024,
     .sb_efficiency = 2,
     .num_bsd_sessions = 3,

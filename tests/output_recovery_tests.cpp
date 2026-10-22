@@ -150,7 +150,29 @@ int main(int argc,char** argv) try {
             check(recovered,"volume commands indefinitely postponed stalled-output recovery");
             blocked=false;
             wait(engine,[](auto s){return s.state==NcmPlayback_Playing;});
-        } else throw std::runtime_error("Unknown recovery scenario");
+        } else if (scenario == "continuous") {
+            check(engine.command(NcmCommand_Repeat, NcmRepeat_All), "continuous repeat");
+            for (unsigned transition = 0; transition < 4; ++transition) {
+                check(engine.command(NcmCommand_Seek, 28500), "continuous tail seek");
+                wait(engine, [](auto s) { return s.position_ms >= 28500; });
+                const auto opened = opens.load();
+                const auto nextId = transition % 2 ? 900u : 901u;
+                wait(engine, [=](auto s) { return s.track_id == nextId && s.position_ms > 300; });
+                check(opens == opened, "natural transition reopened the output device");
+            }
+        } else if (scenario == "control-flood") {
+            const auto start = engine.status().position_ms;
+            for (unsigned i = 0; i < 2000; ++i) {
+                check(engine.command(NcmCommand_Volume, 400 + i % 400), "volume flood rejected");
+                check(engine.status().state == NcmPlayback_Playing,
+                      "control flood interrupted playback");
+                std::this_thread::sleep_for(1ms);
+            }
+            check(engine.status().position_ms > start + 1500, "control flood starved audio");
+            check(engine.command(NcmCommand_Pause), "pause after control flood rejected");
+            wait(engine, [](auto s) { return s.state == NcmPlayback_Paused; }, 500);
+        } else
+            throw std::runtime_error("Unknown recovery scenario");
         engine.stop();
         std::printf("PASS: %s\n",argv[3]);
         return 0;

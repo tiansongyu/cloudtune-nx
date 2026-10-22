@@ -14,6 +14,7 @@
 #include <unistd.h>
 #ifdef __SWITCH__
 extern "C" {
+#include <switch/kernel/svc.h>
 #include <switch/services/nifm.h>
 }
 #else
@@ -45,6 +46,7 @@ using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
 constexpr size_t MaxHeader = 16 * 1024;
 constexpr size_t MaxBody = 512 * 1024;
+constexpr size_t MaxMetadata = 16 * 1024;
 constexpr size_t MaxPacket = 65536;
 constexpr size_t Slots = 512;
 constexpr size_t MaxPcmBytes = 1024 * 1024;
@@ -206,7 +208,7 @@ struct Request {
     }
 };
 // 0=incomplete, 1=complete, negative=RTSP error. Binary bodies are length-based.
-int parseRequest(std::string& input, Request& request) {
+int parseHeader(std::string &input, Request &request, size_t &remaining) {
     const auto boundary = input.find("\r\n\r\n");
     if (boundary == std::string::npos) return input.size() > MaxHeader ? -413 : 0;
     if (boundary > MaxHeader || input.find('\0') < boundary) return -400;
@@ -229,10 +231,8 @@ int parseRequest(std::string& input, Request& request) {
     if ((request.headers.count("content-length") && !integer(contentLength, length)) ||
         length > MaxBody) return -413;
     if (request.headers.count("transfer-encoding")) return -400;
-    const size_t total = boundary + 4 + length;
-    if (input.size() < total) return 0;
-    request.body = input.substr(boundary + 4, length);
-    input.erase(0, total);
+    remaining = length;
+    input.erase(0, boundary + 4);
     return 1;
 }
 const char* responseReason(unsigned code) {
@@ -259,6 +259,7 @@ struct Receiver::Impl {
     std::condition_variable ready;
     NcmAirplayStatus snapshot{};
     std::atomic<bool> running{false};
+    std::atomic<bool> connected{false};
     std::atomic<uint64_t> disconnectRequest{0}, disconnectAck{0};
     std::thread worker;
     bool initialized = false, initializationSucceeded = false;
@@ -267,6 +268,9 @@ struct Receiver::Impl {
     uint32_t interfaceAddress = 0, connectionAddress = 0;
     sockaddr_in peer{}, remoteControl{}, remoteTiming{};
     std::string input, output, session, deviceId;
+    Request pendingRequest;
+    size_t remainingBody = 0;
+    bool pendingRequestActive = false, discardBody = false;
     bool closing = false, announced = false, setup = false, recording = false, encrypted = false;
     bool paused = false;
     bool pcm = false;
@@ -346,7 +350,11 @@ struct Receiver::Impl {
     void closeClient() {
         resetStream();
         closeFd(client);
+        connected = false;
         input.clear(); output.clear(); closing = false;
+        pendingRequest = {};
+        remainingBody = 0;
+        pendingRequestActive = discardBody = false;
         partialSince = pendingSince = lastAudio = 0;
         if (running && listener >= 0) state(NcmAirplay_Ready, "Ready for AirPlay");
     }
@@ -392,6 +400,7 @@ struct Receiver::Impl {
             return;
         }
         client = incoming; peer = address;
+        connected = true;
         sockaddr_in local{};
         length = sizeof(local);
         connectionAddress = getsockname(client, reinterpret_cast<sockaddr*>(&local), &length) == 0
@@ -587,9 +596,56 @@ struct Receiver::Impl {
             respond(request, 200, "Connection: close\r\n"); closing = true;
         } else respond(request, 501);
     }
+    void consumeInput(unsigned &budget) {
+        while (client >= 0 && !closing && budget) {
+            if (!pendingRequestActive) {
+                Request request;
+                const int parsed = parseHeader(input, request, remainingBody);
+                if (!parsed)
+                    return;
+                if (parsed < 0) {
+                    respond(request, unsigned(-parsed));
+                    closing = true;
+                    return;
+                }
+                const auto type = lower(request.header("content-type"));
+                // Artwork and unknown SET_PARAMETER bodies are acknowledged but
+                // unused. Drain them incrementally: an iPhone cover must not
+                // allocate two full copies in a 2 MiB background heap.
+                discardBody = request.method != "ANNOUNCE" && request.method != "GET_PARAMETER" &&
+                              !(request.method == "SET_PARAMETER" &&
+                                (type.rfind("text/parameters", 0) == 0 ||
+                                 type.rfind("application/x-dmap-tagged", 0) == 0));
+                if (!discardBody && remainingBody > MaxMetadata) {
+                    respond(request, 413);
+                    closing = true;
+                    return;
+                }
+                pendingRequest = std::move(request);
+                pendingRequestActive = true;
+            }
+            const size_t bytes = std::min(remainingBody, input.size());
+            if (!discardBody)
+                pendingRequest.body.append(input.data(), bytes);
+            input.erase(0, bytes);
+            remainingBody -= bytes;
+            if (remainingBody)
+                return;
+            handle(pendingRequest);
+            pendingRequest = {};
+            pendingRequestActive = false;
+            --budget;
+            partialSince = input.empty() ? 0 : nowNs();
+            if (disconnectRequest.load() != disconnectAck.load())
+                return;
+        }
+    }
     void readClient() {
-        std::array<char, 8192> buffer{};
-        for (unsigned i = 0; i < 8; ++i) {
+        std::array<char, 4096> buffer{};
+        unsigned budget = 8;
+        consumeInput(budget);
+        // Bound control traffic per turn so a large cover cannot starve RTP.
+        for (unsigned i = 0; client >= 0 && !closing && budget && i < 8; ++i) {
             const ssize_t size = recv(client, buffer.data(), buffer.size(), 0);
             if (size == 0) { closeClient(); return; }
             if (size < 0) {
@@ -597,19 +653,13 @@ struct Receiver::Impl {
                 if (errno != EAGAIN && errno != EWOULDBLOCK) closeClient();
                 break;
             }
-            if (input.empty()) partialSince = nowNs();
+            if (!partialSince)
+                partialSince = nowNs();
             input.append(buffer.data(), size);
-            if (input.size() > MaxHeader + MaxBody + buffer.size()) {
+            if (input.size() > MaxHeader + buffer.size()) {
                 respond(Request{}, 413); closing = true; return;
             }
-        }
-        for (unsigned i = 0; client >= 0 && !closing && i < 8; ++i) {
-            Request request;
-            const int parsed = parseRequest(input, request);
-            if (!parsed) break;
-            if (parsed < 0) { respond(request, unsigned(-parsed)); closing = true; break; }
-            handle(request);
-            partialSince = input.empty() ? 0 : nowNs();
+            consumeInput(budget);
             if (disconnectRequest.load() != disconnectAck.load()) break;
         }
     }
@@ -831,6 +881,11 @@ struct Receiver::Impl {
         }
     }
     void run() {
+#ifdef __SWITCH__
+        // libnx std::thread defaults to 59. Keep reception below the audio
+        // worker (49), while the background NPDM confines both to core 3.
+        svcSetThreadPriority(CUR_THREAD_HANDLE, 52);
+#endif
         try {
             int64_t retryAt = 0;
             while (running) {
@@ -869,7 +924,7 @@ struct Receiver::Impl {
                     slots[count] = slot;
                     active[count++] = descriptors[slot];
                 }
-                const int selected = poll(active.data(), count, 5);
+                const int selected = poll(active.data(), count, recording ? 5 : 50);
                 if (selected < 0 && errno != EINTR) throw std::runtime_error("AirPlay poll failed");
                 for (nfds_t index = 0; index < count; ++index)
                     descriptors[slots[index]].revents = active[index].revents;
@@ -959,7 +1014,10 @@ void Receiver::stop() {
 }
 bool Receiver::disconnect(uint32_t timeout) {
     const uint64_t requested = impl_->disconnectRequest.fetch_add(1) + 1;
-    if (!impl_->running) return true;
+    // Ordinary music transport need not wait for an idle listener's poll.
+    // The request is still recorded, so an accept racing this check is closed.
+    if (!impl_->running || !impl_->connected)
+        return true;
     if (impl_->worker.get_id() == std::this_thread::get_id()) return false;
     std::unique_lock<std::mutex> lock(impl_->mutex);
     return impl_->ready.wait_for(lock, std::chrono::milliseconds(std::min<uint32_t>(timeout, 5000)),

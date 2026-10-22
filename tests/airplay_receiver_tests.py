@@ -293,6 +293,16 @@ def boundary_cases(binary, public):
         session.setup(public, encrypted=False)
         session.request("RECORD")
 
+        # Phones can send album covers even when artwork is not advertised.
+        # Reject large C++ allocations after startup: the control stream must
+        # consume a cover without retaining it, even with RTSP-like bytes inside.
+        probe.command("bounded-memory")
+        cover = b"\xff\xd8" + b"\r\n\r\nOPTIONS * RTSP/1.0\r\n" * 18000
+        cover = cover[:256 * 1024].ljust(256 * 1024, b"\0")
+        session.request("SET_PARAMETER", {"Content-Type": "image/jpeg"}, cover)
+        session.request("OPTIONS")
+        check(probe.command()["begins"] == 1, "artwork ended the active audio session")
+
         def dmap(tag, body):
             return tag + struct.pack("!I", len(body)) + body
 
@@ -359,7 +369,7 @@ def boundary_cases(binary, public):
             check(status["begins"] == status["ends"], "disconnect leaked or duplicated stream ownership")
         check(len(list(Path(f"/proc/{probe.process.pid}/fd").iterdir())) == initial_fds,
               "repeated sessions/restarts leaked socket descriptors")
-        print(f"PASS boundary corpus: 16 pipelined RTSP, fragmented body, "
+        print(f"PASS boundary corpus: bounded-memory artwork, 16 pipelined RTSP, fragmented body, "
               f"{len(malformed_dmap)} DMAP, {len(malformed_rtp) + 52} UDP, "
               "12 interrupted sessions / 4 restarts; exact PCM recovery and no FD leak")
     finally:
