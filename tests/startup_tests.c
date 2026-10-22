@@ -208,6 +208,15 @@ Result svcGetResourceLimitCurrentValue(s64 *out, Handle handle, LimitableResourc
         !strncmp(failure, "recover-", 8) && failure[8] - '0' == (int)resource && sleeps < 4;
     if (low || recovering)
         *out = resource == LimitableResource_Memory ? 249999999 : 200;
+    if (resource == LimitableResource_Memory) {
+        if (fails("compact") || (fails("compact-switch") && sleeps >= 8) ||
+            (fails("compact-final") && sleeps >= 20))
+            *out = 250000000 - 5431296;
+        if (fails("compact-short"))
+            *out = 250000000 - 5u * 1024u * 1024u + 1;
+        if (fails("normal-switch") && sleeps < 8)
+            *out = 250000000 - 5668864;
+    }
     return fails("resource-current") ? 0x1234 : 0;
 }
 Result svcGetResourceLimitLimitValue(s64 *out, Handle handle, LimitableResource resource) {
@@ -233,8 +242,25 @@ static void scenario(const char *fail, bool known, unsigned delay) {
     __appInit();
     const bool diagnostic_failure = !strncmp(fail, "log-", 4);
     const bool recovering = !strncmp(fail, "recover-", 8);
-    const bool success = (!*fail || diagnostic_failure || recovering) && delay < 480;
+    const bool compact = !strncmp(fail, "compact", 7) && !fails("compact-short");
+    const bool success =
+        (!*fail || diagnostic_failure || recovering || compact || fails("normal-switch")) &&
+        delay < 480;
     check(R_SUCCEEDED(ncmStartupResult()) == success, "Wrong startup outcome");
+    if (compact) {
+        check(ncmMemoryHeapLimit() == 2u * 1024u * 1024u &&
+                  ncmSystemMemoryMargin() == 3u * 1024u * 1024u,
+              "Compact policy missing");
+        check(strstr(disk_log, "memory-policy: compact"), "Compact diagnostics missing");
+    }
+    if (success && !compact)
+        check(ncmMemoryHeapLimit() == 16u * 1024u * 1024u, "Normal budget regressed");
+    if (fails("compact-switch") || fails("normal-switch"))
+        check(sleeps == 28, "Policy change did not restart continuous observation");
+    if (fails("compact-final"))
+        check(sleeps == 40, "Final recheck ignored a policy change");
+    if (fails("compact-short"))
+        check(sleeps == 240, "Compact shortage timeout changed");
     check(!resource_handle, "Diagnostic handle leaked");
     check(success == ((acquired & 256) != 0), "Failed gate still started playback services");
     check(process_exited == !success, "Failed startup would still run C++ global constructors");
@@ -282,7 +308,12 @@ int main(void) {
                               "sockets",
                               "resource-handle",
                               "resource-current",
-                              "resource-limit"};
+                              "resource-limit",
+                              "compact",
+                              "compact-switch",
+                              "compact-final",
+                              "compact-short",
+                              "normal-switch"};
     const unsigned count = sizeof(failures) / sizeof(*failures);
     for (unsigned i = 0; i < count + 13; ++i) {
         pid_t child = fork();

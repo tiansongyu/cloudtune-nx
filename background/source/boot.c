@@ -33,21 +33,30 @@ Result ncmWaitForHomeMenu(void) {
      * workers are created while observing it. Other modules can still race us,
      * so heap growth and new work are also checked at their point of use. */
     unsigned healthy = 0;
+    NcmMemoryBudget observed = NcmMemoryBudget_Normal;
     for (unsigned attempt = 0; attempt < 240; ++attempt) {
-        result = ncmCheckStartupResources();
+        NcmMemoryBudget candidate = observed;
+        result = ncmCheckStartupResources(&candidate);
         if (R_FAILED(result) && result != MAKERESULT(Module_Kernel, 132))
             break;
+        if (candidate != observed) {
+            observed = candidate;
+            healthy = 0;
+        }
         healthy = R_SUCCEEDED(result) ? healthy + 1 : 0;
         if (attempt % 20 == 0)
             ncmStartupRecordResources("waiting-resources");
         svcSleepThread(250000000);
         if (healthy >= 20) {
             /* Recheck after the final sleep, not before it. */
-            result = ncmCheckStartupResources();
-            if (R_SUCCEEDED(result))
+            result = ncmCheckStartupResources(&candidate);
+            if (R_SUCCEEDED(result) && candidate == observed) {
+                result = ncmCommitStartupBudget(candidate);
                 break;
-            if (result != MAKERESULT(Module_Kernel, 132))
+            }
+            if (R_FAILED(result) && result != MAKERESULT(Module_Kernel, 132))
                 break;
+            observed = candidate;
             healthy = 0;
         }
         result = MAKERESULT(Module_Libnx, LibnxError_Timeout);

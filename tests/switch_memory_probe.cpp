@@ -1,21 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Excluded emulator probe: real runtime, decoders, SD and audout, hard 2 MiB
-// heap ceiling. Fixtures contain only generated tones, never account data.
+// heap ceiling selected by the real boot policy using a physical resource
+// snapshot. Fixtures contain only generated tones, never account data.
 #include "heap.h"
 #include "ipc_server.h"
+#include "resources.h"
 #include "runtime.hpp"
 #include "startup.h"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <malloc.h>
+#include <unistd.h>
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 }
 
-extern "C" Result __real_ncmCheckMemoryGrowth(size_t);
 extern "C" Result __real_svcSetHeapSize(void **, u64);
+extern "C" Result __real_svcGetResourceLimitCurrentValue(s64 *, Handle, LimitableResource);
+extern "C" Result __real_svcGetResourceLimitLimitValue(s64 *, Handle, LimitableResource);
 static size_t committed;
+static unsigned kernel_growths;
 extern "C" int __real_avformat_find_stream_info(AVFormatContext *, AVDictionary **);
 extern "C" int __real_avcodec_open2(AVCodecContext *, const AVCodec *, AVDictionary **);
 static void allocationCheckpoint(const char *stage, int result) {
@@ -32,23 +38,35 @@ extern "C" int __wrap_avformat_find_stream_info(AVFormatContext *input, AVDictio
     allocationCheckpoint("after-probe", result);
     return result;
 }
-extern "C" int __wrap_avcodec_open2(AVCodecContext *codec, const AVCodec *decoder, AVDictionary **options) {
+extern "C" int __wrap_avcodec_open2(AVCodecContext *codec, const AVCodec *decoder,
+                                    AVDictionary **options) {
     allocationCheckpoint("before-codec", 0);
     int result = __real_avcodec_open2(codec, decoder, options);
     allocationCheckpoint("after-codec", result);
     return result;
 }
 extern "C" Result __wrap_svcSetHeapSize(void **out, u64 size) {
+    if (size > committed)
+        ++kernel_growths;
     const Result rc = __real_svcSetHeapSize(out, size);
     if (R_SUCCEEDED(rc))
         committed = size;
     return rc;
 }
-extern "C" Result __wrap_ncmCheckMemoryGrowth(size_t added) {
-    // Called under heap_mutex: never call the locking committed-size getter.
-    if (committed + added > 2u * 1024u * 1024u)
-        return MAKERESULT(Module_Kernel, 132);
-    return __real_ncmCheckMemoryGrowth(added);
+extern "C" Result __wrap_svcGetResourceLimitCurrentValue(s64 *out, Handle handle,
+                                                         LimitableResource r) {
+    if (r != LimitableResource_Memory)
+        return __real_svcGetResourceLimitCurrentValue(out, handle, r);
+    // Called under heap_mutex too: never use the locking committed-size getter.
+    *out = 322772992 + (s64)committed;
+    return 0;
+}
+extern "C" Result __wrap_svcGetResourceLimitLimitValue(s64 *out, Handle handle,
+                                                       LimitableResource r) {
+    if (r != LimitableResource_Memory)
+        return __real_svcGetResourceLimitLimitValue(out, handle, r);
+    *out = 328204288;
+    return 0;
 }
 extern "C" Result __wrap_ncmIpcServerProcess(NcmIpcServer *, NcmIpcServerHandler, void *context) {
     auto *runtime = static_cast<netease::playback::Runtime *>(context);
@@ -63,6 +81,15 @@ extern "C" Result __wrap_ncmIpcServerProcess(NcmIpcServer *, NcmIpcServerHandler
                      reason, ncmHeapCommittedSize(), info.uordblks, info.fordblks,
                      ncmHeapLastResult());
         std::fflush(log);
+        // The host sender waits for this marker through Eden's SD mapping.
+        // Flush the FS handle as well as newlib's userspace buffer.
+        fsync(fileno(log));
+        // Eden may retain the last host-side write even after guest Flush.
+        // Close/reopen the diagnostic handle before the external test reads it.
+        std::fclose(log);
+        log = std::fopen(NCM_CONFIG_DIRECTORY "/memory-probe.log", "a");
+        if (!log)
+            svcExitProcess();
         if (!ok) {
             runtime->stop();
             std::fclose(log);
@@ -82,6 +109,17 @@ extern "C" Result __wrap_ncmIpcServerProcess(NcmIpcServer *, NcmIpcServerHandler
         finish(airplay.enabled && airplay.state == NcmAirplay_Ready &&
                    ncmHeapCommittedSize() <= 2u * 1024u * 1024u,
                "runtime and enabled AirPlay start within 2 MiB");
+        finish(ncmMemoryHeapLimit() == 2u * 1024u * 1024u &&
+                   ncmSystemMemoryMargin() == 3u * 1024u * 1024u,
+               "physical resource snapshot selects compact policy");
+        const unsigned before = kernel_growths;
+        // Keep the deliberate failure observable under Release optimization.
+        void *(*volatile allocate)(size_t) = std::malloc;
+        void *oversized = allocate(3u * 1024u * 1024u);
+        const bool rejected = !oversized;
+        std::free(oversized);
+        finish(rejected && kernel_growths == before && ncmHeapLastResult() == 0x10801,
+               "oversized allocation rejected before kernel growth");
         finish(runtime->command(NcmCommand_LoadQueue, 0), "load 512-entry generated queue");
         stage = 1;
     }
@@ -92,6 +130,25 @@ extern "C" Result __wrap_ncmIpcServerProcess(NcmIpcServer *, NcmIpcServerHandler
     }
     if (armGetSystemTick() >= deadline)
         finish(false, "deadline");
+    if (stage >= 4) {
+        const auto airplay = runtime->airplay_status();
+        if (airplay.state == NcmAirplay_Error)
+            finish(false, "AirPlay listener failed");
+        if (stage == 4 && airplay.state == NcmAirplay_Playing && airplay.received_packets >= 200 &&
+            status.position_ms >= 1000) {
+            finish(ncmHeapCommittedSize() <= 2u * 1024u * 1024u,
+                   "AirPlay ALAC emitted within compact heap");
+            stage = 5;
+        }
+        if (stage == 5 && airplay.state == NcmAirplay_Ready) {
+            runtime->stop();
+            finish(true, "RESULT: music, AirPlay teardown and orderly stop");
+            std::fclose(log);
+            svcExitProcess();
+        }
+        svcSleepThread(100000000);
+        return 0;
+    }
     if (status.state == NcmPlayback_Playing && status.position_ms >= 1000 &&
         status.queue_index == stage - 1) {
         finish(true, stage == 1   ? "MP3 decoded and emitted"
@@ -101,10 +158,9 @@ extern "C" Result __wrap_ncmIpcServerProcess(NcmIpcServer *, NcmIpcServerHandler
             finish(runtime->command(NcmCommand_Next), "next track accepted");
             ++stage;
         } else {
-            runtime->stop();
-            finish(true, "RESULT: all formats and orderly stop");
-            std::fclose(log);
-            svcExitProcess();
+            finish(runtime->command(NcmCommand_Stop), "all formats complete; awaiting AirPlay");
+            deadline = armGetSystemTick() + armNsToTicks(120000000000ull);
+            stage = 4;
         }
     }
     svcSleepThread(100000000);

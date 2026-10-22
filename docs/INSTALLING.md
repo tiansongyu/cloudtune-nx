@@ -53,7 +53,7 @@ module out of the system boot sequence. Starting the service does not play the s
 NetEase queue. Its independent AirPlay 1 receiver starts when enabled; the
 first-use default is enabled, and later starts follow your saved preference.
 
-## v0.2.12 connection and low-memory troubleshooting
+## Connection and low-memory troubleshooting (v0.2.14)
 
 Update all three matching components: the NRO, `exefs.nsp` and `CloudTune.ovl`.
 Preserve `config/netease-switch/` and any local photo resources. A local
@@ -69,14 +69,25 @@ report zero. A failed `boot-resource-gate` followed by `startup-exit` means
 initialization stopped before registration. v0.2.12 clears the previous
 `ipc.log` at startup, so an old success line cannot stand in for this boot.
 
-One physical v0.2.11 log showed only **168 KiB** free in the shared system
-memory quota. CloudTune correctly refused startup; its first heap growth alone
-needs 2 MiB, before the existing safety margin. To test with more headroom,
-fully power off, temporarily rename unused third-party modules' `boot2.flag`
-files, preserve CloudTune and your overlay loader, then reboot. Record the new
-resource counters and test frontend/overlay controls. Restore the renamed
-markers one at a time, rebooting between trials. Do not lower the resource
-guard or assume that a module's file size equals its runtime memory usage.
+A physical v0.2.11 log showed only **168 KiB** free; that is insufficient even
+for the initial 2 MiB heap. After unused modules were disabled, v0.2.13 still
+had only **5.18–5.41 MiB** free with CloudTune and Tesla/Ultrahand enabled. Its
+10.25 MiB policy threshold blocked startup before IPC registration.
+
+v0.2.14 can select **compact mode** after five seconds with at least 5 MiB free:
+it limits the playback heap to 2 MiB and checks a 3 MiB system margin before
+allocation/new work. With at least 10.25 MiB free it retains normal mode (8 MiB
+margin, up to 16 MiB heap). The startup log records the selected mode. These are
+policy margins, not guaranteed reservations; demanding tracks/queues may exceed
+the compact budget and report an allocation error.
+
+Keep the Tesla/Ultrahand loader's `boot2.flag` enabled for in-game controls.
+To test with more headroom, fully power off, temporarily rename only unused
+third-party modules' `boot2.flag` files, then reboot. Record fresh resource
+counters and test frontend/overlay controls. Restore the renamed markers one
+at a time, rebooting between trials. Do not assume a module's file size equals
+its runtime memory usage. Reducing a compatible loader's heap can free space,
+but merely changing Ultrahand settings does not upgrade an old loader.
 
 ## First launch
 

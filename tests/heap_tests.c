@@ -10,6 +10,10 @@
 static unsigned char kernel_heap[16u * 1024u * 1024u];
 static size_t kernel_size, kernel_limit = sizeof(kernel_heap);
 static unsigned kernel_calls;
+static size_t policy_limit = sizeof(kernel_heap);
+size_t ncmMemoryHeapLimit(void) {
+    return policy_limit;
+}
 static bool fail_address;
 static bool deny_growth, deny_shrink;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -77,6 +81,25 @@ static void scenario(unsigned which) {
     check(ncmHeapStartupResult() == 0 && ncmHeapCommittedSize() == 0 && kernel_size == 0,
           "Boot must not commit a playback heap before HOME");
     check(fake_heap_end == fake_heap_start, "Initial heap bounds");
+    if (which == 4) {
+        policy_limit = 2u * 1024u * 1024u;
+        check(_sbrk_r(&reent, HEAP_STEP - 16) == kernel_heap, "Compact initial allocation");
+        memset(kernel_heap, 0x5a, HEAP_STEP - 16);
+        unsigned before = kernel_calls;
+        check(_sbrk_r(&reent, 32) == (void *)-1 && reent._errno == ENOMEM,
+              "Compact cap bypassed despite ample kernel quota");
+        check(kernel_calls == before && ncmHeapLastResult() == 0x10801,
+              "Compact cap attempted a kernel growth or lost reason");
+        check(_sbrk_r(&reent, 0) == kernel_heap + HEAP_STEP - 16 &&
+                  kernel_heap[HEAP_STEP - 17] == 0x5a,
+              "Compact rejection damaged live data/break");
+        check(_sbrk_r(&reent, -(ptrdiff_t)(HEAP_STEP - 16)) != (void *)-1 && kernel_size == 0,
+              "Compact shrink failed");
+        check(_sbrk_r(&reent, HEAP_STEP) == kernel_heap && kernel_size == HEAP_STEP,
+              "Compact regrowth failed");
+        check(_sbrk_r(&reent, 1) == (void *)-1, "Compact cap changed after shrink");
+        return;
+    }
     if (which == 3) {
         deny_growth = true;
         check(_sbrk_r(&reent, 16) == (void *)-1 && kernel_calls == 1,
@@ -130,13 +153,13 @@ static void scenario(unsigned which) {
     check(_sbrk_r(&reent, 32) != (void *)-1 && kernel_size == 2 * HEAP_STEP, "Regrow trimmed heap");
     check(_sbrk_r(&reent, PTRDIFF_MIN) == (void *)-1, "Negative overflow accepted");
     check(_sbrk_r(&reent, PTRDIFF_MAX) == (void *)-1, "Positive overflow accepted");
-    const size_t remaining = HEAP_LIMIT - (HEAP_STEP + 16);
+    const size_t remaining = NCM_NORMAL_HEAP_LIMIT - (HEAP_STEP + 16);
     check(_sbrk_r(&reent, (ptrdiff_t)remaining) != (void *)-1, "Original peak budget lost");
-    check(_sbrk_r(&reent, 1) == (void *)-1 && kernel_size == HEAP_LIMIT,
+    check(_sbrk_r(&reent, 1) == (void *)-1 && kernel_size == NCM_NORMAL_HEAP_LIMIT,
           "Playback heap exceeded the 16 MiB cap");
 }
 int main(void) {
-    for (unsigned i = 0; i < 4; ++i) {
+    for (unsigned i = 0; i < 5; ++i) {
         pid_t child = fork();
         check(child >= 0, "fork failed");
         if (!child) {

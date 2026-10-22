@@ -29,20 +29,34 @@ aborts that command outside recovery boot. Do not call NotifyBootFinished.
 
 Since v0.2.11, after the HOME boundary startup requires 20 consecutive 250 ms
 observations with sufficient memory, 16 threads, 16 events, four transfer
-memories and 16 sessions free. Since v0.2.13 the initial memory threshold is
-10.25 MiB: the unchanged 8 MiB system margin plus a measured 2 MiB initial
-heap and 256 KiB allowance (previously an estimated 4 MiB allowance). A shortage resets the observation window;
-the resource wait ends after about 60 seconds. Failed queries/timeouts exit
-before C++ global constructors, with acquired platform resources released.
-Native startup measurements inform the allowance, but these remain policy
-margins, not proof that HOME has finished initializing. The read/check is not atomic with
-other processes' allocations and cannot reserve resources for them.
+memories and 16 sessions free. v0.2.14 selects one of two memory budgets before
+any playback heap allocation:
 
-Newlib's first allocation commits 2 MiB; later requests grow in 2 MiB steps
-up to 16 MiB. Every physical growth also checks that 8 MiB remains free in the
-shared memory quota. Failed checks/kernel requests return `ENOMEM` without
-changing live allocations. Starting workers, download threads, listeners or
-audio output also checks free memory/thread/event/transfer/session margins.
+| Mode | Free memory required at startup | Playback heap cap | System policy margin |
+|---|---|---|---|
+| Normal | 10.25 MiB | 16 MiB, allocated on demand | 8 MiB |
+| Compact | 5 MiB | 2 MiB, hard cap | 3 MiB |
+
+Normal mode includes the measured 2 MiB initial heap plus 256 KiB allowance.
+Compact mode budgets its entire maximum heap at startup. The physical v0.2.13
+log had 5.18–5.41 MiB free with the overlay loader enabled; the old 10.25 MiB
+threshold could never pass. The smaller margin is an explicit policy tradeoff,
+not a Nintendo guarantee or a reservation against other processes.
+
+A shortage or a mode change resets the five-second observation window, including
+changes detected after the final sleep. The selected mode is frozen before
+newlib/worker initialization and cannot be changed while allocations are live.
+The resource wait ends after about 60 seconds. Failed queries/timeouts exit
+before C++ global constructors, releasing acquired platform resources. The log
+records `memory-policy`, `memory-reserve-bytes` and `heap-limit-bytes`.
+
+Newlib's first allocation commits 2 MiB. Normal mode may grow in 2 MiB steps;
+compact mode rejects further growth even if another process later frees memory.
+Every physical growth checks the selected system margin. Failed checks/kernel
+requests return `ENOMEM` without changing live allocations. Starting workers,
+download threads, listeners or audio output also checks the selected memory
+margin and the unchanged thread/event/transfer/session margins. Reads/checks
+are not atomic with other processes' allocations and cannot reserve resources.
 Foreground players do not use this system-module policy.
 
 When newlib lowers its break, the allocator attempts to release whole 2 MiB
@@ -217,8 +231,8 @@ These limits do not change the requested music quality or sample-rate support,
 and the FFmpeg ceiling is not a total-process memory limit. Cache eviction
 keeps only 256 candidates at a time. A C++ allocation failure releases the
 active track and queue file, reports an error and leaves the worker available
-for another selection rather than terminating it. The 16 MiB service heap cap and
-real peak resident memory still require hardware measurements.
+for another selection rather than terminating it. The selected 2/16 MiB service heap cap can reject demanding files or queues;
+real peak resident memory and game coexistence still require hardware measurements.
 
 Each track owns a fresh audio output session. Seek discards the old session and
 opens a new one, so queued DMA buffer tags cannot cross a seek or track change.

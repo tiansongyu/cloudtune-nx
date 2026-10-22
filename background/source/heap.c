@@ -6,7 +6,6 @@
 #include <sys/reent.h>
 
 #define HEAP_STEP (2u * 1024u * 1024u)
-#define HEAP_LIMIT (16u * 1024u * 1024u)
 
 /* Do not put the playback heap in BSS. Atmosphere boot2 aborts if loading a
  * flagged process exceeds the shared system resource limit, before main runs.
@@ -34,7 +33,7 @@ void __libnx_initheap(void) {
 }
 
 /* Override libsysbase's weak fixed-region sbrk. Growth is page-granular and
- * bounded by the same 16 MiB playback budget as before. Never allocate, log or
+ * bounded by the budget frozen at startup (2 or 16 MiB). Never allocate, log or
  * call another malloc user here. A rejected kernel request must leave the
  * current break and all existing allocations intact. */
 void *_sbrk_r(struct _reent *reent, ptrdiff_t increment) {
@@ -46,9 +45,11 @@ void *_sbrk_r(struct _reent *reent, ptrdiff_t increment) {
             goto exhausted;
         next = heap_break - reduction;
     } else {
-        const size_t limit = emergency ? sizeof(emergency_heap) : HEAP_LIMIT;
-        if ((size_t)increment > limit - heap_break)
+        const size_t limit = emergency ? sizeof(emergency_heap) : ncmMemoryHeapLimit();
+        if (heap_break > limit || (size_t)increment > limit - heap_break) {
+            last_result = MAKERESULT(Module_Kernel, 132);
             goto exhausted;
+        }
         next = heap_break + (size_t)increment;
     }
     if (next > heap_committed) {

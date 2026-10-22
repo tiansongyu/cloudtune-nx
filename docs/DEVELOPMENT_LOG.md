@@ -801,3 +801,24 @@ Primary references checked:
   reservation nor hardware validation; retain all quota and observation guards.
 - Public artifacts exclude private photos and local SD data. The user's photo
   NRO stays local; detailed test boundaries are recorded in VALIDATION.md.
+
+
+## 2026-10-22 · Compact startup with the overlay loader (v0.2.14)
+
+- The loader-enabled physical v0.2.13 log has 5.18–5.41 MiB free, so the
+  10.25 MiB gate exits before IPC registration. Restore/retain the loader's
+  autostart marker; keep only the five authorized unused modules disabled.
+- Add a frozen compact budget (2 MiB heap cap / 3 MiB system margin) selected
+  after five seconds with at least 5 MiB free. Normal mode retains the prior
+  8 MiB margin and 16 MiB cap. A mode change restarts observation, including
+  the final recheck; allocation attempts cannot promote a compact process.
+- Keep HOME gating, allocation-free diagnostics, thread/event/session checks,
+  quota queries at growth/new work, bounded waits and startup cleanup. Log
+  the selected policy/cap. No IPC ABI, loader binary or system pool changes.
+- Validate real policy against physical memory counters in native Eden,
+  replacing the old test-only heap guard override. Startup/registration, cap
+  denial and cold HTTPS MP3/AAC/FLAC with 512 generated tracks pass at 2 MiB.
+  A generated encrypted ALAC sender also verifies audio output and teardown
+  at the same cap. Close/reopen the flushed native diagnostic file before the
+  host sender waits on it. Full host/UBSan suites each pass 33 tests; focused ASan checks pass. See
+  VALIDATION.md for scope, evidence and required physical acceptance.

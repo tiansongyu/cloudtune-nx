@@ -5,6 +5,7 @@
 #include <switch.h>
 static s64 used[5], limits[5] = {64 * 1024 * 1024, 100, 100, 100, 100};
 static unsigned handles;
+static size_t committed;
 static int fail_stage;
 static void check(bool ok, const char *message) {
     if (!ok) {
@@ -44,38 +45,72 @@ void ncmStartupWrite(const char *s) {
     (void)s;
 }
 size_t ncmHeapCommittedSize(void) {
-    return 0;
+    return committed;
 }
 #include "../background/source/resources.c"
 int main(void) {
-    check(ncmCanStartWork() && !ncmCheckStartupResources(), "Normal resources rejected");
+    NcmMemoryBudget candidate = NcmMemoryBudget_Normal;
+    check(ncmCanStartWork() && !ncmCheckStartupResources(&candidate), "Normal resources rejected");
     const size_t boundary = (size_t)limits[0] - NCM_SYSTEM_MEMORY_MARGIN;
     used[0] = limits[0] - NCM_SYSTEM_MEMORY_MARGIN - NCM_STARTUP_MEMORY_ALLOWANCE;
-    check(!ncmCheckStartupResources(), "Measured startup allowance rejected");
+    check(!ncmCheckStartupResources(&candidate), "Measured startup allowance rejected");
+    check(candidate == NcmMemoryBudget_Normal, "Normal budget not selected");
     ++used[0];
-    check(ncmCheckStartupResources(), "Startup boundary bypassed");
+    check(!ncmCheckStartupResources(&candidate) && candidate == NcmMemoryBudget_Compact,
+          "Intermediate headroom did not select compact budget");
     used[0] = limits[0] - 5u * 1024u * 1024u;
-    check(ncmCheckStartupResources() && ncmCheckMemoryGrowth(2u * 1024u * 1024u),
-          "Physical 5 MiB shortage bypassed the unchanged 8 MiB reserve");
+    check(!ncmCheckStartupResources(&candidate) && candidate == NcmMemoryBudget_Compact,
+          "Exact compact boundary rejected");
+    ++used[0];
+    check(ncmCheckStartupResources(&candidate), "Compact boundary bypassed");
+    const s64 physical_free[] = {5431296, 5668864};
+    for (unsigned i = 0; i < 2; ++i) {
+        used[0] = limits[0] - physical_free[i];
+        check(!ncmCheckStartupResources(&candidate) && candidate == NcmMemoryBudget_Compact,
+              "Physical loader coexistence rejected");
+    }
+    check(ncmMemoryHeapLimit() == NCM_NORMAL_HEAP_LIMIT &&
+              ncmSystemMemoryMargin() == NCM_SYSTEM_MEMORY_MARGIN,
+          "Read-only probe changed live policy");
     used[0] = 0;
     check(!ncmCheckMemoryGrowth(boundary), "Exact memory margin rejected");
     check(ncmCheckMemoryGrowth(boundary + 1) && ncmCheckMemoryGrowth(SIZE_MAX),
           "Margin or integer overflow bypassed");
     for (unsigned i = 0; i < 5; ++i) {
         used[i] = limits[i];
-        check(ncmCheckStartupResources() && !ncmCanStartWork(), "Exhausted resource accepted");
+        check(ncmCheckStartupResources(&candidate) && !ncmCanStartWork(),
+              "Exhausted resource accepted");
         used[i] = -1;
-        check(ncmCheckStartupResources(), "Negative resource value accepted");
+        check(ncmCheckStartupResources(&candidate), "Negative resource value accepted");
         used[i] = limits[i] + 1;
-        check(ncmCheckStartupResources(), "Underflow accepted");
+        check(ncmCheckStartupResources(&candidate), "Underflow accepted");
         used[i] = 0;
     }
     for (fail_stage = 1; fail_stage <= 4; ++fail_stage) {
-        check(ncmCheckStartupResources() && ncmCheckMemoryGrowth(1) && !ncmCanStartWork(),
+        check(ncmCheckStartupResources(&candidate) && ncmCheckMemoryGrowth(1) && !ncmCanStartWork(),
               "Failed/invalid query did not fail closed");
         check(!handles, "Failed query leaked handle");
     }
     fail_stage = 0;
-    check(!ncmCheckStartupResources() && !handles, "Recovery failed");
+    check(!ncmCheckStartupResources(&candidate) && !handles, "Recovery failed");
+    check(ncmCheckStartupResources(NULL), "Null candidate accepted");
+    check(ncmCommitStartupBudget((NcmMemoryBudget)99), "Invalid policy accepted");
+    committed = 2u * 1024u * 1024u;
+    check(ncmCommitStartupBudget(NcmMemoryBudget_Compact), "Policy changed after heap allocation");
+    committed = 0;
+    check(!ncmCommitStartupBudget(NcmMemoryBudget_Compact), "Compact policy not committed");
+    check(ncmCommitStartupBudget(NcmMemoryBudget_Normal), "Frozen policy changed");
+    check(ncmMemoryHeapLimit() == 2u * 1024u * 1024u &&
+              ncmSystemMemoryMargin() == 3u * 1024u * 1024u,
+          "Compact heap/reserve mismatch");
+    used[0] = limits[0] - 5431296;
+    check(!ncmCheckMemoryGrowth(2u * 1024u * 1024u), "Physical initial heap denied");
+    used[0] += 2u * 1024u * 1024u;
+    check(ncmCanStartWork(), "Physical post-startup work denied");
+    used[0] = limits[0] - NCM_COMPACT_MEMORY_MARGIN;
+    check(ncmCanStartWork() && !ncmCheckMemoryGrowth(0), "Exact compact reserve rejected");
+    check(ncmCheckMemoryGrowth(1) && ncmCheckMemoryGrowth(SIZE_MAX), "Compact reserve bypassed");
+    ++used[0];
+    check(!ncmCanStartWork() && ncmCheckMemoryGrowth(0), "Shrinking headroom ignored");
     puts("PASS: all five resource guards, margin boundaries, overflow, query failure and recovery");
 }

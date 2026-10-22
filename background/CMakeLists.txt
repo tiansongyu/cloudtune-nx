@@ -75,7 +75,8 @@ if(NINTENDO_SWITCH)
   target_compile_definitions(ncm-switch-memory-probe PRIVATE CLOUDTUNE_VERSION="${PROJECT_VERSION}-memory-probe")
   target_link_libraries(ncm-switch-memory-probe PRIVATE ncm_runtime cloudtune_audio_codecs)
   target_link_options(ncm-switch-memory-probe PRIVATE "-Wl,--wrap=ncmBootHasHomeMenu"
-    "-Wl,--wrap=ncmCheckMemoryGrowth" "-Wl,--wrap=svcSetHeapSize" "-Wl,--wrap=ncmIpcServerProcess"
+    "-Wl,--wrap=svcGetResourceLimitCurrentValue" "-Wl,--wrap=svcGetResourceLimitLimitValue"
+    "-Wl,--wrap=svcSetHeapSize" "-Wl,--wrap=ncmIpcServerProcess"
     "-Wl,--wrap=avformat_find_stream_info" "-Wl,--wrap=avcodec_open2")
   find_program(NPDMTOOL npdmtool HINTS "$ENV{DEVKITPRO}/tools/bin" REQUIRED)
   find_program(ELF2NSO elf2nso HINTS "$ENV{DEVKITPRO}/tools/bin" REQUIRED)

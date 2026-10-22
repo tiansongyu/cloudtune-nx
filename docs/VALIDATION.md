@@ -8,6 +8,64 @@ retained as historical evidence; current filenames and commands are documented
 in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
 hardware or emulator validation.
 
+## Compact startup with the overlay loader — v0.2.14, 2026-10-22
+
+Fresh physical evidence from the installed v0.2.13 package shows 5,668,864 then
+5,431,296 bytes free in the 328,204,288-byte shared system quota. CloudTune and
+the Tesla/Ultrahand loader both have active boot markers; the five previously
+authorized unused modules remain disabled. The loader marker was restored at
+the user's request after the v0.2.13 preparation described below. `boot-resource-gate`
+and `startup-exit` report `0x6359`; current IPC/ready logs are absent. This is
+failure before service registration, not evidence of an IPC-name collision.
+
+The previous 10.25 MiB startup policy cannot pass in that configuration.
+v0.2.14 adds a compact policy: 5 MiB required before startup, a hard 2 MiB heap
+cap, and a 3 MiB system margin. Normal mode retains the 10.25 MiB threshold,
+8 MiB margin and 16 MiB cap. The selected policy is frozen before allocation;
+mode changes during observation reset the five-second window. The compact
+margin is an explicit tradeoff, not a system guarantee. No kernel memory-pool
+configuration or third-party loader binary was changed.
+
+Executed checks:
+
+- Full host CTest **33/33**, full UBSan **33/33**, three focused ASan/UBSan
+  startup/heap/resource tests, independent XEAPI verification, and generated
+  local/throttled HTTPS playback passed. All three Switch components compile.
+- Fault injection covers both physical snapshots, exact 5 MiB/10.25 MiB
+  boundaries, mode changes during observation and the final sleep, frozen
+  budget enforcement, query failures, all five resource types and unchanged
+  allocations after rejected growth. Less than 5 MiB still fails closed.
+- The excluded native memory probe now injects the physical memory counters
+  at the SVC query boundary, including this process's real committed heap.
+  Production startup policy, guards, newlib, runtime and decoders execute
+  unchanged; the old test override of the growth guard is removed. HOME's
+  missing emulator launch-record query is still substituted. Other quotas
+  come from Eden, so this does not simulate all HOS processes or contention.
+- The real policy selects compact mode and reaches `runtime`, `ipc-register`
+  and `ready`. A deliberate oversized allocation fails before any kernel heap
+  growth. Release optimization initially removed the test's malloc/free pair;
+  a volatile allocator call makes this fault injection observable.
+- With a 512-entry generated queue and empty cache, throttled HTTPS MP3, AAC
+  and FLAC each emit PCM and advance beyond one second. AAC's first decoder
+  allocation returns ENOMEM, then succeeds after the existing download-join
+  retry. Heap commitment stays at 2,097,152 bytes. The injected post-startup
+  system remainder is 3,334,144 bytes. This is measured fixture behavior, not
+  a bound for every real playlist, URL, audio file or AirPlay sender.
+- The same compact runtime accepts 300 encrypted, independently FFmpeg-compressed
+  ALAC packets after music playback. It emits nonzero PCM, handles volume,
+  FLUSH and TEARDOWN, and stops cleanly without exceeding 2 MiB. This uses
+  loopback with mDNS advertising disabled, not real-phone discovery.
+  `tests/switch_memory_sender.py <isolated-SD-path>/memory-probe.log` drives
+  the sender; its port defaults to 7201 and must match the test profile.
+  The probe flushes and closes/reopens its diagnostic handle before the host
+  reads the readiness marker; this resolved marker visibility across Eden's
+  SD mapping, where `fflush`/`fsync` alone did not expose the final line.
+
+Evidence remains private under `build/validation/loader-coexistence/`; probe
+binaries and generated fixtures are excluded from releases. Physical cold boot,
+real account playback, overlay controls, sleep/wake and game coexistence still
+require rebooting the user's console with the new matching components.
+
 ## Environment and constrained playback — v0.2.13, 2026-10-22
 
 The locally installed v0.2.12 candidate still waited at the resource gate:
