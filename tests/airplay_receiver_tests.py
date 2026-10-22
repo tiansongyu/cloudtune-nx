@@ -392,14 +392,19 @@ def run(binary):
         payload = challenge + socket.inet_aton("127.0.0.1") + DEVICE + bytes(6)
         check(recovered == b"\x00\x01" + b"\xff" * (256 - len(payload) - 3) + b"\x00" + payload,
               "Apple-Challenge independently verifies raw RSA PKCS#1 v1.5")
-        busy = Rtsp(probe.port)
-        check(busy.response()[0] == 453, "second RTSP client cannot take over")
-        busy.close()
+        idle = session
+        session = Rtsp(probe.port)
+        session.request("OPTIONS")
+        check(idle.socket.recv(1) == b"", "same phone's idle probe yields to playback connection")
+        idle.close()
         session.setup(public)
         probe.command("deny")
         session.request("RECORD", expect=453)
         probe.command("allow")
         session.request("RECORD")
+        busy = Rtsp(probe.port)
+        check(busy.response()[0] == 453, "active recording rejects a second RTSP client")
+        busy.close()
         session.sync(100000)
         session.request("SET_PARAMETER", {"Content-Type": "text/parameters"}, b"volume: -12.5\r\n")
 
@@ -544,6 +549,38 @@ def run(binary):
         probe.close()
     retry_bind(binary)
     boundary_cases(binary, public)
+    allocation_recovery(binary, public)
+
+
+def allocation_recovery(binary, public):
+    probe = Probe(binary)
+    session = None
+    try:
+        for _ in range(3):
+            session = Rtsp(probe.port)
+            session.request("OPTIONS")
+            check(probe.command("fail-next-allocation")["armed"], "arm one receiver allocation failure")
+            session.socket.sendall(b"OPTIONS * RTSP/1.0\r\nCSeq: 2\r\nX-Test: " + b"x" * 4000 + b"\r\n\r\n")
+            try:
+                check(session.socket.recv(1) == b"", "failed session closes promptly")
+            except ConnectionResetError:
+                pass
+            session.close()
+            session = None
+            wait(probe, None, lambda row: row["state"] == 2)
+        session = Rtsp(probe.port)
+        session.setup(public)
+        session.request("RECORD")
+        session.sync(100000)
+        session.rtp(1, 100000, alac(SAMPLES))
+        status = wait(probe, session, lambda row: row["frames"] == 8)
+        check(status["crc"] == expected(SAMPLES), "reconnected sender emits exact PCM after OOM")
+        session.request("TEARDOWN")
+        print("PASS repeated session allocation failures retain listener; reconnect emits exact PCM")
+    finally:
+        if session:
+            session.close()
+        probe.close()
 
 
 if __name__ == "__main__":

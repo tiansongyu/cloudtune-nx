@@ -15,6 +15,7 @@ struct Config {
     std::array<uint8_t, 6> device_id{{0x02, 0x43, 0x54, 0x4e, 0x58, 0x01}};
     std::string address; // Empty: discover the active IPv4 interface.
     bool advertise = true;
+    std::string diagnostic_path; // Optional bounded stage log; no sender payloads.
 };
 struct Callbacks {
     // Optional platform resource admission before opening/reopening sockets.

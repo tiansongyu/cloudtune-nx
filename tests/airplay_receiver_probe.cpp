@@ -11,8 +11,11 @@
 #include <string>
 
 static std::atomic<bool> boundedAllocations{false};
+static std::atomic<bool> failNextAllocation{false};
 extern "C" void *__real__Znwm(size_t);
 extern "C" void *__wrap__Znwm(size_t bytes) {
+    if (failNextAllocation.exchange(false))
+        throw std::bad_alloc();
     if (boundedAllocations && bytes > 64 * 1024)
         throw std::bad_alloc();
     return __real__Znwm(bytes);
@@ -98,6 +101,13 @@ int main(int argc, char **argv) {
     while (std::getline(std::cin, command)) {
         if (command == "bounded-memory")
             boundedAllocations = true;
+        if (command == "fail-next-allocation") {
+            // Arm after formatting this response, so the receiver thread is
+            // the only allocating producer until the next wire request.
+            std::cout << "{\"armed\":true}\n" << std::flush;
+            failNextAllocation = true;
+            continue;
+        }
         if (command == "stop")
             break;
         if (command == "disconnect") {

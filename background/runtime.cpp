@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "runtime.hpp"
+#include "airplay/diagnostics.hpp"
 #include "airplay/receiver.hpp"
 #include "netease/api.hpp"
 #include "netease/storage.hpp"
@@ -75,6 +76,7 @@ struct Runtime::Impl {
         // Useful for isolated loopback tests and hosts with several interfaces.
         airplay.address = preferences.value("address", std::string{});
         airplay.advertise = preferences.value("advertise", true);
+        airplay.diagnostic_path = config.directory + "/airplay.log";
     }
     void makeReceiver() {
         if (config.can_start_work && !config.can_start_work())
@@ -82,8 +84,11 @@ struct Runtime::Impl {
         cloudtune::airplay::Callbacks callbacks;
         callbacks.can_start_work = config.can_start_work;
         callbacks.begin = [this](uint32_t rate) {
-            return accepting.load() && (!config.can_start_work || config.can_start_work()) &&
-                   engine.begin_external(rate);
+            const bool allowed = accepting.load();
+            const bool resources = !config.can_start_work || config.can_start_work();
+            cloudtune::airplay::diagnostic(airplay.diagnostic_path, "record-admission", allowed,
+                                           resources);
+            return allowed && resources && engine.begin_external(rate);
         };
         callbacks.audio = [this](const int16_t* pcm, size_t frames) {
             return accepting.load() && engine.write_external(pcm, frames);

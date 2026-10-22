@@ -91,6 +91,28 @@ sdmc:/config/netease-switch/airplay.json
 
 无需移动或删除现有登录目录。不要将包含账号会话的数据目录上传到问题报告。
 
+## 连接后无声的诊断
+
+v0.3.1 开发版会在 `config/netease-switch/` 保存两个有大小上限的阶段日志，
+无需修改账号配置。`airplay.log` 记录接收通路，`airplay-output.log` 记录设备输出；
+每行依次为毫秒时间、固定事件名、两个数字。日志不会保存密钥、账号、发送端地址、
+曲目元数据或音频内容。
+
+| 事件 | 判断依据 |
+| --- | --- |
+| `idle-session-replaced` | 同一手机的未播放连接已交给新连接；正在播放的会话仍受保护 |
+| `rtsp-reply` | 第一个数字为 OPTIONS/ANNOUNCE/SETUP/RECORD/FLUSH/PAUSE/SET_PARAMETER/GET_PARAMETER/TEARDOWN 的序号 1–9，第二个为响应码 |
+| `record-admission` | 是否允许接收、系统资源检查是否通过；均为 1 才能接管 |
+| `first-udp-audio` / `first-decoded` | 已收到音频包 / 已成功解码 |
+| `first-pcm-handoff` | 解码结果已交给播放引擎 |
+| `output-open` / `first-device-pcm` | 音频设备是否打开、设备错误码 / 首次提交帧数和音量峰值 |
+| `session-memory-limit` | 此次会话触及内存限制；监听保留，可重新连接 |
+| `local-pause` | Switch 端是否将实时音频本地暂停 |
+
+复现后完整关机，再读取这两个文件与 `background-startup.log`。启动成功只说明
+后台存活，`first-decoded` 只说明解码成功；需结合设备提交与实际听感判断整个链路。
+目前修复已通过桌面与原生模拟器测试，用户的网易云手机端实机复测仍待确认。
+
 ## 实现与兼容边界
 
 接收器在 `airplay/` 内独立实现 RTSP、RTP 音频接收、时钟同步、重传请求、

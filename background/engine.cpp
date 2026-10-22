@@ -1,11 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "engine.hpp"
+#include "../airplay/diagnostics.hpp"
 #include "audio_decoder.hpp"
-#include "pcm_stream.hpp"
-#include "netease/api.hpp"
 #include "netease/accounts.hpp"
+#include "netease/api.hpp"
 #include "netease/crypto.hpp"
 #include "netease/storage.hpp"
+#include "pcm_stream.hpp"
 #include <curl/curl.h>
 #ifdef __SWITCH__
 #include <switch.h>
@@ -205,6 +206,7 @@ struct Engine::Impl {
         copyText(snapshot.message, "Ready");
     }
     EngineConfig config;
+    std::string airplayOutputLog = config.directory + "/airplay-output.log";
     mutable std::mutex mutex;
     std::condition_variable cv;
     NcmPlaybackStatus snapshot{};
@@ -914,6 +916,9 @@ struct Engine::Impl {
         state(NcmPlayback_Paused, "音频设备不可用，按播放重试", 6);
     }
     void recoverOutput() {
+        if (externalMode)
+            cloudtune::airplay::diagnostic(airplayOutputLog, "output-recovery", sink.error(),
+                                           outputAttempts);
         recoveryPosition = getStatus().position_ms;
         sink.close();
         healthyOutputSince = {};
@@ -977,7 +982,10 @@ struct Engine::Impl {
                 copyText(snapshot.title, "AirPlay 1");
                 copyText(snapshot.artist, "CloudTune NX");
             }
-            if (sink.open()) state(NcmPlayback_Playing, "AirPlay receiving");
+            const bool opened = sink.open();
+            cloudtune::airplay::diagnostic(airplayOutputLog, "output-open", opened, sink.error());
+            if (opened)
+                state(NcmPlayback_Playing, "AirPlay receiving");
             else recoverOutput();
             return true;
         }
@@ -1000,6 +1008,7 @@ struct Engine::Impl {
             recoveringOutput = false; outputAttempts = 0;
             externalPaused = cmd == NcmCommand_Pause ||
                 (cmd == NcmCommand_PlayPause && !externalPaused);
+            cloudtune::airplay::diagnostic(airplayOutputLog, "local-pause", externalPaused);
             external.pause(externalPaused); sink.close();
             if (externalPaused) state(NcmPlayback_Paused, "AirPlay locally paused");
             else if (sink.open()) state(NcmPlayback_Playing, "AirPlay receiving");
@@ -1184,7 +1193,15 @@ struct Engine::Impl {
                             recoverOutput();
                         } else {
                             outputProgress();
-                            if (!externalFrames) diagnostic("airplay-first-pcm", pcm.data(), frames);
+                            if (!externalFrames) {
+                                diagnostic("airplay-first-pcm", pcm.data(), frames);
+                                uint32_t peak = 0;
+                                for (size_t i = 0; i < frames * 2; ++i)
+                                    peak = std::max(peak,
+                                                    static_cast<uint32_t>(std::abs(int(pcm[i]))));
+                                cloudtune::airplay::diagnostic(airplayOutputLog, "first-device-pcm",
+                                                               frames, peak);
+                            }
                             externalFrames += frames;
                             const uint64_t elapsed = externalFrames * 1000 / SampleRate;
                             std::lock_guard<std::mutex> lock(mutex);

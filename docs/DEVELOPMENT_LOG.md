@@ -873,3 +873,20 @@ Primary references checked:
   cycles, dense slider updates, real PCM submissions, memory bounds, synthetic
   system-core contention and AAC-to-AirPlay takeover with repeated covers.
   Exact executed results and limits are recorded in VALIDATION.md.
+
+## 2026-10-22 · AirPlay connection lifecycle follow-up (v0.3.1 candidate)
+
+- Physical v0.3.0 background music is confirmed working, but the user still
+  reports no AirPlay audio after selecting the route. Read back the installed
+  hashes and startup/IPC logs; no AirPlay-stage evidence was previously saved.
+- Reproduce a 453 rejection when an idle probe holds the single TCP slot.
+  Permit a same-peer non-recording session to yield to the playback connection;
+  keep active recordings exclusive. Isolate per-session allocation failures
+  instead of ending the listener, and verify reconnect with exact decoded PCM.
+- Add bounded stage diagnostics for reception and device output, without sender
+  metadata, keys or audio payloads. Keep the IPC ABI, heap cap, system resource
+  checks, game-core isolation and existing music playback path intact.
+- Verify with full host/UBSan suites, ASan wire tests, independent pyatv and
+  native encrypted playback including Apple-Challenge and idle-session handoff.
+  Install a clearly marked local candidate for physical NetEase iPhone testing;
+  real-phone success has not yet been observed. See VALIDATION.md.

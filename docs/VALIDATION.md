@@ -8,6 +8,52 @@ retained as historical evidence; current filenames and commands are documented
 in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
 hardware or emulator validation.
 
+## AirPlay connection lifecycle — v0.3.1 candidate, 2026-10-22
+
+The user confirms v0.3.0 physical background music works, but selecting the
+AirPlay route and pressing play on NetEase Music still produces no audio.
+The newly mounted SD's three binary hashes match the installed v0.3.0 build.
+Its startup and IPC logs confirm readiness and a compact 2 MiB heap; no
+AirPlay-stage log exists in that version. These logs do not establish which
+part of the phone's AirPlay exchange failed.
+
+Executed checks and fixes:
+
+- Reproduce a connection-lifecycle defect: hold an OPTIONS-only connection
+  open, then connect a second playback session from the same sender. v0.3.0
+  immediately sends `453` without allowing ANNOUNCE/SETUP/RECORD. The candidate
+  permits same-address replacement until RECORD acquires the audio stream;
+  a second connection cannot replace an active recording. This is a reproduced
+  compatibility defect, not a captured trace of the user's phone.
+- Inject three individual C++ allocation failures into active TCP sessions.
+  The failed client closes while the listener survives; a fresh encrypted
+  ALAC session produces exact expected PCM. Previously the top-level exception
+  handler ended the receiver permanently until an explicit restart.
+- Full host and UBSan suites pass **33/33** each; independent XEAPI and generated
+  local/throttled HTTPS audio pass. The full wire suite also passes ASan/UBSan
+  with leak detection, including session recovery, fragmented/pipelined requests,
+  encrypted ALAC, metadata, resends, pause/resume and reconnect.
+- Independent pyatv 0.16.1 streaming, with a separate idle preflight connection
+  held open, completes: **2,068 packets**, zero receiver losses, **651,552 PCM
+  frames**, nonzero peak. The baseline without preflight also passed, so the
+  result is not presented as a general failure of the old desktop receiver.
+- Native compact-heap probe verifies the actual Switch RSA Apple-Response,
+  replaces an idle probe, transitions from AAC into encrypted AirPlay, receives
+  repeated 256 KiB covers and completes FLUSH/TEARDOWN. **3,758 packets, zero
+  losses**, a successful device open and a nonzero 2,048-frame device submission
+  are recorded within 2 MiB. It retains the same emulator/resource-injection
+  limits documented for v0.3.0. No real phone is involved in this probe.
+- Add bounded, payload-free `airplay.log` and `airplay-output.log` stages so
+  physical tests can distinguish RTSP rejection, resource admission, UDP arrival,
+  decoding, PCM handoff and device output. No account, key, sender address,
+  song metadata or raw audio enters these logs.
+
+The local photo candidate is installed with matching components, original
+settings, both autostart flags and loader binary preserved; the previous
+components are backed up. **Real-phone acceptance is pending.** Evidence is
+retained under `build/validation/airplay-v031/`; do not treat the candidate's
+successful emulator tests as proof that the reported phone failure is resolved.
+
 ## Background continuity and AirPlay artwork — v0.3.0, 2026-10-22
 
 The user now confirms physical v0.2.15 background playback works. The new

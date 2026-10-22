@@ -6,7 +6,10 @@ fresh memory-probe.log. Requires system FFmpeg and Python cryptography, like
 airplay_receiver_tests.py. No account or real music is used.
 """
 import argparse
+import base64
+import json
 from pathlib import Path
+import socket
 import time
 
 import airplay_receiver_tests as wire
@@ -30,7 +33,27 @@ def main():
 
     session = wire.Rtsp(args.port)
     try:
-        session.request("OPTIONS")
+        challenge = bytes(range(16))
+        headers, _ = session.request("OPTIONS", {"Apple-Challenge": wire.b64(challenge)})
+        answer = headers.get("apple-response", "")
+        wire.check(bool(answer), "native receiver returns Apple-Response")
+        signature = base64.b64decode(answer + "=" * (-len(answer) % 4))
+        key = wire.public_key().public_numbers()
+        raw = pow(int.from_bytes(signature, "big"), key.e, key.n).to_bytes(256, "big")
+        preferences = json.loads((args.log.parent / "airplay.json").read_text())
+        identity = bytes.fromhex(preferences["device_id"])
+        wire.check(len(identity) == 6, "isolated receiver identity is six bytes")
+        payload = challenge + socket.inet_aton("127.0.0.1") + identity + bytes(6)
+        wire.check(raw == b"\x00\x01" + b"\xff" * 221 + b"\x00" + payload,
+                   "native challenge signature matches challenge, address and receiver identity")
+        preflight = session
+        session = wire.Rtsp(args.port)
+        try:
+            session.request("OPTIONS")
+            wire.check(preflight.socket.recv(1) == b"", "idle selection yields to playback connection")
+        finally:
+            preflight.close()
+        print("PASS native Apple-Challenge and idle probe-to-playback handoff", flush=True)
         session.setup(wire.public_key())
         session.request("RECORD", {"RTP-Info": "seq=1;rtptime=100000"})
         session.request("SET_PARAMETER", {"Content-Type": "text/parameters"}, b"volume: -10.0\r\n")

@@ -5,6 +5,7 @@
 #include "receiver.hpp"
 #include "codec.hpp"
 #include "crypto.hpp"
+#include "diagnostics.hpp"
 #include "mdns.hpp"
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -302,6 +303,13 @@ struct Receiver::Impl {
     int64_t nextTiming = 0, timingDeparture = 0, bestRoundTrip = INT64_MAX;
     int64_t nextAddressCheck = 0;
     unsigned timingCount = 0;
+    unsigned diagnosticEvents = 0, rejectedAudio = 0;
+    bool loggedDatagram = false, loggedDecoded = false, loggedOutput = false;
+
+    void trace(const char *event, uint64_t a = 0, uint64_t b = 0) noexcept {
+        if (diagnosticEvents++ < 96)
+            diagnostic(config.diagnostic_path, event, a, b);
+    }
 
     Impl(Config value, Callbacks handlers) : config(std::move(value)), callbacks(std::move(handlers)) {
         snapshot.version = NCM_AIRPLAY_VERSION;
@@ -348,6 +356,9 @@ struct Receiver::Impl {
         snapshot.title[0] = snapshot.artist[0] = '\0';
     }
     void closeClient() {
+        if (client >= 0) {
+            trace("session-close", snapshot.received_packets, snapshot.lost_packets);
+        }
         resetStream();
         closeFd(client);
         connected = false;
@@ -392,8 +403,16 @@ struct Receiver::Impl {
         const int incoming = accept(listener, reinterpret_cast<sockaddr*>(&address), &length);
         if (incoming < 0) return;
         if (!nonblocking(incoming)) { ::close(incoming); return; }
+        if (client >= 0 && !recording && peer.sin_addr.s_addr == address.sin_addr.s_addr) {
+            // A phone may probe/select the route on one TCP connection and
+            // open its actual playback session on another. An idle probe is
+            // not an audio owner. Keep active recordings exclusive.
+            trace("idle-session-replaced");
+            closeClient();
+        }
         if (client >= 0) {
             // A session has one RTSP owner; unsolicited takeover cannot replace it.
+            trace("active-session-busy");
             const char busy[] = "RTSP/1.0 453 Not Enough Bandwidth\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
             send(incoming, busy, sizeof(busy) - 1, SendFlags);
             ::close(incoming);
@@ -401,6 +420,9 @@ struct Receiver::Impl {
         }
         client = incoming; peer = address;
         connected = true;
+        diagnosticEvents = rejectedAudio = 0;
+        loggedDatagram = loggedDecoded = loggedOutput = false;
+        trace("session-accept");
         sockaddr_in local{};
         length = sizeof(local);
         connectionAddress = getsockname(client, reinterpret_cast<sockaddr*>(&local), &length) == 0
@@ -410,6 +432,14 @@ struct Receiver::Impl {
     }
     void respond(const Request& request, unsigned code, const std::string& headers = "",
                  const std::string& body = "") {
+        static constexpr const char *methods[] = {"OPTIONS",       "ANNOUNCE",      "SETUP",
+                                                  "RECORD",        "FLUSH",         "PAUSE",
+                                                  "SET_PARAMETER", "GET_PARAMETER", "TEARDOWN"};
+        unsigned method = 0;
+        for (unsigned i = 0; i < sizeof(methods) / sizeof(methods[0]); ++i)
+            if (request.method == methods[i])
+                method = i + 1;
+        trace("rtsp-reply", method, code);
         std::ostringstream response;
         response << "RTSP/1.0 " << code << ' ' << responseReason(code) << "\r\n";
         const auto cseq = request.header("cseq");
@@ -418,6 +448,7 @@ struct Receiver::Impl {
         const auto challenge = request.header("apple-challenge");
         if (!challenge.empty()) {
             const auto answer = challengeResponse(challenge, connectionAddress, config.device_id);
+            trace("apple-challenge", !answer.empty());
             if (!answer.empty()) response << "Apple-Response: " << answer << "\r\n";
         }
         response << headers << "Content-Length: " << body.size() << "\r\n\r\n" << body;
@@ -477,6 +508,8 @@ struct Receiver::Impl {
             integer(userAgent.substr(airplay + 8, end == std::string::npos ? end : end - airplay - 8), airplayVersion);
         }
         announced = true;
+        trace("format", rate, frameLength);
+        trace("encoding", pcm, encrypted);
         state(NcmAirplay_Connected, "Audio session announced");
         return true;
     }
@@ -492,12 +525,15 @@ struct Receiver::Impl {
         closeFd(audio); closeFd(control); closeFd(timing);
         audio = udpSocket(audioPort); control = udpSocket(controlPort); timing = udpSocket(timingPort);
         if (audio < 0 || control < 0 || timing < 0) {
+            trace("udp-open-error", errno);
             closeFd(audio); closeFd(control); closeFd(timing); return false;
         }
         remoteControl = peer; remoteControl.sin_port = htons(uint16_t(remoteControlPort));
         remoteTiming = peer; remoteTiming.sin_port = htons(uint16_t(remoteTimingPort));
         session = "1"; setup = true;
         nextTiming = nowNs(); timingCount = 0;
+        trace("udp-ports", audioPort, controlPort);
+        trace("timing-port", timingPort);
         return true;
     }
     void flush(const Request& request) {
@@ -571,9 +607,11 @@ struct Receiver::Impl {
             if (!setup) { respond(request, 455); return; }
             if (!recording) {
                 if (!callbacks.begin || !callbacks.audio || !callbacks.begin(rate)) {
+                    trace("record-rejected");
                     respond(request, 453); return;
                 }
                 recording = true;
+                trace("record-accepted");
                 if (callbacks.volume) callbacks.volume(volumeDb);
             }
             paused = false;
@@ -604,6 +642,8 @@ struct Receiver::Impl {
                 if (!parsed)
                     return;
                 if (parsed < 0) {
+                    trace("rtsp-parse-error", unsigned(-parsed),
+                          input.find(" HTTP/1.1\r\n") != std::string::npos);
                     respond(request, unsigned(-parsed));
                     closing = true;
                     return;
@@ -647,10 +687,17 @@ struct Receiver::Impl {
         // Bound control traffic per turn so a large cover cannot starve RTP.
         for (unsigned i = 0; client >= 0 && !closing && budget && i < 8; ++i) {
             const ssize_t size = recv(client, buffer.data(), buffer.size(), 0);
-            if (size == 0) { closeClient(); return; }
+            if (size == 0) {
+                trace("tcp-eof");
+                closeClient();
+                return;
+            }
             if (size < 0) {
                 if (errno == EINTR) continue;
-                if (errno != EAGAIN && errno != EWOULDBLOCK) closeClient();
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    trace("tcp-read-error", errno);
+                    closeClient();
+                }
                 break;
             }
             if (!partialSince)
@@ -668,6 +715,7 @@ struct Receiver::Impl {
         const auto sent = send(client, output.data(), output.size(), SendFlags);
         if (sent > 0) output.erase(0, size_t(sent));
         else if (sent == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+            trace("tcp-write-error", errno);
             closeClient(); return;
         }
         if (output.empty()) {
@@ -676,6 +724,10 @@ struct Receiver::Impl {
         }
     }
     void receiveAudio(const uint8_t* packet, size_t length) {
+        if (!loggedDatagram) {
+            loggedDatagram = true;
+            trace("first-udp-audio", length, length > 1 ? packet[1] : 0);
+        }
         if (!setup || paused || length < 12) return;
         const uint8_t type = packet[1] & 0x7f;
         if (type == 0x56) {
@@ -725,7 +777,16 @@ struct Receiver::Impl {
             frames = payloadLength / 4;
             for (size_t i = 0; i < frames * 2; ++i) decoded[i] = int16_t(read16(payload + i * 2));
         } else frames = decoder.decode(payload, payloadLength, decoded.data(), decoded.size() / 2);
-        if (!frames || frames > 4096) { count(true); return; }
+        if (!frames || frames > 4096) {
+            if (rejectedAudio++ < 4)
+                trace("decode-rejected", payloadLength, frames);
+            count(true);
+            return;
+        }
+        if (!loggedDecoded) {
+            loggedDecoded = true;
+            trace("first-decoded", frames, payloadLength);
+        }
         auto& slot = packets[sequence % Slots];
         if (!slot.samples.empty() && slot.sequence == sequence) return;
         const size_t bytes = frames * 4;
@@ -763,6 +824,8 @@ struct Receiver::Impl {
         if (minimumLatency) requested = std::max(requested, minimumLatency);
         if (maximumLatency) requested = std::min(requested, maximumLatency);
         if (requested > rate * 4 || requested < frameLength) return;
+        if (!haveSync)
+            trace("first-sync", requested, flags);
         latency = requested;
         syncTimestamp = timestamp; syncRemoteTime = ntpNs(packet + 8); haveSync = true;
         lastActivity = nowNs();
@@ -791,6 +854,8 @@ struct Receiver::Impl {
         const int64_t offset = (receiveTime - timingDeparture) / 2 + (transmitTime - current) / 2;
         // Prefer low-delay samples; slowly age the minimum so route changes can recover.
         if (!haveTiming || roundTrip <= bestRoundTrip + 2000000) {
+            if (!haveTiming)
+                trace("first-timing", roundTrip / 1000);
             remoteOffset = haveTiming && std::llabs(offset - remoteOffset) < 100000000
                 ? remoteOffset + (offset - remoteOffset) / 8 : offset;
             bestRoundTrip = roundTrip; haveTiming = true;
@@ -863,7 +928,13 @@ struct Receiver::Impl {
             if (present) {
                 const size_t frames = packet.samples.size() / 2;
                 if (current - due > 500000000 || !callbacks.audio(packet.samples.data(), frames)) count(true);
-                else state(NcmAirplay_Playing, "AirPlay audio");
+                else {
+                    if (!loggedOutput) {
+                        loggedOutput = true;
+                        trace("first-pcm-handoff", frames, latency);
+                    }
+                    state(NcmAirplay_Playing, "AirPlay audio");
+                }
                 expectedTimestamp = timestamp + uint32_t(frames);
                 bufferedBytes -= packet.samples.size() * 2;
                 // Release capacity too: a changing frame size cannot retain
@@ -881,6 +952,8 @@ struct Receiver::Impl {
         }
     }
     void run() {
+        diagnosticEvents = 0;
+        trace("receiver-start");
 #ifdef __SWITCH__
         // libnx std::thread defaults to 59. Keep reception below the audio
         // worker (49), while the background NPDM confines both to core 3.
@@ -928,40 +1001,71 @@ struct Receiver::Impl {
                 if (selected < 0 && errno != EINTR) throw std::runtime_error("AirPlay poll failed");
                 for (nfds_t index = 0; index < count; ++index)
                     descriptors[slots[index]].revents = active[index].revents;
-                if (descriptors[0].revents & POLLIN) acceptClient();
-                if (client >= 0 && descriptors[1].fd == client) {
-                    if ((descriptors[1].revents & POLLIN) || (!input.empty() && input.find("\r\n\r\n") != std::string::npos))
-                        readClient();
-                    if (client >= 0 && (descriptors[1].revents & (POLLERR | POLLHUP | POLLNVAL))) closeClient();
-                    if (client >= 0 && !output.empty()) writeClient();
-                }
-                if (disconnectRequest.load() != disconnectAck.load()) continue;
-                if (audio >= 0 && descriptors[2].fd == audio && descriptors[2].revents & POLLIN) readDatagrams(audio, 0);
-                if (control >= 0 && descriptors[3].fd == control && descriptors[3].revents & POLLIN) readDatagrams(control, 1);
-                if (timing >= 0 && descriptors[4].fd == timing && descriptors[4].revents & POLLIN) readDatagrams(timing, 2);
-                if (config.advertise) mdns.tick();
-                const auto current = nowNs();
-                sendTiming(current); requestResends(current); pumpAudio(current);
-                if (client >= 0 && ((lastActivity && current - lastActivity > 60000000000LL) ||
-                    (partialSince && current - partialSince > 5000000000LL) ||
-                    (pendingSince && current - pendingSince > 5000000000LL))) closeClient();
-                if (recording && lastAudio && current - lastAudio > 2000000000LL && !bufferedBytes)
-                    state(NcmAirplay_Connected, "Waiting for sender audio");
-                if (config.address.empty() && current > nextAddressCheck) {
-                    nextAddressCheck = current + 3000000000LL;
-                    const auto address = platformAddress();
-                    if (address != interfaceAddress) {
-                        closeClient(); mdns.stop(); closeFd(listener);
-                        state(NcmAirplay_Starting, "Network changed; reconnecting");
-                        retryAt = current;
-                        {
-                            std::lock_guard<std::mutex> lock(mutex);
-                            snapshot.address[0] = '\0';
+                try {
+                    if (descriptors[0].revents & POLLIN)
+                        acceptClient();
+                    if (client >= 0 && descriptors[1].fd == client) {
+                        if ((descriptors[1].revents & POLLIN) ||
+                            (!input.empty() && input.find("\r\n\r\n") != std::string::npos))
+                            readClient();
+                        if (client >= 0 &&
+                            (descriptors[1].revents & (POLLERR | POLLHUP | POLLNVAL)))
+                            closeClient();
+                        if (client >= 0 && !output.empty())
+                            writeClient();
+                    }
+                    if (disconnectRequest.load() != disconnectAck.load())
+                        continue;
+                    if (audio >= 0 && descriptors[2].fd == audio && descriptors[2].revents & POLLIN)
+                        readDatagrams(audio, 0);
+                    if (control >= 0 && descriptors[3].fd == control &&
+                        descriptors[3].revents & POLLIN)
+                        readDatagrams(control, 1);
+                    if (timing >= 0 && descriptors[4].fd == timing &&
+                        descriptors[4].revents & POLLIN)
+                        readDatagrams(timing, 2);
+                    if (config.advertise)
+                        mdns.tick();
+                    const auto current = nowNs();
+                    sendTiming(current);
+                    requestResends(current);
+                    pumpAudio(current);
+                    if (client >= 0 && ((lastActivity && current - lastActivity > 60000000000LL) ||
+                                        (partialSince && current - partialSince > 5000000000LL) ||
+                                        (pendingSince && current - pendingSince > 5000000000LL))) {
+                        trace("session-timeout", partialSince != 0, pendingSince != 0);
+                        closeClient();
+                    }
+                    if (recording && lastAudio && current - lastAudio > 2000000000LL &&
+                        !bufferedBytes)
+                        state(NcmAirplay_Connected, "Waiting for sender audio");
+                    if (config.address.empty() && current > nextAddressCheck) {
+                        nextAddressCheck = current + 3000000000LL;
+                        const auto address = platformAddress();
+                        if (address != interfaceAddress) {
+                            trace("network-address-changed", address != 0);
+                            closeClient();
+                            mdns.stop();
+                            closeFd(listener);
+                            state(NcmAirplay_Starting, "Network changed; reconnecting");
+                            retryAt = current;
+                            {
+                                std::lock_guard<std::mutex> lock(mutex);
+                                snapshot.address[0] = '\0';
+                            }
                         }
                     }
+                } catch (const std::bad_alloc &) {
+                    // A single sender must not permanently kill discovery and
+                    // listening if its session exceeds the compact heap.
+                    trace("session-memory-limit");
+                    closeClient();
+                    state(NcmAirplay_Ready, "Session memory limit; retry", 12);
+                    std::this_thread::sleep_for(20ms);
                 }
             }
         } catch (const std::exception& error) {
+            trace("receiver-exception");
             state(NcmAirplay_Error, error.what(), 1);
         } catch (...) {
             state(NcmAirplay_Error, "AirPlay receiver failed", 1);
