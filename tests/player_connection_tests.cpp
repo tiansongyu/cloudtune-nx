@@ -17,6 +17,9 @@ Result process_result = 0, launch_result = 0, control_result;
 unsigned polls, controls, attempts;
 } // namespace
 extern "C" {
+bool ncmPlaybackEnvironmentSupported() {
+    return true;
+}
 Result ncmPlaybackInitialize() {
     ++attempts;
     active = available;
@@ -74,8 +77,10 @@ Result ncmAirplayDisconnect() {
         return control_result;                                                                     \
     }
 SIMPLE(ncmPlaybackPlayPause)
-SIMPLE(ncmPlaybackPlay) SIMPLE(ncmPlaybackPause) SIMPLE(ncmPlaybackNext) SIMPLE(ncmPlaybackPrevious)
-    SIMPLE(ncmPlaybackStop) SIMPLE(ncmPlaybackClearQueue) VALUE(ncmPlaybackLoadQueue, uint32_t)
+SIMPLE(ncmPlaybackPlay)
+SIMPLE(ncmPlaybackPause)
+SIMPLE(ncmPlaybackNext) SIMPLE(ncmPlaybackPrevious) SIMPLE(ncmPlaybackStop)
+    SIMPLE(ncmPlaybackClearQueue) VALUE(ncmPlaybackLoadQueue, uint32_t)
         VALUE(ncmPlaybackSetVolume, uint32_t) VALUE(ncmPlaybackSeek, uint32_t)
             VALUE(ncmPlaybackSetRepeat, NcmRepeatMode) VALUE(ncmPlaybackSetShuffle, bool)
 }
@@ -122,10 +127,21 @@ int main() {
         assert(!player.start_tools()); // PM errors are not "process absent".
     }
     process_result = MAKERESULT(15, 1);
+    launch_result = 0; // Launch was accepted, but the resource gate then exited.
     {
         netease::Player player(root);
         assert(player.start_tools() && !player.background()); // NRO-only mode survives.
         assert(player.airplay_status().state == NcmAirplay_Disabled);
+    }
+    process_result = 0;
+    {
+        netease::Player player(root);
+        assert(!player.start_tools() && player.waiting_for_background());
+        process_result = MAKERESULT(15, 1);
+        player.status(); // Confirmed process exit releases the stale owner.
+        assert(!player.waiting_for_background() && !player.background());
+        assert(player.airplay_status().state == NcmAirplay_Disabled);
+        assert(player.error().empty());
     }
     std::filesystem::remove_all(root);
     std::cout << "PASS: delayed background registration, bounded reconnect, rejected controls, PM "

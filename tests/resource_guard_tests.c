@@ -50,6 +50,14 @@ size_t ncmHeapCommittedSize(void) {
 int main(void) {
     check(ncmCanStartWork() && !ncmCheckStartupResources(), "Normal resources rejected");
     const size_t boundary = (size_t)limits[0] - NCM_SYSTEM_MEMORY_MARGIN;
+    used[0] = limits[0] - NCM_SYSTEM_MEMORY_MARGIN - NCM_STARTUP_MEMORY_ALLOWANCE;
+    check(!ncmCheckStartupResources(), "Measured startup allowance rejected");
+    ++used[0];
+    check(ncmCheckStartupResources(), "Startup boundary bypassed");
+    used[0] = limits[0] - 5u * 1024u * 1024u;
+    check(ncmCheckStartupResources() && ncmCheckMemoryGrowth(2u * 1024u * 1024u),
+          "Physical 5 MiB shortage bypassed the unchanged 8 MiB reserve");
+    used[0] = 0;
     check(!ncmCheckMemoryGrowth(boundary), "Exact memory margin rejected");
     check(ncmCheckMemoryGrowth(boundary + 1) && ncmCheckMemoryGrowth(SIZE_MAX),
           "Margin or integer overflow bypassed");

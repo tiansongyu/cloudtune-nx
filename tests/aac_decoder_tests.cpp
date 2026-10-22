@@ -14,6 +14,11 @@
 using netease::playback::AacDecoder;
 using netease::playback::AudioDecoder;
 using namespace std::chrono_literals;
+static bool deny_codec_allocation;
+extern "C" void* __real_av_malloc(size_t);
+extern "C" void* __wrap_av_malloc(size_t bytes) {
+    return deny_codec_allocation ? nullptr : __real_av_malloc(bytes);
+}
 namespace {
 void require(bool value, const char* reason) {
     if (!value) throw std::runtime_error(reason);
@@ -126,6 +131,17 @@ int main(int argc, char** argv) {
     try {
         require(argc == 2, "usage: aac-decoder-tests fixture-directory");
         const std::string directory = argv[1];
+        {
+            Input input(directory + "/faststart.flac");
+            AudioDecoder decoder;
+            deny_codec_allocation = true;
+            const bool opened = decoder.open(Input::read, Input::seek, Input::tell, &input);
+            deny_codec_allocation = false;
+            require(!opened && decoder.resource_limited(), "AAC allocation failure misreported as damaged data");
+            input.position = 0;
+            require(decoder.open(Input::read, Input::seek, Input::tell, &input) &&
+                    !decoder.resource_limited(), "AAC did not recover after allocation failure");
+        }
         for (bool progressive : {false, true}) {
             fixture(directory + "/adts.bin", 48000, 2, progressive);
             fixture(directory + "/faststart.flac", 48000, 2, progressive);

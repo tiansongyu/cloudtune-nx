@@ -80,6 +80,15 @@ std::string bytes(const std::string &path) {
 } // namespace
 
 extern "C" {
+void *__real_av_malloc(size_t);
+void *__wrap_av_malloc(size_t size) {
+    if (fault.rfind("memory-", 0) == 0 &&
+        (fault == "memory-permanent" || armFault.exchange(false))) {
+        ++injected;
+        return nullptr;
+    }
+    return __real_av_malloc(size);
+}
 FILE *__real_fopen(const char *, const char *);
 int __real_fclose(FILE *);
 size_t __real_fread(void *, size_t, size_t, FILE *);
@@ -173,7 +182,39 @@ int main(int argc, char **argv) {
         queue(directory, argv[2], 900);
         Engine engine({directory, argv[3]});
         check(engine.start() && engine.command(NcmCommand_LoadQueue), "engine start");
-        if (!fault.empty() || scenario == "invalid") {
+        if (fault.rfind("memory-", 0) == 0) {
+            waitFor(
+                engine,
+                [](auto s) {
+                    return s.state == NcmPlayback_Buffering && std::strstr(s.message, "Memory low");
+                },
+                "no low-memory download fallback");
+            check(injected == 1 && !std::filesystem::exists(cache + ".complete"),
+                  "test did not inject allocation failure during download");
+            if (scenario == "memory-cancel") {
+                const auto begin = std::chrono::steady_clock::now();
+                check(engine.command(NcmCommand_ClearQueue), "low-memory wait cannot cancel");
+                check(std::chrono::steady_clock::now() - begin < 1s,
+                      "low-memory cancellation blocked");
+                check(!std::filesystem::exists(cache + ".complete"),
+                      "cancel blessed partial cache");
+            } else if (scenario == "memory-permanent") {
+                waitFor(
+                    engine,
+                    [](auto s) { return s.state == NcmPlayback_Error && s.error_code == 10; },
+                    "persistent OOM not reported", 10000, false);
+                check(injected == 2, "memory retry was not bounded to one attempt");
+                check(std::filesystem::exists(cache + ".complete"), "OOM invalidated valid cache");
+            } else {
+                waitFor(
+                    engine,
+                    [](auto s) { return s.state == NcmPlayback_Playing && s.position_ms > 100; },
+                    "completed download did not recover memory-limited playback");
+                check(injected == 1 && bytes(cache) == bytes(argv[4]),
+                      "memory recovery corrupted or replaced the transfer");
+            }
+            engine.stop();
+        } else if (!fault.empty() || scenario == "invalid") {
             waitFor(
                 engine, [](auto s) { return s.state == NcmPlayback_Error; }, "expected failure");
             auto status = engine.status();

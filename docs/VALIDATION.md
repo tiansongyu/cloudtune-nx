@@ -8,6 +8,64 @@ retained as historical evidence; current filenames and commands are documented
 in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
 hardware or emulator validation.
 
+## Environment and constrained playback — v0.2.13, 2026-10-22
+
+The locally installed v0.2.12 candidate still waited at the resource gate:
+5,287,936 bytes free (occasionally 5,271,552), despite disabling five unrelated
+modules. No current IPC registration occurred. Its public release workflow was
+cancelled before publication. With renewed user authorization, the sixth marker
+(Tesla/Ultrahand loader) was renamed too; only CloudTune's boot2 marker remains.
+All six originals are recoverable. No system-essential module was modified.
+The memory available after that change has **not** yet been measured on hardware.
+
+The old loader source omits HBABI's optional Atmosphere magic. The client now
+also accepts a read-only Mesosphere kernel-version query. Tests reject failed
+and zero replies and exercise the complete protocol with the hint absent.
+Player tests cover accepted launches that exit during/after the startup wait;
+explicit service-plus-process absence permits local playback, whereas unknown
+PM state still blocks a second audio owner. The compatibility query follows
+[Atmosphere 1.9.4's SVC definitions](https://github.com/Atmosphere-NX/Atmosphere/blob/1.9.4/libraries/libvapours/include/vapours/svc/svc_types_common.hpp)
+and [Mesosphere implementation](https://github.com/Atmosphere-NX/Atmosphere/blob/1.9.4/libraries/libmesosphere/source/svc/kern_svc_info.cpp);
+the legacy hint behavior is visible in [nx-ovlloader](https://github.com/WerWolv/nx-ovlloader/blob/master/source/main.c).
+
+Full host CTest **33/33**, full UBSan **33/33**, independent XEAPI verification,
+and generated local/throttled HTTPS playback passed. Five focused ASan/UBSan
+checks (client, connection recovery, resource guard, cache I/O and AAC) passed
+with leak detection. All three Switch components cross-compile. The actual
+photo NRO renders Chinese discovery content, focus and foreground status in an
+isolated Eden profile; desktop controller/content checks run in isolated Xvfb.
+No real desktop or account profile was used.
+
+Native evidence uses an excluded program linked to the real startup, newlib
+heap, runtime, decoders, SD and audout implementations in isolated Eden:
+
+- HOME's unavailable launch-record query is substituted; an allocation wrapper
+  denies physical heap growth beyond 2 MiB. This models the service's heap cap,
+  **not** the entire HOS 20.4 shared-resource environment.
+- Startup's measured quota increase was exactly 2 MiB. Startup allowance is now
+  2 MiB + 256 KiB; the 8 MiB system margin, five-second observation window and
+  per-growth checks remain. Boundary injection accepts 10.25 MiB exactly,
+  rejects one byte less and still rejects the physical 5 MiB shortage.
+- With 512 generated tracks, resident MP3 allocation dropped from 1,963,280 to
+  1,324,304 bytes after replacing padded internal queue records with actual
+  strings. Savings depend on real titles/URLs; the serialized ABI is unchanged.
+- Cold HTTPS initially reproduced AAC `ENOMEM` under the cap. Joining completed
+  workers and one cancellable retry after transfer completion now recovers it.
+  Fresh-cache MP3, AAC and FLAC each advance beyond one second and emit nonzero
+  PCM with successful emulated audout; final stop completes. No account music
+  or credentials were used. The allocator retains its last refusal diagnostic
+  after recovery, so a historical `heap-last-result=0x10801` alone is not failure.
+- Host fault injection covers one transient decoder failure, cancellation while
+  waiting, and persistent failure limited to two open attempts. Completed valid
+  cache remains intact; active transfers are not duplicated. AAC fixtures also
+  check ADTS, faststart/end-moov M4A, mono, surround downmix, seek and PCM reference.
+
+Evidence is ignored under `build/validation/env-followup/`, including the initial
+failure, `https-cold-memory-probe.log`, codec allocation checkpoints and audio
+logs. The native probe is excluded from SD packages. Physical cold boot,
+playback with the user's account, real AirPlay sessions, sleep/wake, running
+games and restored overlays still need hardware acceptance.
+
 ## Frontend/background communication — v0.2.12, 2026-10-22
 
 The supplied SD's NSP matched v0.2.11. Its current startup log reports

@@ -57,6 +57,8 @@ def main():
         scenarios = [("stream", "source." + ext) for ext in ("flac", "mp3", "aac", "m4a")]
         scenarios += [(mode, "source.flac") for mode in ("open", "read", "write", "flush", "seek", "sync", "cancel", "corrupt-cache")]
         scenarios += [("invalid", "invalid")]
+        scenarios += [(mode, "source.m4a") for mode in
+                      ("memory-retry", "memory-cancel", "memory-permanent")]
         if len(sys.argv) > 2:
             scenarios = [item for item in scenarios if item[0] == sys.argv[2]][:1]
         try:

@@ -16,6 +16,8 @@ typedef uint64_t u64;
 typedef int32_t s32;
 typedef uint32_t Result;
 typedef uint32_t Handle;
+typedef u32 InfoType;
+Result svcGetInfo(u64*, InfoType, Handle, u64);
 typedef uint64_t SmServiceName;
 typedef pthread_mutex_t Mutex;
 typedef pthread_cond_t CondVar;
@@ -159,7 +161,8 @@ typedef struct { u64 program_id; u8 storageID; } NcmProgramLocation;
 enum { NcmStorageId_None=0 };
 static inline bool serviceIsActive(Service* service) { return service->active; }
 static inline void serviceClose(Service* service) { service->active = false; }
-static inline bool hosversionIsAtmosphere(void) { return true; }
+extern bool testAtmosphereHint;
+static inline bool hosversionIsAtmosphere(void) { return testAtmosphereHint; }
 static inline void* smGetServiceSessionTipc(void) { return NULL; }
 static inline Result smGetService(Service* service, const char* name) {
     (void)name; service->active = true; return 0;

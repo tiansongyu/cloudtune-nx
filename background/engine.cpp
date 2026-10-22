@@ -34,6 +34,13 @@ constexpr uint32_t SampleRate = 48000;
 constexpr uint64_t MaxDownloadBytes = 512u * 1024u * 1024u;
 constexpr uint64_t RetainedCacheBytes = 512u * 1024u * 1024u;
 constexpr size_t CommandCapacity = 32;
+// The on-disk IPC ABI reserves 1424 bytes per track, mostly unused string
+// padding. Keep only playback fields and actual text in resident memory.
+struct QueueTrack {
+    uint64_t id;
+    uint32_t duration_ms;
+    std::string title, artist, url;
+};
 // Internal events are outside the public command enum's representable range.
 constexpr uint32_t ExternalBegin = 100;
 constexpr uint32_t ExternalEnd = 101;
@@ -190,7 +197,7 @@ struct Engine::Impl {
     };
     std::vector<PendingCommand> commands;
     uint64_t clearRequested = 0, clearCompleted = 0;
-    std::vector<NcmQueueEntry> queue;
+    std::vector<QueueTrack> queue;
     std::thread worker, downloader;
     std::atomic<bool> running{false}, interrupt{false}, downloadCancel{false}, downloadDone{true};
     std::atomic<uint64_t> downloaded{0};
@@ -525,7 +532,7 @@ struct Engine::Impl {
     static bool tellStream(void* context, int64_t* position) {
         *position = static_cast<Impl*>(context)->cursor; return true;
     }
-    std::string resolveUrl(const NcmQueueEntry& entry, bool force) {
+    std::string resolveUrl(const QueueTrack& entry, bool force) {
         std::string url(entry.url);
         if (force || url.empty()) {
             ApiConfig c;
@@ -570,7 +577,7 @@ struct Engine::Impl {
             std::lock_guard<std::mutex> lock(mutex);
             snapshot.queue_index = index; snapshot.track_id = entry.id;
             snapshot.duration_ms = entry.duration_ms; snapshot.position_ms = 0;
-            copyText(snapshot.title, entry.title); copyText(snapshot.artist, entry.artist);
+            copyText(snapshot.title, entry.title.c_str()); copyText(snapshot.artist, entry.artist.c_str());
         }
         state(NcmPlayback_Buffering, "Connecting");
         std::string url(entry.url);
@@ -647,7 +654,7 @@ struct Engine::Impl {
             try {
                 url = resolveUrl(entry, true);
                 if (url.rfind("https://", 0) != 0) throw std::runtime_error("No playable URL");
-                copyText(entry.url, url.c_str());
+                entry.url.assign(url, 0, sizeof(NcmQueueEntry::url) - 1);
                 std::fclose(input); input = nullptr;
                 downloadDone = false; downloaded = 0; downloadError = 0;
                 input = std::fopen(currentPath.c_str(), "w+b");
@@ -667,7 +674,25 @@ struct Engine::Impl {
             reportCacheFailure();
             return false;
         }
-        const bool opened = decoder.open(readStream, seekStream, tellStream, this);
+        // A completed std::thread retains its stack until joined. Release the
+        // network worker before allocating the decoder whenever possible.
+        if (downloadDone && downloader.joinable()) downloader.join();
+        bool opened = decoder.open(readStream, seekStream, tellStream, this);
+        if (!opened && decoder.resource_limited() && downloader.joinable() && !cacheError) {
+            // Under a tight system quota, decoding and TLS may fit separately
+            // but not concurrently. Keep the existing transfer/cache and retry
+            // once after it finishes, rather than redownloading or changing
+            // quality. Stop/next/shutdown interrupt this wait normally.
+            state(NcmPlayback_Buffering, "Memory low; finishing audio download");
+            while (running && !interrupt && !cacheError && !downloadDone)
+                std::this_thread::sleep_for(10ms);
+            if (!running || interrupt) return false;
+            if (!cacheError && !downloadError) {
+                downloader.join();
+                cursor = 0;
+                opened = decoder.open(readStream, seekStream, tellStream, this);
+            }
+        }
         if (cacheError) {
             reportCacheFailure();
             return false;
@@ -769,21 +794,22 @@ struct Engine::Impl {
         bool valid = std::fread(&header,sizeof(header),1,file)==1 &&
             std::memcmp(header.magic,"NCMQUEUE",8)==0 && header.version==NCM_PROTOCOL_VERSION &&
             header.count<=NCM_MAX_QUEUE && (!header.count || index<header.count);
-        std::vector<NcmQueueEntry> loaded;
+        std::vector<QueueTrack> loaded;
         if (valid) {
-            loaded.resize(header.count);
-            if (header.count)
-                valid=std::fread(loaded.data(),sizeof(NcmQueueEntry),header.count,file)==header.count;
+            loaded.reserve(header.count);
+            for (uint32_t i = 0; i < header.count; ++i) {
+                NcmQueueEntry row{};
+                if (std::fread(&row, sizeof(row), 1, file) != 1) { valid = false; break; }
+                row.title[sizeof(row.title)-1]=0; row.artist[sizeof(row.artist)-1]=0;
+                row.url[sizeof(row.url)-1]=0;
+                loaded.push_back({row.id, row.duration_ms, row.title, row.artist, row.url});
+            }
         }
         queueFile.reset();
         if (!valid) {
             closeTrack(); queue.clear();
             { std::lock_guard<std::mutex> lock(mutex); snapshot.queue_count=0; }
             state(NcmPlayback_Error,"Invalid playback queue",7); return false;
-        }
-        for (auto& row : loaded) {
-            row.title[sizeof(row.title)-1]=0; row.artist[sizeof(row.artist)-1]=0;
-            row.album[sizeof(row.album)-1]=0; row.url[sizeof(row.url)-1]=0;
         }
         queue=std::move(loaded); activeSession=std::move(session); failures=0;
         { std::lock_guard<std::mutex> lock(mutex); snapshot.queue_count=queue.size(); }

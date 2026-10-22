@@ -20,6 +20,7 @@ public:
     uint64_t frames() const;
     const char* format() const;
     bool damaged() const;
+    bool resource_limited() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

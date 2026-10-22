@@ -28,12 +28,14 @@ the runtime. Do not use `pm:shell` GetBootFinishedEventHandle: Atmosphere 1.9.4
 aborts that command outside recovery boot. Do not call NotifyBootFinished.
 
 Since v0.2.11, after the HOME boundary startup requires 20 consecutive 250 ms
-observations with at least 12 MiB memory, 16 threads, 16 events, four transfer
-memories and 16 sessions free. A shortage resets the observation window;
+observations with sufficient memory, 16 threads, 16 events, four transfer
+memories and 16 sessions free. Since v0.2.13 the initial memory threshold is
+10.25 MiB: the unchanged 8 MiB system margin plus a measured 2 MiB initial
+heap and 256 KiB allowance (previously an estimated 4 MiB allowance). A shortage resets the observation window;
 the resource wait ends after about 60 seconds. Failed queries/timeouts exit
 before C++ global constructors, with acquired platform resources released.
-These are conservative policy margins, not measured minimum requirements or
-proof that HOME has finished initializing. The read/check is not atomic with
+Native startup measurements inform the allowance, but these remain policy
+margins, not proof that HOME has finished initializing. The read/check is not atomic with
 other processes' allocations and cannot reserve resources for them.
 
 Newlib's first allocation commits 2 MiB; later requests grow in 2 MiB steps
@@ -63,7 +65,10 @@ The application first attempts the background IPC connection. When the service
 is unavailable it can run the same `netease::playback::Runtime` in its own
 process. This foreground fallback stops when the application exits.
 The runtime owns both the music engine and the independent AirPlay receiver.
-Connection probing first checks libnx's Atmosphère flag, then uses
+Connection probing accepts libnx's Atmosphère flag or a successful nonzero
+read-only Mesosphere kernel-version query (`svcGetInfo`, type 65000, sub-ID 0).
+Legacy overlay loaders can omit HBABI's optional Atmosphere hint. Neither a
+failed query nor zero output is accepted. After this check the client uses
 Atmosphère's TIPC `HasService` command (65100). Acquisition uses a private SM
 session and standard TLS/CMIF on one dedicated worker. This follows the
 ordinary libnx session path used by TriPlayer while keeping bounded caller
@@ -73,7 +78,10 @@ account-clear barrier allows 5.5 s. The worker has a 16 KiB stack and a fixed
 lookup precedes launch, so an existing process behind the boot gate is not
 started again. Unknown PM state prevents a second local player. Foreground
 and overlay clients reconnect at most once every two seconds after startup.
-Stock/emulated Horizon receives no Atmosphere extension commands in production.
+Stock/emulated Horizon that rejects the kernel query receives no Atmosphere
+SM extension commands in production. Once both the service and PM process
+lookup explicitly report absence, a waiting frontend releases stale background
+ownership and starts its local runtime; unknown PM state still prevents this.
 
 Only one request can be pending. A timeout logically disconnects the client
 without sending a synchronous CMIF Close and never automatically replays a
@@ -109,8 +117,9 @@ the new queue, and removes the backup after success. Failed publication restores
 the old queue; if restoration also fails, the backup remains readable by the
 engine when the primary is absent. This also covers a crash between renames.
 A queue has a 16-byte header followed by fixed-size
-1,424-byte entries. The maximum queue is 512 entries, bounding the persistent
-module's memory. Larger remote collections must be presented in windows by the
+1,424-byte entries. The engine reads these records individually and retains
+only playback fields and actual string lengths; the wire/file ABI is unchanged.
+The maximum queue is 512 entries, bounding the persistent module's memory. Larger remote collections must be presented in windows by the
 application. Each entry can contain a resolved HTTPS URL or only a song ID.
 The background process resolves missing/expired URLs using the same API client
 and a session snapshot captured when it loads the queue. It reads the active
@@ -196,6 +205,14 @@ MP3/FLAC decoder allocations share a per-decoder 4 MiB aggregate budget,
 including allocation headers. AAC/ALAC configure FFmpeg's process-wide
 single-allocation ceiling once at 2 MiB. AAC also limits probing, stream count
 and generic index storage; unusually large container metadata can be rejected.
+M4A with complete AAC header parameters skips redundant stream-info probing;
+headerless ADTS retains probing. FFmpeg allocation failures are reported as
+resource limits instead of damaged audio. Completed download threads are joined
+before decoder allocation. If opening a decoder runs out of memory while a
+download worker still exists, the engine completes that same download, joins
+the worker and retries decoding once. The buffering wait remains cancellable
+by stop/next/shutdown; persistent failure is reported without deleting a valid
+cache. Normal streaming continues when memory permits.
 These limits do not change the requested music quality or sample-rate support,
 and the FFmpeg ceiling is not a total-process memory limit. Cache eviction
 keeps only 256 candidates at a time. A C++ allocation failure releases the

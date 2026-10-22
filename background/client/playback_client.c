@@ -18,13 +18,22 @@ static void closeService(void) {
     if (g_service) ncmIpcCloseSession(g_service);
     g_service = INVALID_HANDLE;
 }
+bool ncmPlaybackEnvironmentSupported(void) {
+    if (hosversionIsAtmosphere()) return true;
+    /* Atmosphere's read-only MesosphereMeta/KernelVersion query creates no
+     * handles. Stock kernels reject the enum; unlike SM extension probing it
+     * cannot defer indefinitely for a nonexistent service. Old nx-ovlloader
+     * supplies HOS version but not HBABI's optional ATMOSPHR magic. */
+    u64 version = 0;
+    return R_SUCCEEDED(svcGetInfo(&version, (InfoType)65000, INVALID_HANDLE, 0)) && version != 0;
+}
 Result ncmPlaybackInitialize(void) {
     if (!enter()) return busy();
     Result rc = 0;
     Handle sm = INVALID_HANDLE;
     if (g_service) goto done;
     g_connection_stage = "检查环境";
-    if (!hosversionIsAtmosphere()) {
+    if (!ncmPlaybackEnvironmentSupported()) {
         rc = MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer); goto done;
     }
     g_connection_stage = "等待上次请求结束";
@@ -179,7 +188,7 @@ Result ncmAirplayDisconnect(void) {
     return exchange(NCM_COMMAND_AIRPLAY_DISCONNECT, NULL, 0, NULL, 0);
 }
 Result ncmPlaybackLaunchBackground(void) {
-    if (!hosversionIsAtmosphere())
+    if (!ncmPlaybackEnvironmentSupported())
         return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
     u64 existing = 0;
     Result rc = ncmPlaybackGetBackgroundProcessId(&existing);
@@ -199,7 +208,7 @@ Result ncmPlaybackLaunchBackground(void) {
 Result ncmPlaybackGetBackgroundProcessId(u64* pid) {
     if (!pid) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     *pid = 0;
-    if (!hosversionIsAtmosphere()) return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
+    if (!ncmPlaybackEnvironmentSupported()) return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
     Result rc = pmdmntInitialize();
     if (R_FAILED(rc)) return rc;
     rc = pmdmntGetProcessId(pid, NCM_PROGRAM_ID);

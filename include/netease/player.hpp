@@ -30,6 +30,7 @@ class Player {
     // All helpers below run while mutex_ is held. IPC and local ownership
     // cannot change while the model worker and UI submit commands concurrently.
     bool ensure_runtime();
+    bool start_local_runtime();
     bool connect_background();
     bool command_locked(NcmCommand command, uint32_t argument);
     NcmAirplayStatus airplay_status_locked();

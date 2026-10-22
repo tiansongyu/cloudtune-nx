@@ -50,10 +50,20 @@ bool Player::connect_background() {
     if (now < reconnect_at_)
         return false;
     reconnect_at_ = now + std::chrono::seconds(2);
-    if (R_SUCCEEDED(ncmPlaybackInitialize())) {
+    const Result connection = ncmPlaybackInitialize();
+    if (R_SUCCEEDED(connection)) {
         background_ = remote_seen_ = true;
         error_.clear();
         return true;
+    }
+    u64 pid = 0;
+    if (connection == MAKERESULT(Module_Libnx, LibnxError_NotFound) &&
+        ncmPlaybackGetBackgroundProcessId(&pid) == MAKERESULT(15, 1)) {
+        // A rejected startup has exited. Absence of both service and process
+        // releases ownership; do not relaunch it forever or leave playback stuck.
+        remote_seen_ = false;
+        start_local_runtime();
+        return false;
     }
     char diagnostic[256];
     ncmPlaybackConnectionMessage(diagnostic, sizeof(diagnostic));
@@ -75,11 +85,12 @@ bool Player::ensure_runtime() {
         error_.clear();
         return true;
     }
-    if (connection != MAKERESULT(Module_Libnx, LibnxError_NotFound) && hosversionIsAtmosphere())
+    if (connection != MAKERESULT(Module_Libnx, LibnxError_NotFound) &&
+        ncmPlaybackEnvironmentSupported())
         remote_seen_ = true; // Existing ownership is unresolved; do not start a second player.
     // A service that is already starting can report "already launched".
     // Always give that process a short bounded chance to register its IPC.
-    if (hosversionIsAtmosphere()) {
+    if (ncmPlaybackEnvironmentSupported()) {
         const Result launch = ncmPlaybackLaunchBackground();
         if (R_SUCCEEDED(launch))
             remote_seen_ = true;
@@ -94,8 +105,7 @@ bool Player::ensure_runtime() {
         u64 pid = 0;
         // Only an explicit PM "not found" permits a foreground fallback.
         // A denied/failed lookup cannot safely establish audio ownership.
-        if (ncmPlaybackGetBackgroundProcessId(&pid) != MAKERESULT(15, 1))
-            remote_seen_ = true;
+        remote_seen_ = ncmPlaybackGetBackgroundProcessId(&pid) != MAKERESULT(15, 1);
     }
     if (remote_seen_) {
         // A known background process can still be starting or recovering.
@@ -106,6 +116,9 @@ bool Player::ensure_runtime() {
         return false;
     }
 #endif
+    return start_local_runtime();
+}
+bool Player::start_local_runtime() {
     playback::EngineConfig c;
     c.directory = directory_;
 #ifdef __SWITCH__
@@ -113,8 +126,10 @@ bool Player::ensure_runtime() {
 #endif
     try {
         local_ = std::make_unique<playback::Runtime>(c);
-        if (local_->start())
+        if (local_->start()) {
+            error_.clear();
             return true;
+        }
         error_ = "无法初始化播放与工具服务";
     } catch (const std::exception &) {
         error_ = "无法初始化播放与工具服务";

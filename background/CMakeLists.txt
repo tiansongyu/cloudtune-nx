@@ -40,10 +40,10 @@ target_link_libraries(ncm_engine PRIVATE cloudtune_audio_codecs)
 add_library(ncm_runtime STATIC runtime.cpp)
 target_link_libraries(ncm_runtime PUBLIC ncm_engine cloudtune_airplay)
 if(NINTENDO_SWITCH)
-  # Drop unused API/account helpers from the resident executable. Keep decoder
-  # optimization unchanged; only section granularity and linker GC change.
+  # Keep the resident image compact; audio behavior and codec selection are
+  # unchanged. Measure size alongside native playback when changing flags.
   foreach(component netease_api netease_accounts ncm_engine ncm_runtime cloudtune_airplay)
-    target_compile_options(${component} PRIVATE -ffunction-sections -fdata-sections)
+    target_compile_options(${component} PRIVATE -Os -ffunction-sections -fdata-sections)
   endforeach()
   target_compile_definitions(ncm_engine PUBLIC __SWITCH__)
   target_link_libraries(ncm_engine PUBLIC nx)
@@ -55,7 +55,7 @@ if(NINTENDO_SWITCH)
   target_compile_definitions(cloudtune-background PRIVATE CLOUDTUNE_VERSION="${PROJECT_VERSION}")
   target_include_directories(cloudtune-background PRIVATE source)
   target_link_libraries(cloudtune-background PRIVATE ncm_runtime)
-  target_compile_options(cloudtune-background PRIVATE -ffunction-sections -fdata-sections)
+  target_compile_options(cloudtune-background PRIVATE -Os -ffunction-sections -fdata-sections)
   target_link_options(cloudtune-background PRIVATE "-Wl,--gc-sections")
   # Native allocator probe is built/run explicitly; never part of an SD package.
   add_executable(ncm-switch-heap-probe EXCLUDE_FROM_ALL
@@ -69,6 +69,14 @@ if(NINTENDO_SWITCH)
   target_compile_definitions(ncm-switch-runtime-probe PRIVATE CLOUDTUNE_VERSION="${PROJECT_VERSION}-probe")
   target_link_libraries(ncm-switch-runtime-probe PRIVATE ncm_runtime)
   target_link_options(ncm-switch-runtime-probe PRIVATE "-Wl,--wrap=ncmBootHasHomeMenu")
+  add_executable(ncm-switch-memory-probe EXCLUDE_FROM_ALL source/main.cpp ${NCM_STARTUP_SOURCES}
+    source/ipc_server.c "${NCM_ROOT}/tests/switch_boot_boundary.c" "${NCM_ROOT}/tests/switch_memory_probe.cpp")
+  target_include_directories(ncm-switch-memory-probe PRIVATE source)
+  target_compile_definitions(ncm-switch-memory-probe PRIVATE CLOUDTUNE_VERSION="${PROJECT_VERSION}-memory-probe")
+  target_link_libraries(ncm-switch-memory-probe PRIVATE ncm_runtime cloudtune_audio_codecs)
+  target_link_options(ncm-switch-memory-probe PRIVATE "-Wl,--wrap=ncmBootHasHomeMenu"
+    "-Wl,--wrap=ncmCheckMemoryGrowth" "-Wl,--wrap=svcSetHeapSize" "-Wl,--wrap=ncmIpcServerProcess"
+    "-Wl,--wrap=avformat_find_stream_info" "-Wl,--wrap=avcodec_open2")
   find_program(NPDMTOOL npdmtool HINTS "$ENV{DEVKITPRO}/tools/bin" REQUIRED)
   find_program(ELF2NSO elf2nso HINTS "$ENV{DEVKITPRO}/tools/bin" REQUIRED)
   find_program(BUILD_PFS0 build_pfs0 HINTS "$ENV{DEVKITPRO}/tools/bin" REQUIRED)

@@ -779,3 +779,25 @@ Primary references checked:
   for a minimal hardware retest. Keep the loader enabled; do not claim that
   the configuration change alone establishes successful playback. Host, native
   probe and hardware boundaries are recorded in VALIDATION.md.
+
+## 2026-10-22 · Environment hint and constrained playback (v0.2.13)
+
+- The local v0.2.12 retest still had only about 5 MiB free. Cancel its unpublished
+  release and preserve the logs; do not classify an unregistered service as an
+  established IPC conflict. Disable the overlay loader as the sixth reversible
+  module change explicitly requested by the user; CloudTune alone autostarts.
+- Accept Atmosphere's read-only kernel version when an old loader omits the
+  HBABI hint. Release waiting-player ownership only after explicit service and
+  PM absence, including a resource-gate exit after an accepted launch.
+- Compact resident queue text without changing the disk ABI. Avoid duplicate
+  M4A stream probing, preserve FFmpeg ENOMEM diagnostics, join completed download
+  workers and retry once after download on overlapping decoder/network pressure.
+- Reproduced cold HTTPS AAC failure in the actual native 2 MiB heap. The same
+  generated 512-track workload now plays MP3/AAC/FLAC and stops; AAC's failed
+  allocation is followed by successful decode after worker cleanup. Add host
+  cancellation and persistent-OOM regressions rather than relying on warm cache.
+- Measure 2 MiB startup growth, retain the full 8 MiB system reserve and use a
+  256 KiB startup allowance above the measured heap. This is neither a resource
+  reservation nor hardware validation; retain all quota and observation guards.
+- Public artifacts exclude private photos and local SD data. The user's photo
+  NRO stays local; detailed test boundaries are recorded in VALIDATION.md.

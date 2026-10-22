@@ -152,7 +152,10 @@ bool AudioDecoder::open(Read read, Seek seek, Tell tell, void* context) {
     }
     if ((!s.flac && !s.mp3Open && !s.aacOpen) ||
         (s.flac && s.flac->channels>8) || channels()<1 || channels()>2 || !sample_rate()) {
-        close(); return false;
+        const bool limited = resource_limited();
+        close();
+        s.memory.limited = limited;
+        return false;
     }
     if (s.flac && s.flac->channels>2) s.prepareDownmix(s.flac->channels);
     return true;
@@ -226,7 +229,7 @@ const char* AudioDecoder::format() const {
     return impl_->flac ? "FLAC" : impl_->mp3Open ? "MP3" :
         impl_->aacOpen ? impl_->aac.format() : "none";
 }
-bool AudioDecoder::resource_limited() const { return impl_->memory.limited; }
+bool AudioDecoder::resource_limited() const { return impl_->memory.limited || impl_->aac.resource_limited(); }
 bool AudioDecoder::damaged() const {
     return impl_->damaged || (impl_->aacOpen && impl_->aac.damaged());
 }

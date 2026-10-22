@@ -30,6 +30,7 @@ struct AacDecoder::Impl {
     unsigned rate = 0, channel_count = 0, source_channels = 0;
     uint64_t total = 0, cursor = 0;
     bool failed = false, input_end = false, draining = false, finished = false, adts = false;
+    bool limited = false;
     std::vector<int16_t> pcm;
     size_t pcm_offset = 0;
 
@@ -43,7 +44,7 @@ struct AacDecoder::Impl {
         if (io) av_freep(&io->buffer);
         avio_context_free(&io);
         stream = -1; rate = channel_count = source_channels = 0; total = cursor = 0;
-        failed = input_end = draining = finished = adts = false;
+        failed = input_end = draining = finished = adts = limited = false;
         pcm.clear(); pcm_offset = 0;
     }
     static int input_read(void* opaque, uint8_t* bytes, int count) {
@@ -147,6 +148,7 @@ struct AacDecoder::Impl {
         while (!failed && !finished) {
             av_frame_unref(frame);
             int result = avcodec_receive_frame(codec, frame);
+            limited |= result == AVERROR(ENOMEM);
             if (result == 0) {
                 if (!rate) {
                     rate = frame->sample_rate;
@@ -166,6 +168,7 @@ struct AacDecoder::Impl {
             if (input_end) {
                 if (draining) { failed = true; break; }
                 result = avcodec_send_packet(codec, nullptr);
+                limited |= result == AVERROR(ENOMEM);
                 draining = true;
                 if (result < 0 && result != AVERROR_EOF) failed = true;
                 continue;
@@ -173,6 +176,7 @@ struct AacDecoder::Impl {
             for (;;) {
                 av_packet_unref(packet);
                 result = av_read_frame(input, packet);
+                limited |= result == AVERROR(ENOMEM);
                 if (result < 0 || packet->stream_index == stream) break;
             }
             if (result < 0) {
@@ -185,6 +189,7 @@ struct AacDecoder::Impl {
                 break;
             }
             result = avcodec_send_packet(codec, packet);
+            limited |= result == AVERROR(ENOMEM);
             av_packet_unref(packet);
             if (result < 0) failed = true;
         }
@@ -200,19 +205,24 @@ bool AacDecoder::open(AudioDecoder::Read read, AudioDecoder::Seek seek,
     if (!read || !seek || !tell) return false;
     auto& s = *impl_;
     s.on_read = read; s.on_seek = seek; s.on_tell = tell; s.opaque = opaque;
-    auto fail = [&] { close(); return false; };
+    auto fail = [&](int result = 0) {
+        const bool limited = s.limited || result == AVERROR(ENOMEM);
+        close();
+        s.limited = limited;
+        return false;
+    };
     if (!seek(opaque, 0, AudioDecoder::Origin::Start)) return false;
     auto* buffer = static_cast<uint8_t*>(av_malloc(32768));
-    if (!buffer) return false;
+    if (!buffer) return fail(AVERROR(ENOMEM));
     s.io = avio_alloc_context(buffer, 32768, 0, &s, Impl::input_read, nullptr, Impl::input_seek);
-    if (!s.io) { av_free(buffer); return false; }
+    if (!s.io) { av_free(buffer); return fail(AVERROR(ENOMEM)); }
     // A seek callback describes the cache's random access, not whether the
     // complete file exists yet. MOV otherwise seeks past mdat looking for more
     // atoms and waits for EOF even when faststart's moov is already available.
     if (Impl::input_seek(&s, 0, AVSEEK_SIZE) < 0)
         s.io->seekable = 0;
     s.input = avformat_alloc_context();
-    if (!s.input) return fail();
+    if (!s.input) return fail(AVERROR(ENOMEM));
     s.input->pb = s.io;
     s.input->flags |= AVFMT_FLAG_CUSTOM_IO;
     s.input->io_open = Impl::deny_external_input;
@@ -221,11 +231,22 @@ bool AacDecoder::open(AudioDecoder::Read read, AudioDecoder::Seek seek,
     s.input->max_streams = 4;
     s.input->max_probe_packets = 64;
     s.input->max_index_size = 256 * 1024;
-    if (avformat_open_input(&s.input, nullptr, nullptr, nullptr) < 0)
-        return fail();
+    int result = avformat_open_input(&s.input, nullptr, nullptr, nullptr);
+    if (result < 0) return fail(result);
     s.io->seekable = AVIO_SEEKABLE_NORMAL;
-    if (avformat_find_stream_info(s.input, nullptr) < 0)
-        return fail();
+    // M4A headers normally already contain a complete AAC description.
+    // Probing them again retains a second decoder and buffered packets in
+    // AVFormatContext. Headerless ADTS still needs the normal probe path.
+    bool described = false;
+    for (unsigned i = 0; i < s.input->nb_streams; ++i) {
+        const auto* parameters = s.input->streams[i]->codecpar;
+        described |= parameters->codec_id == AV_CODEC_ID_AAC && parameters->sample_rate > 0 &&
+                     parameters->ch_layout.nb_channels > 0 && parameters->extradata_size > 0;
+    }
+    if (!described) {
+        result = avformat_find_stream_info(s.input, nullptr);
+        if (result < 0) return fail(result);
+    }
     s.adts = std::strcmp(s.input->iformat->name, "aac") == 0;
     for (unsigned i = 0; i < s.input->nb_streams; ++i)
         if (s.input->streams[i]->codecpar->codec_id == AV_CODEC_ID_AAC) {
@@ -238,15 +259,17 @@ bool AacDecoder::open(AudioDecoder::Read read, AudioDecoder::Seek seek,
     s.packet = av_packet_alloc();
     s.frame = av_frame_alloc();
     auto* stream = s.input->streams[s.stream];
-    if (!s.codec || !s.packet || !s.frame ||
-        avcodec_parameters_to_context(s.codec, stream->codecpar) < 0)
-        return fail();
+    if (!s.codec || !s.packet || !s.frame) return fail(AVERROR(ENOMEM));
+    result = avcodec_parameters_to_context(s.codec, stream->codecpar);
+    if (result < 0) return fail(result);
     s.codec->pkt_timebase = stream->time_base;
     s.codec->thread_count = 1;
     s.codec->thread_type = 0;
     s.codec->max_samples = 65536;
     s.codec->err_recognition = AV_EF_CRCCHECK | AV_EF_BITSTREAM | AV_EF_EXPLODE;
-    if (avcodec_open2(s.codec, decoder, nullptr) < 0 || !s.next_frame()) return fail();
+    result = avcodec_open2(s.codec, decoder, nullptr);
+    if (result < 0) return fail(result);
+    if (!s.next_frame()) return fail();
     // ADTS durations are bitrate estimates. Never trim real frames to an estimate.
     if (!s.adts && stream->duration != AV_NOPTS_VALUE && stream->duration > 0) {
         const int64_t frames = av_rescale_q(stream->duration, stream->time_base,
@@ -297,4 +320,5 @@ unsigned AacDecoder::sample_rate() const { return impl_->rate; }
 uint64_t AacDecoder::frames() const { return impl_->total; }
 const char* AacDecoder::format() const { return impl_->codec ? "AAC" : "none"; }
 bool AacDecoder::damaged() const { return impl_->failed; }
+bool AacDecoder::resource_limited() const { return impl_->limited; }
 }

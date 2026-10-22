@@ -48,8 +48,7 @@ Result ncmCheckMemoryGrowth(size_t additional_bytes) {
 }
 
 Result ncmCheckStartupResources(void) {
-    /* Initial heap/socket/worker allowance in addition to the 8 MiB margin. */
-    static const s64 margin[5] = {NCM_SYSTEM_MEMORY_MARGIN + 4u * 1024u * 1024u, 16, 16, 4, 16};
+    static const s64 margin[5] = {NCM_SYSTEM_MEMORY_MARGIN + NCM_STARTUP_MEMORY_ALLOWANCE, 16, 16, 4, 16};
     NcmResourceSnapshot snapshot;
     Result result = ncmReadResources(&snapshot);
     return R_FAILED(result) ? result : check_margin(&snapshot, margin);

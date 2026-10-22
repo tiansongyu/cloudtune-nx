@@ -11,6 +11,8 @@ Result ncmPlaybackInitialize(void);
 /* Last connection failure, including its handshake stage. This reports
  * historical startup diagnostics as such; a file is never a liveness check. */
 void ncmPlaybackConnectionMessage(char* output, size_t size);
+/* Legacy overlay loaders omit the optional Atmosphere HBABI hint. */
+bool ncmPlaybackEnvironmentSupported(void);
 /* PM lookup distinguishes a live, still-starting process from an absent IPC
  * service. MAKERESULT(15, 1) means no such process; other failures are unknown. */
 Result ncmPlaybackGetBackgroundProcessId(u64* pid);

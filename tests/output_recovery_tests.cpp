@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <stdexcept>
 #include <thread>
@@ -15,6 +16,7 @@ static std::atomic<bool> lost{false}, unavailable{false}, blocked{false}, writeF
 static std::atomic<bool> sleepGap{false};
 static std::atomic<bool> stalledTail{false};
 static std::atomic<bool> failQueueAllocation{false};
+static thread_local bool denyNextQueueAllocation = false;
 static thread_local bool rejectCommandAllocations=false;
 static std::atomic<bool> commandAllocationRejected{false};
 static std::atomic<unsigned> openFailures{0}, opens{0};
@@ -25,9 +27,19 @@ void* __wrap__Znwm(size_t bytes) {
         commandAllocationRejected=true;
         throw std::bad_alloc();
     }
-    if (bytes == sizeof(NcmQueueEntry)*2 && failQueueAllocation.exchange(false))
+    if (denyNextQueueAllocation) {
+        denyNextQueueAllocation = false;
         throw std::bad_alloc();
+    }
     return __real__Znwm(bytes);
+}
+size_t __real_fread(void*, size_t, size_t, FILE*);
+size_t __wrap_fread(void* out, size_t size, size_t count, FILE* file) {
+    const size_t result = __real_fread(out, size, count, file);
+    if (size == sizeof(NcmQueueHeader) && count == 1 && result == 1 &&
+        std::memcmp(out, "NCMQUEUE", 8) == 0 && failQueueAllocation.exchange(false))
+        denyNextQueueAllocation = true;
+    return result;
 }
 SDL_AudioDeviceID __real_SDL_OpenAudioDevice(const char*, int, const SDL_AudioSpec*, SDL_AudioSpec*, int);
 SDL_AudioStatus __real_SDL_GetAudioDeviceStatus(SDL_AudioDeviceID);

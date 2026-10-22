@@ -21,6 +21,14 @@ static bool corrupt_reply_type;
 static bool service_present = true;
 static Result process_result = MAKERESULT(15, 1), launch_result;
 static unsigned launches, pm_acquired, pm_released;
+bool testAtmosphereHint = true;
+static Result kernel_probe_result;
+static u64 kernel_version = 0x140400;
+Result svcGetInfo(u64* out, InfoType type, Handle handle, u64 sub) {
+    if (type != 65000 || handle || sub) abort();
+    *out = kernel_version;
+    return kernel_probe_result;
+}
 Result testHasService(u8* present) { *present = service_present; return 0; }
 Result pmshellInitialize(void) { ++pm_acquired; return 0; }
 void pmshellExit(void) { ++pm_released; }
@@ -147,6 +155,16 @@ static void awaitIdle(void) {
 }
 
 int main(void) {
+    testAtmosphereHint = false;
+    check(ncmPlaybackEnvironmentSupported(), "legacy loader's missing hint rejected Atmosphere kernel");
+    kernel_probe_result = 0xF001;
+    check(!ncmPlaybackEnvironmentSupported() && R_FAILED(ncmPlaybackInitialize()),
+          "stock kernel treated as Atmosphere");
+    kernel_probe_result = 0;
+    kernel_version = 0;
+    check(!ncmPlaybackEnvironmentSupported(), "empty kernel version accepted");
+    kernel_version = 0x140400;
+    // Continue the complete handshake/control suite without the HBABI hint.
     // PM presence and service presence are deliberately independent. A booting
     // process must never be launched a second time just because IPC is absent.
     process_result = 0;
