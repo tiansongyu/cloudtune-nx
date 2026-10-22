@@ -10,6 +10,8 @@ Result ncmIpcRequest(Handle session, u32 command, const void* input, size_t inpu
                     bool send_pid, u64 timeout_ns, bool* replied);
 /* Reap a completed late reply, closing any transferred handles. */
 bool ncmIpcIdle(void);
+/* Read-only guard for callers outside the client's serialization lock. */
+bool ncmIpcPending(void);
 /* Keep a timed-out worker's handle alive until its syscall returns. */
 void ncmIpcCloseSession(Handle session);
 /* Final process shutdown only. Never return to an NRO loader while a blocked

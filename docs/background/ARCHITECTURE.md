@@ -83,9 +83,14 @@ Connection probing accepts libnx's Atmosphère flag or a successful nonzero
 read-only Mesosphere kernel-version query (`svcGetInfo`, type 65000, sub-ID 0).
 Legacy overlay loaders can omit HBABI's optional Atmosphere hint. Neither a
 failed query nor zero output is accepted. After this check the client uses
-Atmosphère's TIPC `HasService` command (65100). Acquisition uses a private SM
-session and standard TLS/CMIF on one dedicated worker. This follows the
-ordinary libnx session path used by TriPlayer while keeping bounded caller
+Atmosphère's TIPC `HasService` command (65100). Since v0.2.15 acquisition borrows
+libnx's already registered SM session, as TriPlayer does. It never creates or
+closes an additional `sm:` session: Atmosphere's application resource group
+allows only one directly created session, already occupied by libnx. The old
+private connection therefore fails with `0x10801` in application mode even
+when the background service is ready and system RAM is available. Returned
+playback sessions are created by SM, then transferred to the client.
+Standard TLS/CMIF runs on one dedicated worker while keeping bounded caller
 waits: handshake/status/control requests allow 150 ms each, and the acknowledged
 account-clear barrier allows 5.5 s. The worker has a 16 KiB stack and a fixed
 256-byte mailbox; no SVC 0x23 or user-buffer mapping is needed. PM process-ID
@@ -109,6 +114,21 @@ The reply parser accepts type 0 and the existing server's type-4 framing,
 while checking the CMIF header, data bounds and transferred handles. A valid
 service error remains distinguishable from a transport failure, allowing
 supported-command probes on the same session.
+
+If the service disappears between HasService and GetService, acquisition can
+still be deferred inside SM. The caller times out while the worker retains its
+request; a late transferred playback handle is closed, but the borrowed SM
+handle is never closed by the playback client. Client PM lookups/launches also
+return while that request is pending instead of synchronously entering SM.
+Other libnx users share this SM connection and may wait behind a deferred
+request; the client cannot cancel an outstanding kernel request or claim to
+recover a permanently hung SM. Final shutdown retains the process-exit rule.
+
+`ipc-client-app.log` and `ipc-client-overlay.log` record version, connection
+stage/result and accepted control IDs. Each is capped at 32 KiB per process
+run; repeated identical failures and successful status polling do not write.
+Entries contain no track URLs, account data or command payloads. These logs
+distinguish successful service startup from a failed client connection.
 
 ## Protocol and queue
 

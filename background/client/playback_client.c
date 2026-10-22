@@ -9,6 +9,41 @@ static atomic_flag g_busy = ATOMIC_FLAG_INIT;
 static const u64 NormalTimeout = 150000000ull;
 static Result g_connection_result;
 static const char* g_connection_stage = "未连接";
+#ifndef NCM_CLIENT_LOG_NAME
+#define NCM_CLIENT_LOG_NAME "ipc-client-app.log"
+#endif
+#ifndef CLOUDTUNE_VERSION
+#define CLOUDTUNE_VERSION "development"
+#endif
+static size_t g_trace_bytes;
+static bool g_trace_started;
+static Result g_trace_result;
+static const char* g_trace_stage;
+/* Only lifecycle changes and controls, never poll payloads, song URLs or
+ * account data. Close each write so a removed SD contains complete entries. */
+static void traceClient(const char* stage, Result result, u32 command) {
+    if (command == UINT32_MAX && g_trace_stage &&
+        !strcmp(g_trace_stage, stage) && g_trace_result == result) return;
+    if (g_trace_bytes >= 32768) return;
+    char line[256];
+    const int length = command == UINT32_MAX
+        ? snprintf(line, sizeof(line), "%s: 0x%08X\n", stage, result)
+        : snprintf(line, sizeof(line), "%s command=%u: 0x%08X\n", stage, command, result);
+    if (length <= 0 || (size_t)length >= sizeof(line)) return;
+    FILE* log = fopen(NCM_CONFIG_DIRECTORY "/" NCM_CLIENT_LOG_NAME,
+                      g_trace_started ? "a" : "w");
+    if (!log) return;
+    if (!g_trace_started) {
+        const int count = fprintf(log, "CloudTune NX %s client\n", CLOUDTUNE_VERSION);
+        if (count > 0) g_trace_bytes += (size_t)count;
+        g_trace_started = true;
+    }
+    if ((size_t)length <= 32768 - g_trace_bytes)
+        g_trace_bytes += fwrite(line, 1, (size_t)length, log);
+    fclose(log);
+    g_trace_stage = stage;
+    g_trace_result = result;
+}
 static Result busy(void) { return MAKERESULT(Module_Libnx, LibnxError_Timeout); }
 static bool enter(void) { return !atomic_flag_test_and_set_explicit(&g_busy, memory_order_acquire); }
 static void leave(void) { atomic_flag_clear_explicit(&g_busy, memory_order_release); }
@@ -30,7 +65,6 @@ bool ncmPlaybackEnvironmentSupported(void) {
 Result ncmPlaybackInitialize(void) {
     if (!enter()) return busy();
     Result rc = 0;
-    Handle sm = INVALID_HANDLE;
     if (g_service) goto done;
     g_connection_stage = "检查环境";
     if (!ncmPlaybackEnvironmentSupported()) {
@@ -44,17 +78,13 @@ Result ncmPlaybackInitialize(void) {
     rc = tipcDispatchInOut(smGetServiceSessionTipc(), 65100, name, present);
     if (R_FAILED(rc)) goto done;
     if (!present) { rc = MAKERESULT(Module_Libnx, LibnxError_NotFound); goto done; }
-    // Use a private SM connection. Missing-service deferral and the race
-    // between HasService/GetService now have the same bounded deadline.
-    g_connection_stage = "连接服务管理器";
-    rc = svcConnectToNamedPort(&sm, "sm:");
-    if (R_FAILED(rc)) goto done;
-    const u64 pid = 0;
-    g_connection_stage = "注册客户端";
-    rc = ncmIpcRequest(sm, 0, &pid, sizeof(pid), NULL, 0, NULL, true, NormalTimeout, NULL);
-    if (R_FAILED(rc)) goto done;
+    // Like TriPlayer/libnx, use the already registered SM connection.
+    // Application mode allows only one directly created session, consumed
+    // by libnx at startup. A second ConnectToNamedPort fails with 0x10801.
+    // Borrow this handle; only the returned playback session belongs to us.
     g_connection_stage = "获取后台会话";
-    rc = ncmIpcRequest(sm, 1, &name, sizeof(name), NULL, 0, &g_service, false, NormalTimeout, NULL);
+    rc = ncmIpcRequest(smGetServiceSession()->session, 1, &name, sizeof(name),
+                       NULL, 0, &g_service, false, NormalTimeout, NULL);
     if (R_FAILED(rc)) goto done;
     u32 version = 0;
     g_connection_stage = "协议握手";
@@ -62,10 +92,10 @@ Result ncmPlaybackInitialize(void) {
                        sizeof(version), NULL, false, NormalTimeout, NULL);
     if (R_SUCCEEDED(rc) && version != NCM_PROTOCOL_VERSION) rc = MAKERESULT(421, 1);
 done:
-    if (sm) ncmIpcCloseSession(sm);
     if (R_FAILED(rc)) closeService();
     g_connection_result = rc;
     if (R_SUCCEEDED(rc)) g_connection_stage = "已连接";
+    traceClient(g_connection_stage, rc, UINT32_MAX);
     leave();
     return rc;
 }
@@ -129,7 +159,10 @@ static Result exchange(u32 command, const void* input, size_t input_size,
     if (R_FAILED(result)) {
         g_connection_result = result;
         g_connection_stage = command == NcmCommand_Status ? "读取后台状态" : "发送后台命令";
+        traceClient(g_connection_stage, result, UINT32_MAX);
     }
+    else if (command != NcmCommand_Status && command != NCM_COMMAND_AIRPLAY_STATUS)
+        traceClient("命令已接受", result, command);
     leave();
     return result;
 }
@@ -208,6 +241,9 @@ Result ncmPlaybackLaunchBackground(void) {
 Result ncmPlaybackGetBackgroundProcessId(u64* pid) {
     if (!pid) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     *pid = 0;
+    // A timed-out GetService may still be using the borrowed SM connection.
+    // Do not enter another synchronous SM/PM lookup on the caller thread.
+    if (ncmIpcPending()) return busy();
     if (!ncmPlaybackEnvironmentSupported()) return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
     Result rc = pmdmntInitialize();
     if (R_FAILED(rc)) return rc;

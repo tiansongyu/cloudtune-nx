@@ -822,3 +822,25 @@ Primary references checked:
   at the same cap. Close/reopen the flushed native diagnostic file before the
   host sender waits on it. Full host/UBSan suites each pass 33 tests; focused ASan checks pass. See
   VALIDATION.md for scope, evidence and required physical acceptance.
+
+## 2026-10-22 · Application session quota and playback handoff (v0.2.15)
+
+- Fresh physical v0.2.14 logs confirm successful compact startup/registration;
+  stop the unpublished release when the user reports foreground `0x10801`.
+  Separate this client failure from the prior shared system-memory shortage.
+- Atmosphere's application quota permits only one created session. The extra
+  private SM connection exceeds it; borrow libnx's initialized connection as
+  TriPlayer does. Keep playback handles independently owned, bounded requests,
+  late-handle cleanup and process-safe shutdown. Pending SM work suppresses
+  client PM calls, using a read-only pending check outside serialization.
+- Add separate bounded app/overlay logs with versions, stages, results and
+  control IDs only; no payloads, account data or music URLs. Successful polling
+  and repeated identical failures do not write.
+- Reproduce the old failure before the host fix and with native kernel quotas.
+  Add real-runtime handoff coverage for generated HTTPS MP3/AAC/FLAC, a second
+  client's pause, foreground resume, next, clear and reconnect. Probe-only
+  privilege changes never enter the production NPDM or SD packages.
+- Retain both CloudTune and the Tesla/Ultrahand loader's boot markers and the
+  five previously disabled optional modules. Preserve the user's photo NRO
+  locally; public builds exclude private resources. See VALIDATION.md for
+  successful tests and the remaining physical acceptance boundary.

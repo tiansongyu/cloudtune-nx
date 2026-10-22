@@ -15,7 +15,7 @@ static Mutex fake_mutex = PTHREAD_MUTEX_INITIALIZER;
 static CondVar fake_ready = PTHREAD_COND_INITIALIZER;
 Result testThreadCreateResult;
 static Result kernel_result;
-static unsigned sends, closes[256];
+static unsigned sends, closes[256], named_port_attempts;
 static u32 last_command, last_argument;
 static bool corrupt_reply_type;
 static bool service_present = true;
@@ -55,7 +55,10 @@ u64 armGetSystemTick(void) {
     return (u64)now.tv_sec * 1000000000 + now.tv_nsec;
 }
 Result svcConnectToNamedPort(Handle* handle, const char* name) {
-    check(strcmp(name, "sm:") == 0, "wrong named port"); *handle = 1; return 0;
+    check(strcmp(name, "sm:") == 0, "wrong named port");
+    // Atmosphere application mode has one session-creation slot, already
+    // occupied by libnx's shared SM session. More free RAM cannot fix this.
+    ++named_port_attempts; *handle = INVALID_HANDLE; return 0x10801;
 }
 Result svcCloseHandle(Handle handle) {
     check(handle < 256 && handle != 0, "invalid handle closed"); ++closes[handle]; return 0;
@@ -139,8 +142,13 @@ Result svcWaitSynchronization(s32* index, const Handle* handles, s32 count, u64 
 }
 #include "../background/client/timed_ipc.c"
 static const char* startup_fixture;
+static FILE* client_log_fixture;
 static FILE* diagnosticOpen(const char* path, const char* mode) {
-    (void)mode;
+    if (!strcmp(path, NCM_CONFIG_DIRECTORY "/ipc-client-app.log")) {
+        if (!client_log_fixture) client_log_fixture = tmpfile();
+        check(client_log_fixture != NULL, "client log fixture failed");
+        return fdopen(dup(fileno(client_log_fixture)), mode);
+    }
     check(!strcmp(path,NCM_CONFIG_DIRECTORY "/background-startup.log"), "unexpected diagnostic file");
     if (!startup_fixture) return NULL;
     FILE* file=tmpfile(); check(file!=NULL,"diagnostic fixture failed");
@@ -191,7 +199,8 @@ int main(void) {
     reply.version = NCM_PROTOCOL_VERSION;
     airplay_reply.version = NCM_AIRPLAY_VERSION;
     check(ncmPlaybackInitialize() == 0, "service initialization failed");
-    check(closes[1] == 1 && ncmPlaybackIsActive(), "private SM leaked");
+    check(named_port_attempts == 0 && closes[1] == 0 && ncmPlaybackIsActive(),
+          "client must borrow the shared SM without creating/closing another session");
     NcmPlaybackStatus status, zero = {0};
     memset(&reply, 'x', sizeof(reply)); reply.version = NCM_PROTOCOL_VERSION;
     check(ncmPlaybackGetStatus(&status) == 0, "valid status rejected");
@@ -231,6 +240,36 @@ int main(void) {
     corrupt_reply_type = false;
     check(ncmPlaybackInitialize() == 0, "reconnect after invalid reply failed");
 
+    // HasService/GetService can race with service exit. The shared SM is
+    // borrowed, even when GetService completes after the caller's deadline.
+    ncmPlaybackExit();
+    stall = true;
+    check(R_FAILED(ncmPlaybackInitialize()) && !ncmPlaybackIsActive(),
+          "deferred SM acquisition did not time out");
+    const unsigned pm_before_stall = pm_acquired;
+    u64 process_id = 55;
+    check(R_FAILED(ncmPlaybackGetBackgroundProcessId(&process_id)) && !process_id &&
+          R_FAILED(ncmPlaybackLaunchBackground()) && pm_acquired == pm_before_stall,
+          "pending shared SM entered an unbounded caller-thread PM lookup");
+    check(closes[1] == 0, "timeout closed libnx's borrowed SM session");
+    mutexLock(&fake_mutex);
+    respond(NULL, 0, 76, 0);
+    condvarWakeAll(&fake_ready);
+    mutexUnlock(&fake_mutex);
+    for (unsigned i=0; i<1000 && ncmIpcPending(); ++i) usleep(1000);
+    check(!ncmIpcPending() && state == Done, "late SM reply did not finish");
+    ncmPlaybackGetBackgroundProcessId(&process_id);
+    check(state == Done && closes[76] == 0,
+          "PM guard reaped a reply owned by the serialized client");
+    awaitIdle();
+    stall = false;
+    check(closes[76] == 1 && closes[1] == 0 && ncmPlaybackInitialize() == 0,
+          "late SM reply leaked a handle or prevented recovery");
+
+    const long log_before_polls = ftell(client_log_fixture);
+    for (unsigned i=0; i<100; ++i)
+        check(ncmPlaybackGetStatus(&status) == 0, "repeated status poll failed");
+    check(ftell(client_log_fixture) == log_before_polls, "successful polling wrote client log");
 
     stall = true;
     const unsigned closed_before_timeout = closes[42];
@@ -282,7 +321,18 @@ int main(void) {
     check(ncmPlaybackInitialize()==testThreadCreateResult && !worker_started, "worker creation failure not propagated");
     char diagnostic[128];
     ncmPlaybackConnectionMessage(diagnostic, sizeof(diagnostic));
-    check(strstr(diagnostic, "注册客户端") && strstr(diagnostic, "0x"), "handshake error lacks stage/result");
+    check(strstr(diagnostic, "获取后台会话") && strstr(diagnostic, "0x00010801"), "handshake error lacks stage/result");
+    const size_t bytes_before_retries = g_trace_bytes;
+    for (unsigned i=0; i<100; ++i) ncmPlaybackInitialize();
+    check(g_trace_bytes == bytes_before_retries, "identical connection failures grew the log");
     ncmPlaybackShutdown();
+    check(named_port_attempts == 0 && closes[1] == 0,
+          "client created an extra named-port session or closed shared SM");
+    rewind(client_log_fixture);
+    char logged[4096] = {0};
+    fread(logged, 1, sizeof(logged)-1, client_log_fixture);
+    check(strstr(logged,"已连接") && strstr(logged,"获取后台会话: 0x00010801") &&
+          strstr(logged,"命令已接受"), "missing actionable client diagnostics");
+    fclose(client_log_fixture);
     puts("PASS: production client/server framing, service errors, bounded IPC, late replies, handles and shutdown");
 }

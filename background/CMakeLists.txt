@@ -50,6 +50,7 @@ if(NINTENDO_SWITCH)
   add_library(ncm_ipc_client STATIC client/playback_client.c client/timed_ipc.c)
   target_include_directories(ncm_ipc_client PUBLIC "${NCM_ROOT}/include")
   target_link_libraries(ncm_ipc_client PUBLIC nx)
+  target_compile_definitions(ncm_ipc_client PRIVATE CLOUDTUNE_VERSION="${PROJECT_VERSION}")
   set(NCM_STARTUP_SOURCES source/startup.c source/heap.c source/boot.c source/boot_query.c source/resources.c)
   add_executable(cloudtune-background source/main.cpp ${NCM_STARTUP_SOURCES} source/ipc_server.c)
   target_compile_definitions(cloudtune-background PRIVATE CLOUDTUNE_VERSION="${PROJECT_VERSION}")
@@ -88,10 +89,29 @@ if(NINTENDO_SWITCH)
   set(IPC_PROBE_DIR "${CMAKE_CURRENT_BINARY_DIR}/ipc-probe-package")
   add_custom_target(ncm-switch-ipc-probe-package
     COMMAND ${CMAKE_COMMAND} -E make_directory "${IPC_PROBE_DIR}"
-    COMMAND ${NPDMTOOL} "${CMAKE_CURRENT_SOURCE_DIR}/netease-sysmodule.json" "${IPC_PROBE_DIR}/main.npdm"
+    COMMAND python3 "${NCM_ROOT}/tests/switch_ipc_probe_npdm.py"
+      "${CMAKE_CURRENT_SOURCE_DIR}/netease-sysmodule.json" "${CMAKE_CURRENT_BINARY_DIR}/ipc-probe.json"
+    COMMAND ${NPDMTOOL} "${CMAKE_CURRENT_BINARY_DIR}/ipc-probe.json" "${IPC_PROBE_DIR}/main.npdm"
     COMMAND ${ELF2NSO} $<TARGET_FILE:ncm-switch-ipc-probe> "${IPC_PROBE_DIR}/main"
     COMMAND ${BUILD_PFS0} "${IPC_PROBE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ipc-probe.nsp"
     DEPENDS ncm-switch-ipc-probe VERBATIM)
+  add_executable(ncm-switch-handoff-probe EXCLUDE_FROM_ALL source/main.cpp ${NCM_STARTUP_SOURCES}
+    source/ipc_server.c client/timed_ipc.c "${NCM_ROOT}/tests/switch_ipc_probe_client.c"
+    "${NCM_ROOT}/tests/switch_boot_boundary.c" "${NCM_ROOT}/tests/switch_handoff_probe.cpp")
+  target_include_directories(ncm-switch-handoff-probe PRIVATE source "${NCM_ROOT}/include")
+  target_compile_definitions(ncm-switch-handoff-probe PRIVATE CLOUDTUNE_VERSION="${PROJECT_VERSION}-handoff-probe")
+  target_link_libraries(ncm-switch-handoff-probe PRIVATE ncm_runtime)
+  target_link_options(ncm-switch-handoff-probe PRIVATE "-Wl,--wrap=ncmBootHasHomeMenu"
+    "-Wl,--wrap=ncmIpcServerProcess")
+  set(HANDOFF_PROBE_DIR "${CMAKE_CURRENT_BINARY_DIR}/handoff-probe-package")
+  add_custom_target(ncm-switch-handoff-probe-package
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${HANDOFF_PROBE_DIR}"
+    COMMAND python3 "${NCM_ROOT}/tests/switch_ipc_probe_npdm.py"
+      "${CMAKE_CURRENT_SOURCE_DIR}/netease-sysmodule.json" "${CMAKE_CURRENT_BINARY_DIR}/handoff-probe.json"
+    COMMAND ${NPDMTOOL} "${CMAKE_CURRENT_BINARY_DIR}/handoff-probe.json" "${HANDOFF_PROBE_DIR}/main.npdm"
+    COMMAND ${ELF2NSO} $<TARGET_FILE:ncm-switch-handoff-probe> "${HANDOFF_PROBE_DIR}/main"
+    COMMAND ${BUILD_PFS0} "${HANDOFF_PROBE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/handoff-probe.nsp"
+    DEPENDS ncm-switch-handoff-probe VERBATIM)
   set(PACKAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/package")
   add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cloudtune-background.nsp"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${PACKAGE_DIR}"

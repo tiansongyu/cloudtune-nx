@@ -48,11 +48,27 @@ int main(void) {
     FILE* log=fopen(NCM_CONFIG_DIRECTORY "/native-ipc-probe.log","w");
     if (!log) return 1;
     unsigned failures=0;
+    Handle resource_limit=INVALID_HANDLE;
+    s64 previous_session_limit=0, initial_sessions=0;
 #define CHECK(condition,stage) do { const bool ok=(condition); fprintf(log,"%s: %s\n", ok?"PASS":"FAIL",stage); fflush(log); if(!ok) {++failures;goto done;} } while(0)
     CHECK(R_SUCCEEDED(ncmIpcServerInitialize(&server,NCM_SERVICE_NAME,8)),"SM service registration");
     Thread thread;
     CHECK(R_SUCCEEDED(threadCreate(&thread,server_main,NULL,NULL,0x10000,44,-2)),"server thread creation");
     CHECK(R_SUCCEEDED(threadStart(&thread)),"server thread start");
+    u64 resource_handle=0;
+    CHECK(R_SUCCEEDED(svcGetInfo(&resource_handle,InfoType_ResourceLimit,INVALID_HANDLE,0)),
+          "read native process resource-limit handle");
+    resource_limit=(Handle)resource_handle;
+    CHECK(R_SUCCEEDED(svcGetResourceLimitCurrentValue(&initial_sessions,resource_limit,LimitableResource_Sessions)) &&
+          R_SUCCEEDED(svcGetResourceLimitLimitValue(&previous_session_limit,resource_limit,LimitableResource_Sessions)),
+          "read native session creation quota");
+    CHECK(R_SUCCEEDED(svcSetResourceLimitLimitValue(resource_limit,LimitableResource_Sessions,initial_sessions)),
+          "exhaust additional session-creation slots like application mode");
+    Handle extra=INVALID_HANDLE;
+    const Result extra_result=svcConnectToNamedPort(&extra,"sm:");
+    if (extra) svcCloseHandle(extra);
+    CHECK(extra_result==MAKERESULT(Module_Kernel,132),
+          "old private-SM path reproduces hardware 0x10801");
     CHECK(R_SUCCEEDED(ncmPlaybackInitialize()),"production client SM acquisition and version handshake");
     NcmPlaybackStatus status;
     CHECK(R_SUCCEEDED(ncmPlaybackGetStatus(&status)) && status.version==1 && status.volume_permille==700,
@@ -80,7 +96,15 @@ int main(void) {
     ncmPlaybackShutdown();
     CHECK(R_SUCCEEDED(ncmPlaybackInitialize()),"worker shutdown and recreation");
     ncmPlaybackShutdown();
+    Service other;
+    CHECK(R_SUCCEEDED(smGetService(&other,NCM_SERVICE_NAME)),
+          "borrowed SM survives playback shutdown");
+    serviceClose(&other);
 done:
+    if(resource_limit) {
+        svcSetResourceLimitLimitValue(resource_limit,LimitableResource_Sessions,previous_session_limit);
+        svcCloseHandle(resource_limit);
+    }
     fprintf(log,"RESULT: %s\n",failures?"FAIL":"PASS");
     fclose(log);
     svcExitProcess();

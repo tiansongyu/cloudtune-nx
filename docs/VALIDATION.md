@@ -8,6 +8,59 @@ retained as historical evidence; current filenames and commands are documented
 in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
 hardware or emulator validation.
 
+## Application-mode IPC session quota — v0.2.15, 2026-10-22
+
+The user's physical v0.2.14 startup log reaches `runtime`, `ipc-register` and
+`ready`, with compact policy, 2,097,152 heap bytes and 3,833,856 shared memory
+bytes free. The overlay displays an empty connected player, but selecting a
+song in the application reports `0x10801`. The supplied server log records
+accepted sessions and `0xF601` closes; successful requests are intentionally
+not logged, so these entries alone cannot identify the failing client stage.
+The user did not retain the full foreground error text. The v0.2.14 release
+workflow was cancelled before publication; the installed candidate is local.
+
+Code review against [Atmosphere 1.9.4's application quota](https://github.com/Atmosphere-NX/Atmosphere/blob/1.9.4/stratosphere/pm/source/impl/pm_spec.cpp)
+identifies a deterministic defect: the application creation quota is one
+session, consumed by libnx's initial SM connection. Our additional private
+`svcConnectToNamedPort("sm:")` therefore returns `LimitReached` (`0x10801`).
+The system-group overlay has different quotas. TriPlayer and libnx acquire
+service handles through the existing SM connection; v0.2.15 does likewise,
+while retaining the worker deadline and never closing that borrowed handle.
+The quota is for **creation**, not every service handle held by an application:
+SM creates and transfers ordinary service sessions using its own quota.
+
+Executed checks:
+
+- Host single-session fault injection first fails the old client at service
+  initialization; the revised client connects without any extra named-port
+  allocation. Tests also cover delayed SM replies, late moved-handle cleanup,
+  safe shutdown, PM lookup suppression while pending, read-only pending checks,
+  reconnect, unchanged protocol framing and bounded diagnostic writing.
+- Full host and UBSan suites pass **33/33** each, with independent XEAPI and
+  local/throttled HTTPS audio checks. Focused client ASan/UBSan also passes.
+- Native Eden IPC probe applies an **actual kernel session limit** equal to
+  current usage. The old private connection reproduces `0x10801`; the revised
+  client passes handshake, 216-byte status, controls from two clients, overlay
+  close, slow-response timeout, late completion, reconnect and shutdown.
+- A separate excluded handoff probe links the production service dispatcher,
+  Runtime, decoders, SD, network and audout with the real client. Acquisition
+  succeeds with no free creation slot. IPC queue handoff then starts generated
+  throttled HTTPS MP3, AAC and FLAC, advancing beyond one second. A second
+  overlay-like session pauses playback; the foreground observes a fixed
+  position, resumes after overlay close, advances tracks, clears the queue
+  through the acknowledged barrier and reconnects after client shutdown.
+  These clients/server are separate threads in one emulator process, **not**
+  separate physical processes. The test restores its session quota after
+  acquisition so the background's eight-free-session work guard remains real.
+- Probe-only NPDM generation grants SetResourceLimitLimitValue. Production
+  NPDM permissions are unchanged, and both probes are excluded from packages.
+
+Evidence is retained locally under `build/validation/ipc-physical-fix/`.
+No real account data enters tests or public artifacts. The physical v0.2.14
+startup is now confirmed; **v0.2.15 physical playback, overlay/game coexistence
+and sleep/wake remain to be tested after reboot**. This fixes a reproduced
+communication defect, not a claim that every song or hardware setup works.
+
 ## Compact startup with the overlay loader — v0.2.14, 2026-10-22
 
 Fresh physical evidence from the installed v0.2.13 package shows 5,668,864 then

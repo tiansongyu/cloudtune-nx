@@ -53,9 +53,18 @@ module out of the system boot sequence. Starting the service does not play the s
 NetEase queue. Its independent AirPlay 1 receiver starts when enabled; the
 first-use default is enabled, and later starts follow your saved preference.
 
-## Connection and low-memory troubleshooting (v0.2.14)
+## Connection and low-memory troubleshooting (v0.2.15)
 
 Update all three matching components: the NRO, `exefs.nsp` and `CloudTune.ovl`.
+
+If the overlay connects but the main application reports `0x10801`, update
+the **NRO as well as the NSP**. v0.2.15 fixes a second `sm:` session allocation
+that exceeds application mode's one-session creation quota. This is distinct
+from background RAM exhaustion; closing more system modules cannot change
+that application quota. The client now borrows libnx's existing SM connection.
+For another failure, preserve `ipc-client-app.log`, `ipc-client-overlay.log`,
+`background-startup.log` and `ipc.log` from `config/netease-switch/`. Client logs
+contain the failed stage and result without account or music URL data.
 Preserve `config/netease-switch/` and any local photo resources. A local
 autostart repair bundle includes an empty
 `atmosphere/contents/42000000004E434D/flags/boot2.flag`; public downloads keep

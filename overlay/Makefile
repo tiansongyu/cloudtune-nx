@@ -27,8 +27,9 @@ ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS      := -Os -g -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter -ffunction-sections -fdata-sections \
                -flto -fuse-linker-plugin -fomit-frame-pointer \
                -fno-strict-aliasing $(ARCH) $(DEFINES)
-CFLAGS      += $(INCLUDE) -DNDEBUG=1
-CXXFLAGS    := $(CFLAGS) -std=gnu++20 -fno-exceptions -DCLOUDTUNE_VERSION=\"$(APP_VERSION)\"
+CFLAGS      += $(INCLUDE) -DNDEBUG=1 -DCLOUDTUNE_VERSION=\"$(APP_VERSION)\" \
+               -DNCM_CLIENT_LOG_NAME=\"ipc-client-overlay.log\"
+CXXFLAGS    := $(CFLAGS) -std=gnu++20 -fno-exceptions
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) \
                -Wl,--gc-sections,-Map,$(OUTPUT_DIR)/$(TARGET).map

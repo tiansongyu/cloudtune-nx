@@ -156,7 +156,7 @@ Result smUnregisterServiceCmif(SmServiceName);
 SmServiceName smEncodeName(const char*);
 
 /* Service-client fixture hooks. No actual process/service can be contacted. */
-typedef struct { bool active; } Service;
+typedef struct { bool active; Handle session; } Service;
 typedef struct { u64 program_id; u8 storageID; } NcmProgramLocation;
 enum { NcmStorageId_None=0 };
 static inline bool serviceIsActive(Service* service) { return service->active; }
@@ -164,6 +164,10 @@ static inline void serviceClose(Service* service) { service->active = false; }
 extern bool testAtmosphereHint;
 static inline bool hosversionIsAtmosphere(void) { return testAtmosphereHint; }
 static inline void* smGetServiceSessionTipc(void) { return NULL; }
+static inline Service* smGetServiceSession(void) {
+    static Service shared_sm = {.active=true, .session=1};
+    return &shared_sm;
+}
 static inline Result smGetService(Service* service, const char* name) {
     (void)name; service->active = true; return 0;
 }

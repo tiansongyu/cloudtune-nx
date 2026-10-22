@@ -116,6 +116,12 @@ bool ncmIpcIdle(void) {
     mutexUnlock(&work_mutex);
     return idle;
 }
+bool ncmIpcPending(void) {
+    mutexLock(&work_mutex);
+    const bool pending = state == Pending;
+    mutexUnlock(&work_mutex);
+    return pending;
+}
 void ncmIpcCloseSession(Handle session) {
     if (!session) return;
     mutexLock(&work_mutex);
