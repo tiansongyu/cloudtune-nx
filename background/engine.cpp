@@ -55,10 +55,16 @@ template <size_t N> void copyText(char (&dst)[N], const char* src) {
 }
 class AudioSink {
 public:
-    ~AudioSink() { close(); }
+  bool (*can_start_work)() = nullptr;
+  ~AudioSink() {
+      close(); }
     bool open() {
         if (active_) return true;
         error_ = 0;
+        if (can_start_work && !can_start_work()) {
+            error_ = UINT32_MAX;
+            return false;
+        }
 #ifdef __SWITCH__
         if (R_FAILED(error_ = audoutInitialize())) return false;
         active_ = true;
@@ -161,6 +167,7 @@ private:
 
 struct Engine::Impl {
     explicit Impl(EngineConfig c) : config(std::move(c)), rng(std::random_device{}()) {
+        sink.can_start_work = config.can_start_work;
         // One reserved lifecycle slot ensures a sender can always end its
         // session. No command producer allocates after construction.
         commands.reserve(CommandCapacity + 1);
@@ -358,6 +365,8 @@ struct Engine::Impl {
         havePair = false; reachedEnd = false;
         decodedCount = decodedPosition = 0; producedFrames = 0; phase = 0;
         cursor = 0; seekBase = 0;
+        if (config.release_unused_memory)
+            config.release_unused_memory();
     }
     static size_t writeDownload(char* data, size_t size, size_t count, void* context) {
         auto *self = static_cast<Impl *>(context);
@@ -451,6 +460,8 @@ struct Engine::Impl {
         downloadDone = true;
     }
     void startFetch(const std::string& url) {
+        if (config.can_start_work && !config.can_start_work())
+            throw std::runtime_error("System resources low; retry playback later");
         downloader=std::thread([this,url,path=currentPath] {
             try { fetch(url,path); }
             catch (...) { downloadError=CURLE_OUT_OF_MEMORY; downloadDone=true; }
@@ -866,6 +877,8 @@ struct Engine::Impl {
         if (!externalMode) return;
         recoveringOutput = false; outputAttempts = 0;
         sink.close(); externalMode = false; externalPaused = false;
+        if (config.release_unused_memory)
+            config.release_unused_memory();
         std::lock_guard<std::mutex> lock(mutex);
         const uint32_t volume = snapshot.volume_permille;
         const uint32_t repeat = snapshot.repeat, shuffle = snapshot.shuffle;
@@ -1174,6 +1187,8 @@ struct Engine::Impl {
 Engine::Engine(EngineConfig config) : impl_(std::make_unique<Impl>(std::move(config))) {}
 Engine::~Engine() { stop(); }
 bool Engine::start() {
+    if (impl_->config.can_start_work && !impl_->config.can_start_work())
+        return false;
     if (impl_->running.exchange(true)) return true;
     if (impl_->worker.joinable()) impl_->worker.join();
     std::error_code error;

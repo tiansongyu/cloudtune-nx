@@ -12,6 +12,10 @@ static unsigned acquired, released, queries, sleeps, home_after;
 static size_t committed;
 static char diagnostics[32768], disk_log[32768];
 static bool stale_ready = true;
+static bool process_exited;
+void svcExitProcess(void) {
+    process_exited = true;
+}
 static void check(bool ok, const char *message) {
     if (!ok) {
         fprintf(stderr, "FAIL [%s]: %s\n", failure, message);
@@ -141,8 +145,7 @@ Result stubDispatch(Service *service, u32 command, u64 input, u8 *output) {
     return 0;
 }
 Result svcSleepThread(s64 ns) {
-    check(ns == 250000000 && !home_confirmed && committed == 0,
-          "Boot wait allocated/blocked incorrectly");
+    check(ns == 250000000 && committed == 0, "Boot wait allocated/blocked incorrectly");
     ++sleeps;
     return 0;
 }
@@ -199,6 +202,11 @@ Result svcGetResourceLimitCurrentValue(s64 *out, Handle handle, LimitableResourc
     check(resource_handle && handle == 99 && resource <= LimitableResource_Sessions,
           "Wrong resource");
     *out = resource == LimitableResource_Memory ? 200000000 : 100;
+    const bool low = !strncmp(failure, "low-", 4) && failure[4] - '0' == (int)resource;
+    const bool recovering =
+        !strncmp(failure, "recover-", 8) && failure[8] - '0' == (int)resource && sleeps < 4;
+    if (low || recovering)
+        *out = resource == LimitableResource_Memory ? 249999999 : 200;
     return fails("resource-current") ? 0x1234 : 0;
 }
 Result svcGetResourceLimitLimitValue(s64 *out, Handle handle, LimitableResource resource) {
@@ -222,13 +230,22 @@ static void scenario(const char *fail, bool known, unsigned delay) {
     home_after = delay;
     heap_failed = fails("heap");
     __appInit();
-    const bool diagnostic_failure = !strncmp(fail, "log-", 4) || !strncmp(fail, "resource-", 9);
-    const bool success = (!*fail || diagnostic_failure) && delay < 480;
+    const bool diagnostic_failure = !strncmp(fail, "log-", 4);
+    const bool recovering = !strncmp(fail, "recover-", 8);
+    const bool success = (!*fail || diagnostic_failure || recovering) && delay < 480;
     check(R_SUCCEEDED(ncmStartupResult()) == success, "Wrong startup outcome");
     check(!resource_handle, "Diagnostic handle leaked");
     check(success == ((acquired & 256) != 0), "Failed gate still started playback services");
+    check(process_exited == !success, "Failed startup would still run C++ global constructors");
     if (queries) {
-        check(sleeps == (delay < 480 ? delay : 480), "Wait did not follow HOME readiness");
+        if (success)
+            check(sleeps >= delay + 20, "Missing post-HOME resource observation");
+        if (recovering)
+            check(sleeps >= 24, "Shortage did not reset healthy observation");
+        if (!strncmp(fail, "low-", 4))
+            check(sleeps == 240, "Resource wait was not bounded");
+        if (delay >= 480)
+            check(sleeps == 480, "HOME timeout was not bounded");
         if (!fails("home-query") && delay < 480)
             check(queries == delay + 1, "Unexpected polling");
     }
@@ -265,17 +282,21 @@ int main(void) {
                               "resource-handle",
                               "resource-current",
                               "resource-limit"};
-    for (unsigned i = 0; i < sizeof(failures) / sizeof(*failures) + 3; ++i) {
+    const unsigned count = sizeof(failures) / sizeof(*failures);
+    for (unsigned i = 0; i < count + 13; ++i) {
         pid_t child = fork();
         check(child >= 0, "fork failed");
         if (!child) {
-            if (i < sizeof(failures) / sizeof(*failures))
+            if (i < count)
                 scenario(failures[i], false, 0);
-            else
-                scenario("", true,
-                         i == sizeof(failures) / sizeof(*failures)       ? 3
-                         : i == sizeof(failures) / sizeof(*failures) + 1 ? 480
-                                                                         : 0);
+            else if (i < count + 3)
+                scenario("", true, i == count ? 3 : i == count + 1 ? 480 : 0);
+            else {
+                char name[20];
+                snprintf(name, sizeof(name), "%s-%u", i < count + 8 ? "low" : "recover",
+                         (i - count - 3) % 5);
+                scenario(name, true, 0);
+            }
             _exit(0);
         }
         int status;

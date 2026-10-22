@@ -17,7 +17,7 @@ class MdnsAdvertiser {
     bool start(const std::string &name, uint16_t port, const std::string &deviceId,
                uint32_t ipv4NetworkOrder);
     void tick();
-    void stop();
+    void stop() noexcept;
     int fd() const;
 
   private:

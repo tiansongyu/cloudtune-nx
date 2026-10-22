@@ -8,6 +8,37 @@ retained as historical evidence; current filenames and commands are documented
 in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
 hardware or emulator validation.
 
+## Autostart resource guards — v0.2.11, 2026-10-22
+
+- Full host run: **32/32** CTest cases passed (129.84 s), followed by independent
+  XEAPI crypto verification and generated local/throttled HTTPS playback.
+- New fault injection exercises all five shared-resource shortages and recovery,
+  invalid/failed resource queries, bounded waits, margin arithmetic, allocator
+  denial before kernel growth, physical shrink refusal and preserved live data.
+  Failed platform startup exits before C++ global constructors.
+- AirPlay fault injection runs the actual receiver worker with allocations
+  denied, plus mDNS stop/destruction. All sockets close, error status remains
+  readable and restart succeeds; the earlier destructor termination is fixed.
+- Five focused UBSan cases passed: startup, heap, resource guard, AirPlay OOM
+  and AirPlay runtime. Final startup/heap regressions were rerun after review.
+- All three Switch components compile. Production NSO static mapping is
+  **3,223,552 bytes (3.07 MiB)** versus v0.2.10's 3,534,848 bytes (3.37 MiB).
+- Native newlib probe: **12 assertions passed**, including 8→4 MiB physical
+  trimming, unchanged live data, 4→8 MiB regrowth and actual writes to both
+  ends of the new allocation. HOME is simulated only at the probe boundary.
+- Isolated Eden runtime probe reaches IPC readiness with a 2 MiB heap. An
+  independent sender completes encrypted ALAC setup, 300 audio packets, volume,
+  FLUSH and TEARDOWN; `audout=00000000` and nonzero PCM are recorded.
+  Only the probe substitutes the unavailable Atmosphere HOME launch query;
+  production resource checks and audio/allocator implementations are retained.
+
+Evidence is local and ignored under `build/validation/autostart-risk-review/`.
+No user photos, account data or physical crash dumps are included in published
+artifacts. Hardware boot success is still unconfirmed. Margins are policy,
+not a reservation: competing modules and pre-entry process creation remain
+outside the guarantee of an in-process check. AirPlay pause remains local;
+DACP sender controls are not implemented by this fix.
+
 ## AM resource-limit follow-up — v0.2.10, 2026-10-22
 
 The user confirmed replacing the v0.2.9 background NSP and supplied a new

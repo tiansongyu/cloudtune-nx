@@ -1,13 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../runtime.hpp"
-#include "ipc_server.h"
-#include "startup.h"
 #include "heap.h"
-#include <switch.h>
-#include <curl/curl.h>
+#include "ipc_server.h"
+#include "resources.h"
+#include "startup.h"
 #include <cstdio>
 #include <cstring>
+#include <curl/curl.h>
+#include <malloc.h>
 #include <memory>
+#include <switch.h>
 
 namespace {
 static_assert(sizeof(NcmPlaybackStatus) <= NCM_IPC_RESPONSE_MAX_DATA_SIZE,
@@ -84,11 +86,16 @@ struct CurlLifetime {
 int run() {
     if (R_FAILED(ncmStartupResult())) return 1;
     ncmStartupRecordResources("before-runtime");
+    if (!ncmCanStartWork()) {
+        ncmStartupRecord("runtime-resource-guard", MAKERESULT(Module_Kernel, 132));
+        return 1;
+    }
     CurlLifetime curl;
     ncmStartupRecord("curl", static_cast<Result>(curl.result));
     if (curl.result != CURLE_OK) return 1;
     auto engine = std::make_unique<netease::playback::Runtime>(
-        netease::playback::EngineConfig{NCM_CONFIG_DIRECTORY, NCM_CONFIG_DIRECTORY "/cacert.pem"});
+        netease::playback::EngineConfig{NCM_CONFIG_DIRECTORY, NCM_CONFIG_DIRECTORY "/cacert.pem",
+                                        ncmCanStartWork, [] { malloc_trim(0); }});
     const bool started = engine->start();
     ncmStartupRecordResources("after-runtime");
     ncmStartupRecord("heap-last-result", ncmHeapLastResult());

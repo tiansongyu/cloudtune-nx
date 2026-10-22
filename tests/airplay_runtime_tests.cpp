@@ -1,16 +1,25 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-#include "runtime.hpp"
 #include "netease/api.hpp"
 #include "netease/storage.hpp"
+#include "runtime.hpp"
 #include <arpa/inet.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include <atomic>
 #include <filesystem>
 #include <future>
 #include <iostream>
 #include <stdexcept>
+#include <sys/socket.h>
+#include <unistd.h>
 
 using namespace netease;
+static std::atomic<bool> allowWork{true};
+static std::atomic<unsigned> trimCalls{0};
+static bool canStartWork() {
+    return allowWork.load();
+}
+static void trimMemory() {
+    ++trimCalls;
+}
 static void check(bool condition, const char* reason) {
     if (!condition) throw std::runtime_error(reason);
 }
@@ -84,6 +93,22 @@ int main() {
         check(runtime.airplay_status().state == NcmAirplay_Ready,
               "Concurrent controls left the receiver unavailable");
         runtime.stop();
+
+        preferences["enabled"] = false;
+        storage::write_file(path, preferences.dump());
+        playback::Runtime guarded({directory, "", canStartWork, trimMemory});
+        allowWork = false;
+        check(!guarded.start(), "Resource shortage still starts workers");
+        allowWork = true;
+        check(guarded.start(), "Runtime did not recover when headroom returned");
+        allowWork = false;
+        check(!guarded.set_airplay_enabled(true), "AirPlay ignored resource admission");
+        check(guarded.status().version == NCM_PROTOCOL_VERSION, "Denied AirPlay broke music IPC");
+        allowWork = true;
+        check(guarded.set_airplay_enabled(true), "AirPlay retry after shortage failed");
+        check(guarded.set_airplay_enabled(false) && trimCalls > 0,
+              "Disable did not request unused memory release");
+        guarded.stop();
 
         preferences["name"] = "";
         preferences["enabled"] = true;

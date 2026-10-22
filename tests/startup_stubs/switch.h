@@ -14,7 +14,7 @@ typedef unsigned Mutex;
 #define R_SUCCEEDED(r) ((r) == 0)
 #define MAKERESULT(m, d) ((m) | ((d) << 9))
 #define INVALID_HANDLE 0
-enum { Module_Libnx = 345, LibnxError_Timeout = 8 };
+enum { Module_Kernel = 1, Module_Libnx = 345, LibnxError_Timeout = 8, LibnxError_BadInput = 11 };
 #define MAKEHOSVERSION(a, b, c) (((a) << 16) | ((b) << 8) | (c))
 enum { AppletType_None, BsdServiceType_User };
 typedef struct {
@@ -70,6 +70,7 @@ Service *pminfoGetServiceSession(void);
 Result stubDispatch(Service *service, u32 command, u64 input, u8 *output);
 #define serviceDispatchInOut(s, c, i, o) stubDispatch(s, c, i, &(o))
 Result svcSleepThread(s64 ns);
+void svcExitProcess(void);
 enum { InfoType_ResourceLimit = 9 };
 typedef enum {
     LimitableResource_Memory,

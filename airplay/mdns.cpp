@@ -302,9 +302,14 @@ void MdnsAdvertiser::tick() {
         }
     }
 }
-void MdnsAdvertiser::stop() {
+void MdnsAdvertiser::stop() noexcept {
     if (impl->socket >= 0) {
-        impl->send(0);
+        // A goodbye is optional. It must never prevent closing the socket or
+        // escape a destructor/worker cleanup when memory is exhausted.
+        try {
+            impl->send(0);
+        } catch (...) {
+        }
         ::close(impl->socket);
         impl->socket = -1;
     }

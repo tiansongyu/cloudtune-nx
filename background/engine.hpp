@@ -9,6 +9,9 @@ struct EngineConfig {
     std::string directory;
     /* Optional PEM CA bundle. Never disables peer or hostname verification. */
     std::string ca_bundle;
+    /* Optional platform policy. Foreground/host players leave these unset. */
+    bool (*can_start_work)() = nullptr;
+    void (*release_unused_memory)() = nullptr;
 };
 /* One engine per process owns the audio device. command()/status() are thread
  * safe; the owner serializes start()/stop(). start() is idempotent. stop()

@@ -40,6 +40,11 @@ target_link_libraries(ncm_engine PRIVATE cloudtune_audio_codecs)
 add_library(ncm_runtime STATIC runtime.cpp)
 target_link_libraries(ncm_runtime PUBLIC ncm_engine cloudtune_airplay)
 if(NINTENDO_SWITCH)
+  # Drop unused API/account helpers from the resident executable. Keep decoder
+  # optimization unchanged; only section granularity and linker GC change.
+  foreach(component netease_api netease_accounts ncm_engine ncm_runtime cloudtune_airplay)
+    target_compile_options(${component} PRIVATE -ffunction-sections -fdata-sections)
+  endforeach()
   target_compile_definitions(ncm_engine PUBLIC __SWITCH__)
   target_link_libraries(ncm_engine PUBLIC nx)
   add_library(ncm_ipc_client STATIC client/playback_client.c client/timed_ipc.c)
@@ -50,6 +55,8 @@ if(NINTENDO_SWITCH)
   target_compile_definitions(cloudtune-background PRIVATE CLOUDTUNE_VERSION="${PROJECT_VERSION}")
   target_include_directories(cloudtune-background PRIVATE source)
   target_link_libraries(cloudtune-background PRIVATE ncm_runtime)
+  target_compile_options(cloudtune-background PRIVATE -ffunction-sections -fdata-sections)
+  target_link_options(cloudtune-background PRIVATE "-Wl,--gc-sections")
   # Native allocator probe is built/run explicitly; never part of an SD package.
   add_executable(ncm-switch-heap-probe EXCLUDE_FROM_ALL
     "${NCM_ROOT}/tests/switch_heap_probe.c" ${NCM_STARTUP_SOURCES})

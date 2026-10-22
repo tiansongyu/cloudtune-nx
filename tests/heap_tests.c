@@ -11,6 +11,7 @@ static unsigned char kernel_heap[16u * 1024u * 1024u];
 static size_t kernel_size, kernel_limit = sizeof(kernel_heap);
 static unsigned kernel_calls;
 static bool fail_address;
+static bool deny_growth, deny_shrink;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 char *fake_heap_start, *fake_heap_end;
 static void check(bool ok, const char *message) {
@@ -30,12 +31,17 @@ void mutexUnlock(Mutex *mutex) {
 Result svcSetHeapSize(void **address, size_t size) {
     ++kernel_calls;
     check(size % (2u * 1024u * 1024u) == 0, "Kernel heap alignment");
-    check(size >= kernel_size, "Must not unmap borrowed worker/transfer pages");
+    if (size < kernel_size && deny_shrink)
+        return 0xD401; // Locked/alias mapped tail.
     if (size > kernel_limit || fail_address)
         return 0x10801; // The physical report's LimitReached.
     kernel_size = size;
     *address = kernel_heap;
     return 0;
+}
+Result ncmCheckMemoryGrowth(size_t additional_bytes) {
+    check(additional_bytes > 0 && additional_bytes <= sizeof(kernel_heap), "Invalid growth check");
+    return deny_growth ? 0x10801 : 0;
 }
 #include "../background/source/heap.c"
 
@@ -61,9 +67,9 @@ static void scenario(unsigned which) {
     check(kernel_calls == 1, "Boot reserves more than one initial chunk");
     if (which == 1) {
         check(ncmHeapStartupResult() == 0x10801, "Initial kernel error lost");
-        check(ncmHeapCommittedSize() == 256u * 1024u, "Emergency budget changed");
+        check(ncmHeapCommittedSize() == 16u * 1024u, "Emergency budget changed");
         check(_sbrk_r(&reent, 4096) != (void *)-1, "Emergency logging heap missing");
-        check(_sbrk_r(&reent, 256u * 1024u) == (void *)-1 && reent._errno == ENOMEM,
+        check(_sbrk_r(&reent, 16u * 1024u) == (void *)-1 && reent._errno == ENOMEM,
               "Emergency path tried to run the player");
         check(kernel_calls == 1, "Emergency heap tried further allocation");
         return;
@@ -71,6 +77,28 @@ static void scenario(unsigned which) {
     check(ncmHeapStartupResult() == 0 && ncmHeapCommittedSize() == 0 && kernel_size == 0,
           "Boot must not commit a playback heap before HOME");
     check(fake_heap_end == fake_heap_start, "Initial heap bounds");
+    if (which == 3) {
+        deny_growth = true;
+        check(_sbrk_r(&reent, 16) == (void *)-1 && kernel_calls == 1,
+              "Headroom guard must reject before allocating physical pages");
+        check(ncmHeapLastResult() == 0x10801 && _sbrk_r(&reent, 0) == kernel_heap,
+              "Headroom denial changed break/result");
+        deny_growth = false;
+        check(_sbrk_r(&reent, HEAP_STEP * 2) == kernel_heap, "Recovery failed");
+        memset(kernel_heap, 0x5a, HEAP_STEP);
+        deny_shrink = true;
+        check(_sbrk_r(&reent, -(ptrdiff_t)HEAP_STEP) != (void *)-1 && kernel_size == 2 * HEAP_STEP,
+              "Rejected shrink changed committed pages");
+        check(kernel_heap[HEAP_STEP - 1] == 0x5a, "Live data changed on rejected shrink");
+        deny_shrink = false;
+        check(_sbrk_r(&reent, -16) != (void *)-1 && kernel_size == HEAP_STEP,
+              "Free tail not returned to kernel");
+        check(kernel_heap[HEAP_STEP - 17] == 0x5a && ncmHeapCommittedSize() == HEAP_STEP,
+              "Shrink damaged live data or accounting");
+        check(_sbrk_r(&reent, 32) != (void *)-1 && kernel_size == 2 * HEAP_STEP,
+              "Growth after physical shrink failed");
+        return;
+    }
     if (which == 2) {
         pthread_t workers[8];
         void *slots[8 * 256];
@@ -98,8 +126,8 @@ static void scenario(unsigned which) {
     check(_sbrk_r(&reent, 32) == kernel_heap + HEAP_STEP - 16, "Retry failed");
     check(ncmHeapCommittedSize() == 2 * HEAP_STEP, "Growth must round to 2 MiB");
     check(_sbrk_r(&reent, -32) == kernel_heap + HEAP_STEP + 16, "Logical shrink failed");
-    const unsigned calls = kernel_calls;
-    check(_sbrk_r(&reent, 32) != (void *)-1 && kernel_calls == calls, "Reuse remapped memory");
+    check(kernel_size == HEAP_STEP, "Free top page retained");
+    check(_sbrk_r(&reent, 32) != (void *)-1 && kernel_size == 2 * HEAP_STEP, "Regrow trimmed heap");
     check(_sbrk_r(&reent, PTRDIFF_MIN) == (void *)-1, "Negative overflow accepted");
     check(_sbrk_r(&reent, PTRDIFF_MAX) == (void *)-1, "Positive overflow accepted");
     const size_t remaining = HEAP_LIMIT - (HEAP_STEP + 16);
@@ -108,7 +136,7 @@ static void scenario(unsigned which) {
           "Playback heap exceeded the 16 MiB cap");
 }
 int main(void) {
-    for (unsigned i = 0; i < 3; ++i) {
+    for (unsigned i = 0; i < 4; ++i) {
         pid_t child = fork();
         check(child >= 0, "fork failed");
         if (!child) {

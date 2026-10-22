@@ -58,6 +58,23 @@ int main(void) {
     aligned = memalign(0x1000, 0x20000);
     CHECK(aligned != NULL && ((uintptr_t)aligned & 0xfff) == 0, "worker/transfer buffer alignment");
     CHECK(ncmHeapCommittedSize() <= 16u * 1024u * 1024u, "original maximum budget");
+    const size_t peak = ncmHeapCommittedSize();
+    free(aligned);
+    aligned = NULL;
+    free(b);
+    b = NULL;
+    malloc_trim(0);
+    CHECK(ncmHeapCommittedSize() < peak, "newlib returns unused physical tail pages");
+    CHECK(a[0] == 0x5a && a[3u * 1024u * 1024u - 1] == 0x5a,
+          "physical trim preserves live allocation");
+    b = malloc(4u * 1024u * 1024u);
+    CHECK(b != NULL, "native newlib allocation after trim");
+    volatile unsigned char *live_b = b;
+    live_b[0] = 0x33;
+    live_b[4u * 1024u * 1024u - 1] = 0x77;
+    CHECK(ncmHeapCommittedSize() >= peak && live_b[0] == 0x33 &&
+              live_b[4u * 1024u * 1024u - 1] == 0x77,
+          "native newlib regrows trimmed heap and retains writable pages");
     result = 0;
 done:
     free(aligned);

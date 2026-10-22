@@ -27,14 +27,15 @@ extern "C" {
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -72,7 +73,7 @@ void writeNtp(uint8_t* p, int64_t ns) {
     write32(p, uint32_t(ns / 1000000000LL));
     write32(p + 4, uint32_t((uint64_t(ns % 1000000000LL) << 32) / 1000000000ULL));
 }
-template<size_t N> void text(char (&destination)[N], const std::string& value) {
+template <size_t N> void text(char (&destination)[N], std::string_view value) {
     std::memset(destination, 0, N);
     // Sender metadata is untrusted. Preserve valid UTF-8 without splitting a
     // code point, and replace invalid sequences before UI/status consumers.
@@ -306,7 +307,7 @@ struct Receiver::Impl {
             char pair[3]; std::snprintf(pair, sizeof(pair), "%02X", byte); deviceId += pair;
         }
     }
-    void state(NcmAirplayState value, const std::string& message, uint32_t error = 0) {
+    void state(NcmAirplayState value, std::string_view message, uint32_t error = 0) {
         std::lock_guard<std::mutex> lock(mutex);
         snapshot.state = value; snapshot.error_code = error; text(snapshot.message, message);
     }
@@ -350,6 +351,8 @@ struct Receiver::Impl {
         if (running && listener >= 0) state(NcmAirplay_Ready, "Ready for AirPlay");
     }
     bool openListener() {
+        if (callbacks.can_start_work && !callbacks.can_start_work())
+            return false;
         if (config.name.empty() || config.name.size() > 48 || config.port == 0) return false;
         if (config.address.empty()) interfaceAddress = platformAddress();
         else {

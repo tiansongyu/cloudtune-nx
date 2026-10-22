@@ -17,6 +17,8 @@ struct Config {
     bool advertise = true;
 };
 struct Callbacks {
+    // Optional platform resource admission before opening/reopening sockets.
+    bool (*can_start_work)() = nullptr;
     // Callbacks run only on the receiver thread and must return promptly.
     // begin obtains exclusive ownership; false rejects RECORD with RTSP 453.
     std::function<bool(uint32_t rate)> begin;

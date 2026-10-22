@@ -10,10 +10,11 @@
 #include <cstring>
 #include <mutex>
 #include <random>
+#include <string_view>
 
 namespace netease::playback {
 namespace {
-template<size_t N> void text(char (&target)[N], const std::string& value) {
+template <size_t N> void text(char (&target)[N], std::string_view value) {
     size_t length = std::min(value.size(), N - 1);
     while (length && length < value.size() &&
            (static_cast<unsigned char>(value[length]) & 0xc0) == 0x80) --length;
@@ -29,7 +30,7 @@ struct Runtime::Impl {
     std::unique_ptr<cloudtune::airplay::Receiver> receiver;
     std::atomic<bool> accepting{false};
     bool running = false, enabled = true;
-    std::string settingsError;
+    char settingsError[160]{};
     Json preferences = Json::object();
     cloudtune::airplay::Config airplay;
 
@@ -76,9 +77,13 @@ struct Runtime::Impl {
         airplay.advertise = preferences.value("advertise", true);
     }
     void makeReceiver() {
+        if (config.can_start_work && !config.can_start_work())
+            throw std::runtime_error("System resources low; retry AirPlay later");
         cloudtune::airplay::Callbacks callbacks;
+        callbacks.can_start_work = config.can_start_work;
         callbacks.begin = [this](uint32_t rate) {
-            return accepting.load() && engine.begin_external(rate);
+            return accepting.load() && (!config.can_start_work || config.can_start_work()) &&
+                   engine.begin_external(rate);
         };
         callbacks.audio = [this](const int16_t* pcm, size_t frames) {
             return accepting.load() && engine.write_external(pcm, frames);
@@ -102,15 +107,17 @@ bool Runtime::start() {
     if (!impl_->engine.start()) return false;
     impl_->running = true;
     try {
-        impl_->settingsError.clear();
+        impl_->settingsError[0] = 0;
         impl_->configure();
-        impl_->makeReceiver();
         impl_->save();
         impl_->accepting = impl_->enabled;
-        if (impl_->enabled) impl_->receiver->start();
+        if (impl_->enabled) {
+            impl_->makeReceiver();
+            impl_->receiver->start();
+        }
     } catch (const std::exception& error) {
         impl_->accepting = false;
-        impl_->settingsError = error.what();
+        text(impl_->settingsError, error.what());
     }
     // An unavailable LAN/port never prevents NetEase playback.
     return true;
@@ -168,7 +175,7 @@ NcmAirplayStatus Runtime::airplay_status() const {
         status.error_code = audio.error_code;
         text(status.message, audio.message);
     }
-    if (!impl_->settingsError.empty()) {
+    if (impl_->settingsError[0]) {
         status.state = NcmAirplay_Error;
         status.error_code = 1;
         text(status.message, impl_->settingsError);
@@ -183,20 +190,32 @@ bool Runtime::set_airplay_enabled(bool enabled) {
     try {
         if (!impl_->receiver) {
             impl_->configure();
-            impl_->makeReceiver();
+            if (enabled)
+                impl_->makeReceiver();
         }
         impl_->enabled = enabled;
         impl_->save();
-        impl_->settingsError.clear();
+        impl_->settingsError[0] = 0;
     } catch (const std::exception& error) {
         impl_->enabled = previous;
         impl_->preferences = previousPreferences;
-        impl_->settingsError = error.what();
+        text(impl_->settingsError, error.what());
         return false;
     }
     impl_->accepting = enabled;
-    if (enabled) return impl_->receiver->start();
-    impl_->receiver->stop();
+    if (enabled) {
+        if (impl_->config.can_start_work && !impl_->config.can_start_work()) {
+            impl_->accepting = false;
+            text(impl_->settingsError, "System resources low; retry AirPlay later");
+            return false;
+        }
+        return impl_->receiver->start();
+    }
+    if (impl_->receiver)
+        impl_->receiver->stop();
+    impl_->receiver.reset();
+    if (impl_->config.release_unused_memory)
+        impl_->config.release_unused_memory();
     return true;
 }
 bool Runtime::disconnect_airplay() {

@@ -27,15 +27,31 @@ after about 120 seconds; query errors/timeouts release the process without start
 the runtime. Do not use `pm:shell` GetBootFinishedEventHandle: Atmosphere 1.9.4
 aborts that command outside recovery boot. Do not call NotifyBootFinished.
 
-After the boundary, newlib's first allocation commits 2 MiB and later requests
-grow in 2 MiB steps up to the existing 16 MiB cap. Kernel growth failures
-return `ENOMEM` without changing live allocations. Logical shrink retains
-pages that libnx may have mapped as worker stacks or transfer buffers. A
-256 KiB emergency heap allows diagnostics if the initial address request
-fails; the runtime never uses that fallback. Stage snapshots record shared
-resource-limit usage and ceilings for memory, threads, events, transfer
-memories and sessions. These measurements do not reserve headroom for other
-processes or guarantee that arbitrary sysmodule combinations fit.
+Since v0.2.11, after the HOME boundary startup requires 20 consecutive 250 ms
+observations with at least 12 MiB memory, 16 threads, 16 events, four transfer
+memories and 16 sessions free. A shortage resets the observation window;
+the resource wait ends after about 60 seconds. Failed queries/timeouts exit
+before C++ global constructors, with acquired platform resources released.
+These are conservative policy margins, not measured minimum requirements or
+proof that HOME has finished initializing. The read/check is not atomic with
+other processes' allocations and cannot reserve resources for them.
+
+Newlib's first allocation commits 2 MiB; later requests grow in 2 MiB steps
+up to 16 MiB. Every physical growth also checks that 8 MiB remains free in the
+shared memory quota. Failed checks/kernel requests return `ENOMEM` without
+changing live allocations. Starting workers, download threads, listeners or
+audio output also checks free memory/thread/event/transfer/session margins.
+Foreground players do not use this system-module policy.
+
+When newlib lowers its break, the allocator attempts to release whole 2 MiB
+tail chunks. Horizon validates that those pages have normal writable memory
+state and no locked/alias-mapped attributes; a rejected shrink retains the
+physical pages. Closing tracks or disabling AirPlay requests `malloc_trim(0)`.
+Fragmented heaps can still retain pages: this is not a promise to return to
+the initial footprint. The emergency heap is now 16 KiB and never runs the
+runtime. Static sections are still loaded before our code can check quotas;
+insufficient resources at process creation can still make Atmosphere boot2
+abort. Stage snapshots record all five shared quotas in the startup log.
 
 It opens three BSD sessions and opens `audout:u`
 only when there is a playable track. Audio is 48 kHz, signed 16-bit stereo;

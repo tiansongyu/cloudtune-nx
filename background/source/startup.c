@@ -100,7 +100,7 @@ Result ncmStartupResult(void) {
     return startup_result;
 }
 
-void __appInit(void) {
+static void initialize_platform(void) {
     if (!initialized("sm", smInitialize(), &sm_ready))
         return;
     if (!hosversionGet()) {
@@ -130,6 +130,18 @@ void __appInit(void) {
     ncmStartupRecordResources("before-sockets");
     initialized("sockets", socketInitialize(&sockets), &sockets_ready);
     ncmStartupRecordResources("after-sockets");
+}
+
+void __appExit(void);
+void __appInit(void) {
+    initialize_platform();
+    if (R_FAILED(startup_result)) {
+        /* Do not run C++ global constructors after a rejected resource gate.
+         * They can allocate before main's exception boundary exists. */
+        ncmStartupRecord("startup-exit", startup_result);
+        __appExit();
+        svcExitProcess();
+    }
 }
 
 void __appExit(void) {

@@ -739,3 +739,24 @@ Primary references checked:
   NSP rejects Eden's unsupported query; excluded test programs simulate that
   boundary explicitly. Real HOME timing and Ultrahand/game coexistence remain
   for hardware validation. Details and primary sources are in VALIDATION.md.
+
+## Autostart risk hardening — v0.2.11 (2026-10-22)
+
+- Reproduced mDNS low-memory destructor termination with allocation injection;
+  made goodbye delivery optional, socket cleanup unconditional and error text
+  nonallocating. Added actual worker OOM/restart coverage.
+- Added allocation-free, fail-closed checks of all five shared quotas. Observe
+  post-HOME headroom for five seconds (bounded at 60 seconds); guard new work
+  and every physical heap growth. Margins cannot reserve resources against
+  unrelated modules. Failed startup exits before global C++ initialization.
+- Newlib can return unused physical tail pages through sbrk; kernel rejection
+  preserves mapped/locked pages. Track closure and receiver disable request
+  trimming. Disabled receivers no longer retain their object/buffers.
+- Section GC plus a smaller emergency heap reduces the measured static image
+  by 311,296 bytes. It does not remove pre-entry resource exhaustion risk.
+- Full 32-case host run, local/throttled HTTPS playback, focused UBSan, Switch
+  builds and the isolated native runtime ALAC check passed. See VALIDATION.md
+  for evidence and remaining physical-console work.
+- Confirmed AirPlay pause is intentionally local in the existing engine.
+  Sender pause requires a separate remote-control implementation and sender
+  support; documented without claiming that all AirPlay devices behave this way.
