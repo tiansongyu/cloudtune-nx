@@ -102,6 +102,9 @@ v0.3.1 开发版会在 `config/netease-switch/` 保存两个有大小上限的�
 | --- | --- |
 | `idle-session-replaced` | 同一手机的未播放连接已交给新连接；正在播放的会话仍受保护 |
 | `rtsp-reply` | 第一个数字为 OPTIONS/ANNOUNCE/SETUP/RECORD/FLUSH/PAUSE/SET_PARAMETER/GET_PARAMETER/TEARDOWN 的序号 1–9，第二个为响应码 |
+| `udp-*-error` | 第一个数字为音频/重传控制/时钟通道 1/2/3，第二个为原始 errno；事件名区分创建、发送/接收缓冲、非阻塞、绑定、端口查询 |
+| `udp-receive-buffer` / `udp-budget-retry` | 通道与已申请接收字节数 / 整组重试的音频接收字节数与 errno |
+| `discovery-open-error` | 设备发现通道初始化失败，第一个数字为 errno |
 | `record-admission` | 是否允许接收、系统资源检查是否通过；均为 1 才能接管 |
 | `first-udp-audio` / `first-decoded` | 已收到音频包 / 已成功解码 |
 | `first-pcm-handoff` | 解码结果已交给播放引擎 |
@@ -111,7 +114,9 @@ v0.3.1 开发版会在 `config/netease-switch/` 保存两个有大小上限的�
 
 复现后完整关机，再读取这两个文件与 `background-startup.log`。启动成功只说明
 后台存活，`first-decoded` 只说明解码成功；需结合设备提交与实际听感判断整个链路。
-目前修复已通过桌面与原生模拟器测试，用户的网易云手机端实机复测仍待确认。
+首轮 0.3.1 候选实机仍无声，日志已定位为 UDP 分配 `ENOBUFS (105)`，SETUP 返回
+`461`，尚未进入 RECORD。第二轮候选重新分配各通道缓冲，并在资源紧张时有界缩小
+音频队列、释放部分分配后重试；仍需手机实机复测。不要将模拟器通过等同于实机通过。
 
 ## 实现与兼容边界
 

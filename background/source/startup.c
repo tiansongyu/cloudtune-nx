@@ -15,11 +15,13 @@ static const SocketInitConfig sockets = {
     .tcp_rx_buf_size = 0x1000,
     .tcp_tx_buf_max_size = 0x4000,
     .tcp_rx_buf_max_size = 0x8000,
-    // Outbound UDP is only discovery/timing/resend control (small datagrams).
-    // Keep the full receive budget for audio bursts; avoid pinning 112 KiB of
-    // extra transfer memory for a sender-sized UDP TX queue in compact mode.
-    .udp_tx_buf_size = 8 * 1024,
-    .udp_rx_buf_size = 64 * 1024,
+    // Four simultaneous UDP sockets (mDNS + audio/control/timing) must fit
+    // alongside RTSP/HTTPS. Small defaults allow each socket to be created;
+    // the receiver then sizes each queue for its role. Use libnx's standard
+    // UDP TX size. Role-specific queues use a 152 KiB transfer pool (previously
+    // 240 KiB); growing this pinned pool fragments compact AAC allocations.
+    .udp_tx_buf_size = 0x2400,
+    .udp_rx_buf_size = 16 * 1024,
     .sb_efficiency = 2,
     .num_bsd_sessions = 3,
     .bsd_service_type = BsdServiceType_User,
@@ -134,6 +136,9 @@ static void initialize_platform(void) {
         return;
     __libnx_init_time();
     ncmStartupRecordResources("before-sockets");
+    ncmStartupRecord("socket-udp-tx", sockets.udp_tx_buf_size);
+    ncmStartupRecord("socket-udp-rx", sockets.udp_rx_buf_size);
+    ncmStartupRecord("socket-buffer-efficiency", sockets.sb_efficiency);
     initialized("sockets", socketInitialize(&sockets), &sockets_ready);
     ncmStartupRecordResources("after-sockets");
 }

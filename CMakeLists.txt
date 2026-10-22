@@ -212,9 +212,10 @@ else()
   target_link_libraries(ncm-airplay-runtime-tests PRIVATE ncm_runtime)
   add_test(NAME airplay-runtime COMMAND ncm-airplay-runtime-tests)
   set_tests_properties(airplay-runtime PROPERTIES TIMEOUT 30)
-  add_executable(ncm-airplay-receiver-probe tests/airplay_receiver_probe.cpp)
+  add_executable(ncm-airplay-receiver-probe tests/airplay_receiver_probe.cpp tests/airplay_udp_budget.cpp)
   target_link_libraries(ncm-airplay-receiver-probe PRIVATE cloudtune_airplay)
-  target_link_options(ncm-airplay-receiver-probe PRIVATE "-Wl,--wrap=_Znwm")
+  target_link_options(ncm-airplay-receiver-probe PRIVATE
+    "-Wl,--wrap=_Znwm,--wrap=socket,--wrap=setsockopt,--wrap=bind,--wrap=getsockname,--wrap=close")
   add_test(NAME airplay-receiver
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/airplay_receiver_tests.py"
       $<TARGET_FILE:ncm-airplay-receiver-probe>)

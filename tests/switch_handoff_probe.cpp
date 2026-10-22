@@ -10,6 +10,13 @@
 #include <malloc.h>
 
 namespace {
+// This single-process harness also contains the foreground client's threads
+// and a fake game-load thread. Their stacks belong to other processes on the
+// console; keep them outside the service's 2 MiB malloc arena. No production
+// stack is redirected, and the excluded probe is never packaged for users.
+alignas(0x1000) unsigned char clientStack[0x11000];
+alignas(0x1000) unsigned char ipcStack[0x5000];
+alignas(0x1000) unsigned char contentionStack[0x5000];
 FILE *log;
 unsigned assertions = 0;
 std::atomic<bool> contend{false};
@@ -198,6 +205,24 @@ void client(void *) {
     svcExitProcess();
 }
 } // namespace
+
+extern "C" Result __real_threadCreate(Thread *, ThreadFunc, void *, void *, size_t, int, int);
+extern "C" Result __wrap_threadCreate(Thread *thread, ThreadFunc entry, void *arg, void *stack,
+                                      size_t size, int priority, int core) {
+    if (!stack && entry == client) {
+        stack = clientStack;
+        size = sizeof(clientStack);
+    } else if (!stack && entry == contention) {
+        stack = contentionStack;
+        size = sizeof(contentionStack);
+    } else if (!stack && priority == 44 && size == 0x4000) {
+        // Production timed_ipc.c's client-only worker; it is the only other
+        // priority-44 / 16 KiB thread in this harness.
+        stack = ipcStack;
+        size = sizeof(ipcStack);
+    }
+    return __real_threadCreate(thread, entry, arg, stack, size, priority, core);
+}
 
 extern "C" void *__real_malloc(size_t);
 extern "C" void *__wrap_malloc(size_t bytes) {

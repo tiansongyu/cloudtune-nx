@@ -173,6 +173,12 @@ void __libnx_init_time(void) {
 Result socketInitialize(const SocketInitConfig *config) {
     check(home_confirmed && (acquired & 128), "Sockets before HOME/clock");
     check(config->num_bsd_sessions == 3, "Socket budget changed");
+    check(config->udp_tx_buf_size >= 0x2400 && config->udp_rx_buf_size <= 16 * 1024,
+          "UDP defaults must permit discovery plus three RAOP sockets");
+    const unsigned sum = config->tcp_tx_buf_max_size + config->tcp_rx_buf_max_size +
+                         config->udp_tx_buf_size + config->udp_rx_buf_size;
+    const unsigned transfer = ((sum + 4095) & ~4095u) * config->sb_efficiency;
+    check(transfer == 152 * 1024, "BSD transfer pool must fit RAOP and the compact AAC heap");
     return init("sockets", 256);
 }
 void socketExit(void) {

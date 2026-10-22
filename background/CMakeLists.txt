@@ -102,6 +102,7 @@ if(NINTENDO_SWITCH)
   target_compile_definitions(ncm-switch-handoff-probe PRIVATE CLOUDTUNE_VERSION="${PROJECT_VERSION}-handoff-probe")
   target_link_libraries(ncm-switch-handoff-probe PRIVATE ncm_runtime)
   target_link_options(ncm-switch-handoff-probe PRIVATE "-Wl,--wrap=ncmBootHasHomeMenu"
+    "-Wl,--wrap=threadCreate"
     "-Wl,--wrap=ncmIpcServerProcess" "-Wl,--wrap=audoutStartAudioOut"
     "-Wl,--wrap=audoutAppendAudioOutBuffer" "-Wl,--wrap=svcSetHeapSize"
     "-Wl,--wrap=malloc" "-Wl,--wrap=memalign"

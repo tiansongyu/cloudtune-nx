@@ -8,7 +8,76 @@ retained as historical evidence; current filenames and commands are documented
 in [BUILDING.md](BUILDING.md). Renaming an artifact does not constitute a new
 hardware or emulator validation.
 
-## AirPlay connection lifecycle — v0.3.1 candidate, 2026-10-22
+## AirPlay UDP allocation — v0.3.1 candidate revision 2, 2026-10-22
+
+The user tested candidate `b856ecd` and still heard no audio. The installed
+background NSP matches SHA-256
+`e0caf9a7032ed14adb49a9674f87b41c3ac53dac6bf44aef8e35ff6b6bfeb49c`.
+Its physical log shows successful OPTIONS, Apple-Challenge and encrypted
+44.1 kHz / 352-frame ANNOUNCE, then `udp-open-error 105` and SETUP `461` on
+two attempts. No RECORD or output log follows. The actual devkitA64 errno
+header defines 105 as `ENOBUFS`. This identifies the failed transport stage;
+the old coarse log does not identify which UDP socket or syscall failed.
+
+The old receiver requests 64 KiB on each of audio, retransmit/control and
+timing, ignores buffer-setting failures and creates all three sockets before
+checking errors. Discovery also holds a UDP socket. The new code uses
+64/16/4/8 KiB receive targets respectively and 4 KiB send queues, checks every
+buffer request, and preserves the operation/role/errno on failure. Receive
+queues and the complete three-socket reservation have bounded reductions
+under ENOBUFS/ENOMEM. Failed SETUP clears the previous session and releases
+every partial socket before returning retryable `453`; RECORD cannot use a
+failed transport. Unsupported transport still returns `461`.
+
+The background uses 16 KiB initial UDP receive queues and libnx's standard
+`0x2400` send default. With efficiency 2 the rounded BSD transfer allocation
+is **152 KiB**, down from 240 KiB. The formula is verified against
+[libnx's BSD implementation](https://github.com/switchbrew/libnx/blob/master/nx/source/services/bsd.c).
+An intermediate 304 KiB pool was rejected during testing because it caused
+AAC reopening to fail inside the 2 MiB compact heap; it was never installed
+on the user's SD. Heap limits, system headroom, IPC and music logic are unchanged.
+The expanded single-process coexistence stress test also exposed AAC
+fragmentation while charging both client/test stacks and the idle receiver to
+the service heap. This does not establish a separate-process console failure.
+Allocate the receiver's maximum-sized 64 KiB datagram buffer only for an
+established transport and release it on disconnect, keeping packet/codec limits
+unchanged. In the excluded IPC probe, give only the client and synthetic game
+threads separate static stacks; these are external processes on the console.
+All production background thread stacks and allocations retain the 2 MiB cap.
+The additional probe BSS is never included in shipped components.
+
+Executed evidence:
+
+- A bounded host UDP model with discovery active reproduces the old receiver's
+  `105 → SETUP 461`. This is fault/budget modeling, not a reproduction of the
+  undocumented Horizon BSD allocator. The revised receiver completes encrypted
+  playback with exact PCM, retries the whole reservation under tighter limits,
+  and survives persistent exhaustion plus 12 operation/role failures without
+  leaking descriptors or destroying discovery.
+- Host and UBSan suites pass 33/33; generated local/throttled HTTPS and independent
+  XEAPI pass. Final transport changes receive focused normal, UBSan and ASan
+  wire regression, including leak detection on ASan.
+- Independent pyatv 0.16.1, with discovery open and the bounded UDP model active,
+  delivers 2,068 packets with zero receiver losses, 651,552 frames and nonzero PCM.
+- The corrected native IPC harness keeps AirPlay discovery/listening enabled
+  during all 30 transport cycles, 3,000 volume updates and 3,000 status polls:
+  **8,013 assertions pass**. Four automatic MP3/AAC/FLAC transitions under
+  synthetic contention retain the same 186 audout opens, with 4,011 PCM
+  submissions and a maximum measured submission gap of **45 ms**. Idle
+  allocation remains **773,744 bytes** across cycles and after contention.
+  These are submission/allocator measurements, not physical speaker or game
+  measurements. The older 228 KiB configuration failed this expanded test.
+- Native compact-memory testing now keeps discovery enabled. A cold 512-entry
+  generated queue plays MP3/AAC/FLAC, reopens AAC, then accepts 30 seconds of
+  encrypted ALAC with 2.25-second latency and repeated 256 KiB covers. All 3,758
+  packets arrive with zero losses; the device receives nonzero PCM. The heap
+  stays at 2 MiB. Eden still does not reproduce physical BSD pool enforcement.
+
+Evidence: `build/validation/airplay-udp-v031/`, with the original physical logs
+under `build/validation/airplay-v031/physical-candidate/`. **This revision still
+requires real-phone acceptance; the previous candidate failed that test.**
+
+## AirPlay connection lifecycle — v0.3.1 candidate revision 1, 2026-10-22
 
 The user confirms v0.3.0 physical background music works, but selecting the
 AirPlay route and pressing play on NetEase Music still produces no audio.
@@ -50,7 +119,8 @@ Executed checks and fixes:
 
 The local photo candidate is installed with matching components, original
 settings, both autostart flags and loader binary preserved; the previous
-components are backed up. **Real-phone acceptance is pending.** Evidence is
+components are backed up. **The subsequent real-phone test failed; see the UDP
+allocation diagnosis above.** Evidence is
 retained under `build/validation/airplay-v031/`; do not treat the candidate's
 successful emulator tests as proof that the reported phone failure is resolved.
 

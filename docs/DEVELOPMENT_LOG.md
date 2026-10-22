@@ -890,3 +890,28 @@ Primary references checked:
   native encrypted playback including Apple-Challenge and idle-session handoff.
   Install a clearly marked local candidate for physical NetEase iPhone testing;
   real-phone success has not yet been observed. See VALIDATION.md.
+
+## 2026-10-22 · Physical AirPlay UDP failure (v0.3.1 candidate revision 2)
+
+- The first candidate failed the user's real-phone test. Its newly added log
+  identifies UDP allocation errno 105 followed by SETUP 461, after successful
+  identity/ANNOUNCE. No RECORD or audio output occurs. Preserve those logs and
+  the exact failed NSP hash before replacing any SD component.
+- Model a bounded UDP pool with mDNS active; the old receiver reproduces the
+  same rejection. Allocate queues by role, check errors, retain failing operation
+  and errno, and retry reduced reservations without leaking partial sockets.
+  Invalidate failed SETUP state so RECORD cannot start against closed sockets.
+- Reduce initial UDP receive reservations and redistribute the shared BSD pool
+  to 152 KiB. Reject an intermediate 304 KiB design after the native compact-heap
+  test exposes AAC reopening failure; do not install that intermediate build.
+- Combined discovery/listening and repeated music transports expose AAC
+  fragmentation in the single-process harness, which also charges client/test
+  stacks to the service heap. This is not proof of a physical service failure.
+  Allocate the unused 64 KiB datagram buffer only after transport setup and
+  release it on session close. Give only the excluded probe's client/game
+  threads separate static stacks to model their real separate-process budgets;
+  keep all production background allocations and stacks under the same cap.
+- Validate fault recovery, persistent exhaustion, discovery coexistence and
+  exact PCM on host; repeat native cold MP3/AAC/FLAC and encrypted AirPlay within
+  the 2 MiB cap. Keep the physical phone result pending until the revised build
+  is actually tested; emulator BSD budgets are not equivalent to Horizon's.

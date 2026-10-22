@@ -3,17 +3,18 @@
 #define _DEFAULT_SOURCE 1
 #endif
 #include "mdns.hpp"
+#include "udp.hpp"
 #include <algorithm>
-#include <array>
-#include <chrono>
-#include <cctype>
-#include <cstring>
-#include <vector>
 #include <arpa/inet.h>
+#include <array>
+#include <cctype>
+#include <chrono>
+#include <cstring>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <vector>
 
 namespace cloudtune::airplay {
 namespace {
@@ -198,6 +199,14 @@ bool MdnsAdvertiser::start(const std::string &friendly, uint16_t port,
     impl->socket = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (impl->socket < 0)
         return false;
+    int receive = UdpDiscoveryBytes;
+    if (configureUdpBuffers(impl->socket, receive, UdpDiscoveryBytes)) {
+        const int error = errno;
+        ::close(impl->socket);
+        impl->socket = -1;
+        errno = error;
+        return false;
+    }
     const int yes = 1;
     const int unicastTtl = 255;
     const unsigned char ttl = 255;
@@ -217,8 +226,10 @@ bool MdnsAdvertiser::start(const std::string &friendly, uint16_t port,
         ::setsockopt(impl->socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, &membership,
                      sizeof(membership)) < 0 ||
         ::fcntl(impl->socket, F_SETFL, O_NONBLOCK) < 0) {
+        const int error = errno;
         ::close(impl->socket);
         impl->socket = -1;
+        errno = error;
         return false;
     }
     impl->announcements = 0;

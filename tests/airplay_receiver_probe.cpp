@@ -12,6 +12,7 @@
 
 static std::atomic<bool> boundedAllocations{false};
 static std::atomic<bool> failNextAllocation{false};
+bool airplayUdpTestCommand(const char *command);
 extern "C" void *__real__Znwm(size_t);
 extern "C" void *__wrap__Znwm(size_t bytes) {
     if (failNextAllocation.exchange(false))
@@ -57,7 +58,9 @@ int main(int argc, char **argv) {
     cloudtune::airplay::Config config;
     config.port = static_cast<uint16_t>(port);
     config.address = "127.0.0.1";
-    config.advertise = false;
+    config.advertise = std::getenv("CLOUDTUNE_TEST_UDP_BUDGET") != nullptr;
+    if (const char *path = std::getenv("CLOUDTUNE_TEST_AIRPLAY_LOG"))
+        config.diagnostic_path = path;
     cloudtune::airplay::Callbacks callbacks;
     callbacks.begin = [&](uint32_t rate) {
         std::lock_guard<std::mutex> lock(capture.mutex);
@@ -99,6 +102,10 @@ int main(int argc, char **argv) {
         return 1;
     std::string command;
     while (std::getline(std::cin, command)) {
+        if (airplayUdpTestCommand(command.c_str())) {
+            std::cout << "{\"armed\":true}\n" << std::flush;
+            continue;
+        }
         if (command == "bounded-memory")
             boundedAllocations = true;
         if (command == "fail-next-allocation") {

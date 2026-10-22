@@ -2,6 +2,7 @@
 """Independent, loopback-only RAOP wire oracle; no audio device or account."""
 import base64
 import json
+import os
 from pathlib import Path
 import re
 import select
@@ -67,7 +68,7 @@ def public_key():
 
 
 class Probe:
-    def __init__(self, binary, port=None, retry=False):
+    def __init__(self, binary, port=None, retry=False, env=None):
         if port is None:
             temporary = socket.socket()
             temporary.bind(("127.0.0.1", 0))
@@ -76,7 +77,8 @@ class Probe:
         self.port = port
         arguments = [binary, str(self.port)] + (["--retry"] if retry else [])
         self.process = subprocess.Popen(arguments, stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE, text=True, bufsize=1)
+                                        stdout=subprocess.PIPE, text=True, bufsize=1,
+                                        env={**os.environ, **(env or {})})
         check(self.read().get("ready") == (not retry),
               "receiver reports expected initial bind result")
 
@@ -550,6 +552,95 @@ def run(binary):
     retry_bind(binary)
     boundary_cases(binary, public)
     allocation_recovery(binary, public)
+    udp_budget_recovery(binary, public)
+
+
+def udp_budget_recovery(binary, public):
+    with tempfile.TemporaryDirectory() as directory:
+        diagnostic = Path(directory) / "airplay.log"
+        probe = Probe(binary, env={"CLOUDTUNE_TEST_UDP_BUDGET": str(160 * 1024),
+                                  "CLOUDTUNE_TEST_AIRPLAY_LOG": str(diagnostic)})
+        session = None
+        try:
+            baseline = len(list(Path(f"/proc/{probe.process.pid}/fd").iterdir()))
+            # Every transport failure must roll back partially opened sockets,
+            # invalidate a previous SETUP and allow retry on the same TCP link.
+            for operation in ["socket", "send-buffer", "bind", "name"]:
+                for role in [1, 2, 3]:
+                    session = Rtsp(probe.port)
+                    session.setup(public)
+                    transport = ("RTP/AVP/UDP;unicast;mode=record;"
+                                 f"control_port={session.control.getsockname()[1]};"
+                                 f"timing_port={session.timing.getsockname()[1]}")
+                    probe.command(f"udp-fail {operation} {role}")
+                    session.request("SETUP", {"Transport": transport}, expect=453)
+                    session.request("RECORD", expect=455)
+                    check(len(list(Path(f"/proc/{probe.process.pid}/fd").iterdir())) == baseline + 1,
+                          f"{operation}/{role}: partial UDP sockets released; mDNS stays open")
+                    session.request("SETUP", {"Transport": transport})
+                    session.request("TEARDOWN")
+                    session.close()
+                    session = None
+                    wait(probe, None, lambda row: row["state"] == 2)
+            session = Rtsp(probe.port)
+            session.setup(public)
+            transport = ("RTP/AVP/UDP;unicast;mode=record;"
+                         f"control_port={session.control.getsockname()[1]};"
+                         f"timing_port={session.timing.getsockname()[1]}")
+            probe.command("udp-limit 1024")
+            session.request("SETUP", {"Transport": transport}, expect=453)
+            session.request("RECORD", expect=455)
+            check(len(list(Path(f"/proc/{probe.process.pid}/fd").iterdir())) == baseline + 1,
+                  "persistent ENOBUFS stops bounded retries and releases every partial socket")
+            probe.command("udp-limit 0")
+            session.request("SETUP", {"Transport": transport})
+            session.request("TEARDOWN")
+            session.close()
+            session = None
+            for limit in [32768, 16384]:
+                probe.command(f"udp-limit {limit}")
+                probe.command("reset")
+                session = Rtsp(probe.port)
+                session.setup(public)
+                session.request("RECORD")
+                session.sync(100000)
+                session.rtp(1, 100000, alac(SAMPLES))
+                status = wait(probe, session, lambda row: row["frames"] == 8)
+                check(status["crc"] == expected(SAMPLES), "reduced UDP queue emits exact PCM")
+                session.request("TEARDOWN")
+                session.close()
+                session = None
+            events = diagnostic.read_text()
+            check("udp-socket-error 3 5" in events and "udp-bind-error 2 5" in events,
+                  "diagnostic identifies failing role, operation and original errno")
+            check("udp-receive-buffer 1 16384" in events, "bounded receive fallback logged")
+            print("PASS mDNS + bounded UDP budget, 12 transport failures/retries, exact PCM after fallback")
+        finally:
+            if session:
+                session.close()
+            probe.close()
+
+    # Enough for a smaller audio queue and all control/discovery sockets, but
+    # not enough to open control after successfully reserving a 64 KiB queue.
+    with tempfile.TemporaryDirectory() as directory:
+        diagnostic = Path(directory) / "airplay.log"
+        probe = Probe(binary, env={"CLOUDTUNE_TEST_UDP_BUDGET": str(84 * 1024),
+                                  "CLOUDTUNE_TEST_AIRPLAY_LOG": str(diagnostic)})
+        session = Rtsp(probe.port)
+        try:
+            session.setup(public)
+            session.request("RECORD")
+            session.sync(100000)
+            session.rtp(1, 100000, alac(SAMPLES))
+            status = wait(probe, session, lambda row: row["frames"] == 8)
+            check(status["crc"] == expected(SAMPLES), "full reservation retry emits exact PCM")
+            check("udp-budget-retry 32768 105" in diagnostic.read_text(),
+                  "whole transport retries after socket creation ENOBUFS")
+            session.request("TEARDOWN")
+            print("PASS complete UDP reservation retries under pressure with mDNS still active")
+        finally:
+            session.close()
+            probe.close()
 
 
 def allocation_recovery(binary, public):

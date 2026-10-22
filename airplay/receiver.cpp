@@ -7,6 +7,7 @@
 #include "crypto.hpp"
 #include "diagnostics.hpp"
 #include "mdns.hpp"
+#include "udp.hpp"
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -179,25 +180,6 @@ std::string addressText(uint32_t address) {
     in_addr value{address};
     return inet_ntop(AF_INET, &value, output, sizeof(output)) ? output : "";
 }
-int udpSocket(uint16_t& port) {
-    int descriptor = socket(AF_INET, SOCK_DGRAM, 0);
-    if (descriptor < 0) return -1;
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_ANY);
-    int buffer = 64 * 1024;
-    setsockopt(descriptor, SOL_SOCKET, SO_RCVBUF, &buffer, sizeof(buffer));
-    if (!nonblocking(descriptor) ||
-        bind(descriptor, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-        ::close(descriptor); return -1;
-    }
-    socklen_t length = sizeof(address);
-    if (getsockname(descriptor, reinterpret_cast<sockaddr*>(&address), &length) != 0) {
-        ::close(descriptor); return -1;
-    }
-    port = ntohs(address.sin_port);
-    return descriptor;
-}
 struct Request {
     std::string method;
     std::string path;
@@ -284,7 +266,9 @@ struct Receiver::Impl {
     MdnsAdvertiser mdns;
     std::array<int16_t, 4096 * 2> decoded{};
     std::vector<uint8_t> decrypted;
-    std::vector<uint8_t> datagram = std::vector<uint8_t>(MaxPacket);
+    // Listening/discovery must not pin a 64 KiB audio packet buffer while the
+    // music engine is repeatedly opening decoders in the compact heap.
+    std::vector<uint8_t> datagram;
     struct Packet {
         uint16_t sequence = 0;
         uint32_t timestamp = 0;
@@ -344,6 +328,7 @@ struct Receiver::Impl {
         clearQueue();
         decoder.close();
         closeFd(audio); closeFd(control); closeFd(timing);
+        std::vector<uint8_t>().swap(datagram);
         announced = setup = encrypted = pcm = paused = false;
         haveTiming = haveSync = flushBoundary = flushSequencePresent = false;
         aesKey.fill(0); aesIv.fill(0); decrypted.clear();
@@ -390,7 +375,12 @@ struct Receiver::Impl {
         if (!nonblocking(listener) ||
             bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 ||
             listen(listener, 4) != 0) return false;
-        if (config.advertise && !mdns.start(config.name, config.port, deviceId, interfaceAddress)) return false;
+        if (config.advertise && !mdns.start(config.name, config.port, deviceId, interfaceAddress)) {
+            const int error = errno;
+            trace("discovery-open-error", error);
+            errno = error;
+            return false;
+        }
         {
             std::lock_guard<std::mutex> lock(mutex);
             text(snapshot.address, addressText(interfaceAddress));
@@ -513,28 +503,78 @@ struct Receiver::Impl {
         state(NcmAirplay_Connected, "Audio session announced");
         return true;
     }
-    bool setupTransport(const Request& request) {
-        if (!announced || recording) return false;
+    int udpSocket(uint16_t &port, unsigned role, int receive, int minimum) {
+        port = 0;
+        int descriptor = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        auto failed = [&](const char *operation) {
+            const int error = errno;
+            trace(operation, role, error);
+            closeFd(descriptor);
+            errno = error;
+            return -1;
+        };
+        if (descriptor < 0)
+            return failed("udp-socket-error");
+        if (const char *error = configureUdpBuffers(descriptor, receive, minimum))
+            return failed(error);
+        if (!nonblocking(descriptor))
+            return failed("udp-nonblocking-error");
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_ANY);
+        if (bind(descriptor, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0)
+            return failed("udp-bind-error");
+        socklen_t length = sizeof(address);
+        if (getsockname(descriptor, reinterpret_cast<sockaddr *>(&address), &length) != 0)
+            return failed("udp-name-error");
+        port = ntohs(address.sin_port);
+        trace("udp-receive-buffer", role, receive);
+        return descriptor;
+    }
+    unsigned setupTransport(const Request &request) {
+        if (!announced || recording)
+            return 455;
         const auto transport = request.header("transport");
         uint32_t remoteControlPort = 0, remoteTimingPort = 0;
         if (transport.find("RTP/AVP/UDP") == std::string::npos ||
             !parameter(transport, "control_port", remoteControlPort) ||
-            !parameter(transport, "timing_port", remoteTimingPort) ||
-            remoteControlPort == 0 || remoteControlPort > 65535 ||
-            remoteTimingPort == 0 || remoteTimingPort > 65535) return false;
+            !parameter(transport, "timing_port", remoteTimingPort) || remoteControlPort == 0 ||
+            remoteControlPort > 65535 || remoteTimingPort == 0 || remoteTimingPort > 65535)
+            return 461;
+        setup = false;
+        session.clear();
         closeFd(audio); closeFd(control); closeFd(timing);
-        audio = udpSocket(audioPort); control = udpSocket(controlPort); timing = udpSocket(timingPort);
-        if (audio < 0 || control < 0 || timing < 0) {
-            trace("udp-open-error", errno);
-            closeFd(audio); closeFd(control); closeFd(timing); return false;
+        for (int audioBytes = UdpAudioBytes;; audioBytes /= 2) {
+            audio = udpSocket(audioPort, 1, audioBytes, 16 * 1024);
+            if (audio >= 0)
+                control = udpSocket(controlPort, 2, UdpControlBytes, 8 * 1024);
+            if (control >= 0)
+                timing = udpSocket(timingPort, 3, UdpTimingBytes, UdpTimingBytes);
+            if (audio >= 0 && control >= 0 && timing >= 0)
+                break;
+            const int error = errno;
+            closeFd(audio);
+            closeFd(control);
+            closeFd(timing);
+            audioPort = controlPort = timingPort = 0;
+            // A larger audio queue may fit on its own but leave no room to
+            // create the other sockets. Retry the complete reservation with
+            // less burst capacity, at most twice, without leaking partials.
+            if ((error == ENOBUFS || error == ENOMEM) && audioBytes > 16 * 1024) {
+                trace("udp-budget-retry", audioBytes / 2, error);
+                continue;
+            }
+            state(NcmAirplay_Connected, "UDP buffers unavailable; retry", error);
+            return 453;
         }
+        datagram.resize(MaxPacket);
         remoteControl = peer; remoteControl.sin_port = htons(uint16_t(remoteControlPort));
         remoteTiming = peer; remoteTiming.sin_port = htons(uint16_t(remoteTimingPort));
         session = "1"; setup = true;
         nextTiming = nowNs(); timingCount = 0;
         trace("udp-ports", audioPort, controlPort);
         trace("timing-port", timingPort);
-        return true;
+        return 200;
     }
     void flush(const Request& request) {
         clearQueue(); decoder.reset();
@@ -597,7 +637,11 @@ struct Receiver::Impl {
             respond(request, announce(request) ? 200 : 456);
         } else if (request.method == "SETUP") {
             if (!announced) { respond(request, 455); return; }
-            if (!setupTransport(request)) { respond(request, 461); return; }
+            const unsigned result = setupTransport(request);
+            if (result != 200) {
+                respond(request, result);
+                return;
+            }
             std::ostringstream transport;
             transport << "Transport: RTP/AVP/UDP;unicast;interleaved=0-1;mode=record;control_port="
                       << controlPort << ";timing_port=" << timingPort << ";server_port=" << audioPort
